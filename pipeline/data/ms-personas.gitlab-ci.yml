@@ -460,6 +460,76 @@ ms-personas:upload-scripts:prod:
   <<: *ms_psn_dtpl_scripts_config_rules
 
 # ============================================
+# PART 2C: INTEGRATION TESTS (After STG Deployment)
+# ============================================
+
+ms-personas:integration-tests:nonprod:
+  stage: deploy-stg
+  tags:
+  - $MS_PSN_DTPL_RUNNER_TAG_NONPROD
+  image: $MS_PSN_DTPL_PYTHON_IMAGE
+  variables:
+    WORKSPACE_ENV: stg
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+    COMPOSER_LOCATION: asia-southeast1
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+
+  # Get terraform outputs for Composer environment name
+  - cd $MS_PSN_DTPL_INFRASTRUCTURE_RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select $WORKSPACE_ENV
+  - export COMPOSER_ENV=$(terraform output -raw composer_env_name)
+  - cd $CI_PROJECT_DIR
+
+  # Install Python dependencies for integration tests
+  - pip install --upgrade pip
+  - pip install google-cloud-pubsub google-cloud-logging google-cloud-bigquery google-cloud-composer google-api-core boto3
+
+  # Run integration tests
+  - cd data/processor/dataflow/tests/integration
+  - chmod +x run_integration_tests.sh
+  - |
+    ./run_integration_tests.sh \
+      --project $MS_PSN_DTPL_GCP_STG_PROJECT_ID \
+      --environment $COMPOSER_ENV \
+      --location $COMPOSER_LOCATION \
+      --output-dir $CI_PROJECT_DIR/integration_test_results \
+      --skip-common || echo "Some integration tests failed but continuing..."
+
+  # Archive test results
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+    - integration_test_results/
+    reports:
+      junit: integration_test_results/*.json
+
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+
+  needs:
+  - ms-personas:upload-scripts:nonprod
+  - api:create-image:dataflow-common:nonprod
+
+  allow_failure: true  # Don't block pipeline if tests fail
+  when: manual  # Run manually to avoid unnecessary test runs
+
+  rules:
+  - !reference [ .execute-pipeline-template, rules ]
+  - if: $TRIGGER_INTEGRATION_TESTS == "1"
+    when: always
+  - changes:
+    - data/processor/dataflow/tests/integration/**/*
+    - data/orchestrator/airflow/dags/**/*
+    - data/processor/dataflow/scripts/**/*
+    - data/processor/dataflow/configs/**/*
+    - pipeline/data/ms-personas.gitlab-ci.yml
+    when: manual
+
+# ============================================
 # PART 3: SETUP COMPOSER VARIABLES (After Terraform)
 # ============================================
 
