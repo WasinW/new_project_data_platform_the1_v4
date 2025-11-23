@@ -1,0 +1,137 @@
+{
+  "type": "UPSERT",
+  "payload": {
+    "personaId": "416d09f5-fffc-47e6-9d79-4a2dea93084c#1-959178136#5700c7a8-fd3f-4ae6-8482-91e0f246acd1",
+    "personaLegacyId": "416d09f5-fffc-47e6-9d79-4a2dea93084c#1-959178136#5700c7a8-fd3f-4ae6-8482-91e0f246acd1",
+    "profiles": {
+      "th.co.the1.insight.personas_collector.avro.Profile": {
+        "profileId": {
+          "string": "5700c7a8-fd3f-4ae6-8482-91e0f246acd1"
+        },
+        "accountId": {
+          "string": "416d09f5-fffc-47e6-9d79-4a2dea93084c"
+        },
+        "memberId": {
+          "string": "1-959178136"
+        },
+        "dateOfBirth": {
+          "string": "1992-11-14"
+        },
+        "gender": {
+          "string": "MALE"
+        },
+        "nationalityId": {
+          "string": "THA"
+        },
+        "hasMobile": {
+          "boolean": true
+        },
+        "hasEmail": {
+          "boolean": true
+        },
+        "languagePrefer": {
+          "string": "TH"
+        }
+      }
+    },
+    "members": {
+      "th.co.the1.insight.personas_collector.avro.Members": {
+        "tiers": {
+          "map": {
+            "THE1": {
+              "code": "T1L1",
+              "expiryDate": 4133955599000,
+              "startDate": {
+                "long": 1761297534000
+              }
+            }
+          }
+        }
+      }
+    },
+    "purchases": {
+      "map": {
+        "CDS": {
+          "lastPurchasedTime": 1760008714179,
+          "lastPurchasedStoreCode": {
+            "string": "RBS-010158"
+          }
+        },
+        "CFR": {
+          "lastPurchasedTime": 1707307313000,
+          "lastPurchasedStoreCode": null
+        },
+        "RBS": {
+          "lastPurchasedTime": 1709122714179,
+          "lastPurchasedStoreCode": null
+        },
+        "SSP": {
+          "lastPurchasedTime": 1758390519000,
+          "lastPurchasedStoreCode": null
+        },
+        "TWD": {
+          "lastPurchasedTime": 1748353980000,
+          "lastPurchasedStoreCode": null
+        },
+        "CFM": {
+          "lastPurchasedTime": 1580323910000,
+          "lastPurchasedStoreCode": null
+        },
+        "MJT": {
+          "lastPurchasedTime": 1727445247000,
+          "lastPurchasedStoreCode": null
+        },
+        "TWT": {
+          "lastPurchasedTime": 1608034949000,
+          "lastPurchasedStoreCode": null
+        },
+        "CRC": {
+          "lastPurchasedTime": 1760008714179,
+          "lastPurchasedStoreCode": {
+            "string": "RBS-010158"
+          }
+        }
+      }
+    },
+    "status": {
+      "map": {
+        "isActive": true
+      }
+    },
+    "rankings": null,
+    "the1app": null,
+    "wealth": {
+      "th.co.the1.insight.personas_collector.avro.Wealth": {
+        "value": {
+          "string": "UNKNOWN"
+        }
+      }
+    },
+    "family": {
+      "th.co.the1.insight.personas_collector.avro.Family": {
+        "hasKids": {
+          "boolean": false
+        }
+      }
+    },
+    "locations": {
+      "th.co.the1.insight.personas_collector.avro.Locations": {
+        "mostVisitedStoreLocation": {
+          "string": "CentralPlaza Rama3"
+        },
+        "mostVisitedProvince": {
+          "string": "bangkok"
+        },
+        "mostVisitedSubregion": {
+          "string": "EAST"
+        },
+        "lastVisitedStoreCode": {
+          "string": "RBS-010158"
+        },
+        "lastVisitedDate": {
+          "long": 1760008714179
+        }
+      }
+    }
+  }
+}

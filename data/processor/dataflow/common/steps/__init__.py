@@ -48,12 +48,25 @@ from dataflow_common.steps.streaming_additions import (
     WriteParquetDynamicStep,
 )
 
-# Import จาก streaming_midterm.py  
+# Import จาก streaming_midterm.py
 from dataflow_common.steps.streaming_midterm import (
     ConsumeMessagesWithDLQStep,
     ParseNestedJsonStep,
     WindowedMappingQueryStep,
     EnhancedWriteToBigQueryStep,
+)
+
+# Import จาก realtime.py (DoFns for realtime pipeline)
+from dataflow_common.steps.realtime import (
+    AddWindowInfoFn,
+    WriteParquetByWindowFn,
+    MappingRefreshDoFn,
+    ExtractPersonasDoFn,
+    FetchFromBigtableDoFn,
+    FilterEmptyMemberIdDoFn,
+    TransformSchemasDoFn,
+    FullfillSchemasDoFn,
+    WriteToBigLakeDoFn,
 )
 
 class ReadBQQueryStep(BaseStep):
@@ -507,4 +520,14 @@ __all__ = [
     "ParseNestedJsonStep",
     "WindowedMappingQueryStep",
     "EnhancedWriteToBigQueryStep",
+    # Realtime DoFns
+    "AddWindowInfoFn",
+    "WriteParquetByWindowFn",
+    "MappingRefreshDoFn",
+    "ExtractPersonasDoFn",
+    "FetchFromBigtableDoFn",
+    "FilterEmptyMemberIdDoFn",
+    "TransformSchemasDoFn",
+    "FullfillSchemasDoFn",
+    "WriteToBigLakeDoFn",
 ]

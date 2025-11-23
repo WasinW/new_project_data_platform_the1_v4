@@ -1,43 +1,39 @@
+import argparse
+import json
+import logging
+import sys
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Any, Optional
+
 import apache_beam as beam
-from apache_beam import DoFn, ParDo, Map, FlatMap
-from apache_beam.transforms.combiners import Latest
+from apache_beam import DoFn, ParDo
 from apache_beam.io import ReadFromPubSub, WriteToBigQuery
 from apache_beam.io.gcp.bigquery import BigQueryDisposition
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.transforms import window, trigger
 from apache_beam.transforms.periodicsequence import PeriodicImpulse
-from apache_beam.transforms.userstate import ReadModifyWriteStateSpec
-from apache_beam.transforms.window import IntervalWindow
-from apache_beam.io.parquetio import WriteToParquet
-from apache_beam.io.fileio import FileNaming
-from apache_beam.utils.windowed_value import PaneInfo
-from datetime import datetime, timedelta, timezone
-from functools import reduce
-import operator
-import json
-import logging
-from typing import Dict, Any, Optional, List, Iterable
-from google.cloud import bigtable
-from google.cloud.bigtable import row_filters
 import pyarrow as pa
-import io
-import fastavro
-from apache_beam import Row  # ⬅️ นี่คือ path ที่ถูกต้อง
 
-import pandas as pd
-import pyarrow.parquet as pq
-import pyarrow as pa
-import s3fs
-from google.cloud import bigquery
+# Import config loader and realtime steps
+from dataflow_common.config import load_config
+from dataflow_common.steps.realtime import (
+    AddWindowInfoFn,
+    WriteParquetByWindowFn,
+    MappingRefreshDoFn,
+    ExtractPersonasDoFn,
+    FetchFromBigtableDoFn,
+    FilterEmptyMemberIdDoFn,
+    TransformSchemasDoFn,
+    FullfillSchemasDoFn,
+    WriteToBigLakeDoFn,
+)
 
-# Configuration
-PROJECT_ID = "the1-insight-stg"
-BT_PROJECT_ID = "the1-insight-stg"
-SUBSCRIPTION_NAME = "projects/the1-insight-stg/subscriptions/ms-personas-datapipeline-dataflow-subscription"
-MAPPING_TABLE = f"{PROJECT_ID}.insight.mapping_reconcile"
-BIGLAKE_TABLE = f"{PROJECT_ID}.insight.ms_personas"
-BT_INSTANCE = "t1-insight-bt"
-BT_TABLE = "personas"
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+LOGGER = logging.getLogger(__name__)
 
 
 # Parse schema นี้ไว้ล่วงหน้า (ทำครั้งเดียวตอน worker เริ่มทำงาน)
@@ -204,539 +200,114 @@ MS_PERSONAS_BIGQUERY_SCHEMA = {
 MS_PERSONAS_BIGQUERY_SCHEMA_TEXT = ','.join([f"{field['name']}:{field['type']}" for field in MS_PERSONAS_BIGQUERY_SCHEMA['fields']])
 
 
-# DoFn สำหรับเพิ่ม window info
-class AddWindowInfoFn(beam.DoFn):
-    def process(self, element, window=beam.DoFn.WindowParam):
-        # Thai timezone
-        tz_bangkok = timezone(timedelta(hours=7))
-        window_end = datetime.fromtimestamp(
-            window.end.micros / 10**6, 
-            tz=timezone.utc
-        ).astimezone(tz_bangkok)
-        
-        # สร้าง path
-        path = window_end.strftime('par_month=%m/par_day=%d/par_hour=%H/run_dt=%Y%m%d%H')
-        logging.info(f"records path: {path}")
-        
-        yield {
-            **element,
-            '_window_path': path,
-            '_window_timestamp': window_end
-        }
-
-# DoFn สำหรับเขียน Parquet
-class WriteParquetByWindowFn(beam.DoFn):
-    def __init__(self, base_path, schema):
-        self.base_path = base_path
-        self.schema = schema
-    
-    def process(self, group):
-        logging.info(f"Init class WriteParquetByWindowFn(beam.DoFn)")
-        window_path, records = group
-        
-        # สร้าง full path
-        output_path = f"{self.base_path}/{window_path}/ms-member.parquet"
-        logging.info(f"Output path: {output_path}")
-        logging.info(f"records path: {records}")
-        
-        # Convert to pandas และเขียน parquet
-        df = pd.DataFrame(list(records))
-        df.drop(columns=['_window_path', '_window_timestamp'], inplace=True, errors='ignore')
-        
-        # เขียนไป S3 ผ่าน pyarrow
-        # import pyarrow.parquet as pq
-        # import pyarrow as pa
-        table = pa.Table.from_pandas(df, schema=self.schema)
-        
-        # ใช้ s3fs สำหรับเขียนไป S3
-        import s3fs
-        fs = s3fs.S3FileSystem()
-        
-        with fs.open(output_path, 'wb') as f:
-            # pq.write_table(table, f)
-            pq.write_table(
-                table, 
-                f,
-                compression='snappy',  # ← เพิ่มบรรทัดนี้
-                use_dictionary=True    # ← compression ดีขึ้น
-            )
-
-        yield f"Written {len(records)} records to {output_path}"
+# ============================================
+# DoFn CLASSES MOVED TO dataflow_common/steps/realtime.py
+# ============================================
+# All DoFn classes (AddWindowInfoFn, WriteParquetByWindowFn, MappingRefreshDoFn,
+# ExtractPersonasDoFn, FetchFromBigtableDoFn, FilterEmptyMemberIdDoFn,
+# TransformSchemasDoFn, FullfillSchemasDoFn, WriteToBigLakeDoFn) have been moved
+# to dataflow_common/steps/realtime.py for reusability and maintainability.
+# ============================================
 
 
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
 
-class MappingRefreshDoFn(DoFn):
-    """Refresh mapping table every hour"""
-    
-    def __init__(self, mapping_table):
-        self.mapping_table = mapping_table
-        logging.info(f"Init MappingRefreshDoFn")
-        
-    def process(self, element):
-        from google.cloud import bigquery
-        try:
-            client = bigquery.Client(project=PROJECT_ID)
-            logging.info(f"Init bigquery Client")
-            
-            # Query mapping table
-            query = f"""
-            SELECT * EXCEPT(row_num) FROM (
-                SELECT 
-                    reconcile_column_name,
-                    mapping_column_name,
-                    reconcile_retrieved,
-                    reconcile_confirmed,
-                    table_name,
-                    ROW_NUMBER() OVER (PARTITION BY reconcile_column_name ORDER BY updated_date DESC) AS row_num
-                FROM `{self.mapping_table}`
-            )
-            WHERE row_num = 1
-            """
-            
-            try:
-                results = client.query(query).result()
-            except Exception as e:
-                logging.error(f"Failed to query mapping table {self.mapping_table}: {e}")
-                return
-            # mapping_dict: Dict[str, Any] = {}
-            # schemas_dict: List[str] = []
-            mapping_dict = {}
-            schemas_dict = []
-            for row in results:
-                org_name = row['reconcile_column_name']
-                new_name = row['mapping_column_name'].split('.')[-1]  # Use last part only
-                
-                # mapping_dict[org_name] = new_name.split('.')[-1]  # Use last part for flat mapping
-                if row['reconcile_retrieved'] == True:
-                    # mapping_dict[org_name] = new_name
-                    # # mapping_dict : {'is_mobile': {'profile':{'consent':'has_mobile'}} }
-                    # # message structure : {'profile':{'consent':{'has_mobile':'Y'}}}
-                    if row['table_name'] not in mapping_dict:
-                        mapping_dict[row['table_name']] = {'gcp':{},'aws':{}}
-                    mapping_dict[row['table_name']]['gcp'][new_name] = row['mapping_column_name']
-                    mapping_dict[row['table_name']]['aws'][org_name] = row['mapping_column_name']
-                
-                # mapping_dict[org_name][]
-                schemas_dict.append(org_name)
-
-            
-            logging.info(f"Refreshed mapping with {len(mapping_dict)} entries")
-            logging.info(f"Refreshed mapping with {mapping_dict}")
-            logging.info(f"Refreshed schemas_dict with {schemas_dict}")
-        except Exception as exc:
-            # Log exception and continue with an empty mapping to avoid crashes
-            logging.error(f"Error refreshing mapping: {exc}")
-        # Yield a plain dictionary; do not wrap in AsSingleton here. The
-        # surrounding pipeline will combine these periodically and expose as
-        # a side input via AsSingleton.
-
-        yield {
-            'mapping_dict': mapping_dict,
-            'schemas_dict': schemas_dict
-        }
-
-# class ExtractPersonasDoFn(DoFn):
-#     """Extract personasId from PubSub message"""
-    
-#     def process(self, element):
-#         try:
-#             message = json.loads(element.decode('utf-8'))
-#             personas_id = message.get('payload.personaId')
-            
-#             if personas_id:
-#                 yield personas_id
-#                 logging.info(f"Extracted personasId: {personas_id}")
-#             else:
-#                 logging.warning(f"No personasId in message: {message}")
-#         except Exception as e:
-#             logging.error(f"Error parsing message: {e}")
-
-class ExtractPersonasDoFn(DoFn):
-    """
-    Extract personasId from PubSub message
-    (Decodes Avro binary message)
-    """
-
-    def setup(self):
-        """ตรวจสอบว่า Schema ถูก Parse สำเร็จตอนเริ่มต้น"""
-        # if PARSED_PERSONAS_SCHEMA is None:
-        #     # ถ้า Schema ไม่พร้อม, pipeline นี้ทำงานต่อไม่ได้
-        #     raise RuntimeError("Personas Avro schema (PARSED_PERSONAS_SCHEMA) was not parsed successfully.")
-
-    def process(self, element):
-        # 'element' คือ BINARY AVRO BYTES (ไม่ใช่ JSON string)
-        try:
-            json_reader = json.loads(element.decode('utf-8'))
-            logging.info(f"Received JSON message: {json_reader}")
-            # 1. สร้าง "ไฟล์ในหน่วยความจำ" จาก bytes ที่เข้ามา
-            # bytes_reader = io.BytesIO(json_reader)
-            # logging.info(f"Extracted bytes_reader: {bytes_reader}")
-            
-            # 2. ถอดรหัส Binary Avro โดยใช้ schema ที่เรา parse ไว้
-            # เราใช้ 'schemaless_reader' เพราะ Pub/Sub ไม่ได้แนบ schema มากับทุก message
-            # message = fastavro.schemaless_reader(json_reader, PARSED_PERSONAS_SCHEMA)
-            # logging.info(f"Extracted message: {message}")
-            
-            # 3. 'message' ตอนนี้เป็น Python Dict ที่ถูกต้องแล้ว
-            #    (เช่น {'type': 'UPSERT', 'payload': {...}})
-            
-            # --- โค้ดเดิมของคุณ (ตอนนี้ทำงานได้แล้ว) ---
-            payload = json_reader.get('payload')
-            
-            if payload:
-                personas_id = payload.get('personaId')
-                if personas_id:
-                    # ที่นี่เรา yield `personas_id` ซึ่งเป็น string
-                    #1-959178136#5700c7a8-fd3f-4ae6-8482-91e0f246acd1
-                    # accountId#memberId#profileId
-                    # personas_key = '#'.join(personas_id.split('#')[1:]) 
-                    yield {'personas_id': personas_id} 
-                    logging.info(f"Extracted personasId: {personas_id}")
-                else:
-                    logging.warning(f"No personasId in Avro payload: {json_reader}")
-            else:
-                logging.warning(f"No payload in Avro message: {json_reader}")
-            # --- จบโค้ดเดิม ---
-
-        except Exception as e:
-            # Error นี้จะจับการถอดรหัส Avro ที่ล้มเหลว
-            logging.error(f"Error parsing Avro message: {e} | Data (first 50 bytes): {element[:500]}...")
-            # logging.error(f"Error parsing Avro message: {e} | Data json_reader: {json_reader}")
-            
-class FetchFromBigtableDoFn(DoFn):
-    """Fetch data from BigTable using personasId"""
-    
-    def __init__(self, instance_id, table_id, parent_field=['profiles']):
-        self.instance_id = instance_id
-        self.table_id = table_id
-        self.parent_field = parent_field
-        self._client = None
-        self._table = None
-        self._instance = None
-
-    def setup(self):
-        """Initializes Bigtable Client once per worker."""
-        try:
-
-            self._client = bigtable.Client(project=PROJECT_ID)
-            self._instance = self._client.instance(self.instance_id)
-            self._table = self._instance.table(self.table_id)
-            logging.info("Bigtable client and table initialized.")
-        except Exception as e:
-            logging.error(f"Failed to initialize Bigtable client: {e}")
-            self._client = None
-            self._table = None
-
-
-    def process(self, element):
-        if not self._table:
-            logging.error("Bigtable table not available. Skipping record.")
-            return
-
-        try:
-            personas_id = element.get('personas_id')
-            if not personas_id:
-                logging.warning("Missing personas_id in element.")
-                return
-            
-            logging.info(f"personas_id : {personas_id}")
-            row_key = personas_id.encode()
-            logging.info(f"row_key : {row_key}")
-            row = self._table.read_row(personas_id)
-            
-            if row:
-                # profile_data = self.transform_message(row.cells, mapping_dict)
-                # Extract profile data from BigTable
-                logging.info(f"Existing ROW in BT.")
-                logging.info(f"BT row : {row}")
-                logging.info(f"BT row.cells : {row.cells}")
-                logging.info(f"BT row.cells.items() : {row.cells.items()}")
-                logging.info(f"BT row.cells : {row.cells['profiles']}")
-                # logging.info(f"BT row.cells.items() : {row.cells.items()['profiles']}")
-                # family_data = row.cells.get(self.parent_field, {})
-                result = {
-                    'personas_id': personas_id
-                }
-                # for fam_col in self.parent_field:
-                #     if fam_col in row.cells:  # ✅ ตรวจสอบว่ามี column family นี้หรือไม่
-                #         result[fam_col] = row.cells[fam_col] # ✅ ใช้ row.cells โดยตรง
-
-
-                # Extract data from each selected family column
-                for family_name in self.parent_field:
-                    if family_name in row.cells:
-                        logging.info(f"Processing family column: {family_name}")
-                        
-                        # Extract all columns within this family
-                        family_dict = {}
-                        family_cells = row.cells[family_name]
-                        
-                        # Check if this family has only one column named 'value' with JSON
-                        if len(family_cells) == 1 and b'value' in family_cells:
-                            # Single 'value' column case - parse JSON
-                            cells = family_cells[b'value']
-                            if cells:
-                                latest_cell = cells[0]
-                                try:
-                                    # Decode the value
-                                    cell_value = latest_cell.value.decode('utf-8') if isinstance(latest_cell.value, bytes) else latest_cell.value
-                                    
-                                    # Try to parse as JSON
-                                    if isinstance(cell_value, str) and (cell_value.startswith('{') or cell_value.startswith('[')):
-                                        parsed_value = json.loads(cell_value)
-                                        # If it's a dict, use it directly as the family data
-                                        if isinstance(parsed_value, dict):
-                                            result[family_name] = parsed_value
-                                            logging.info(f"Parsed JSON from {family_name}.value: {len(parsed_value)} fields")
-                                        else:
-                                            # If it's not a dict (maybe a list), wrap it
-                                            result[family_name] = {'data': parsed_value}
-                                    else:
-                                        # Not JSON, store as is
-                                        result[family_name] = {'value': cell_value}
-                                        
-                                except json.JSONDecodeError as e:
-                                    logging.warning(f"Failed to parse JSON in {family_name}.value: {e}")
-                                    # If JSON parsing fails, store as string
-                                    result[family_name] = {'value': cell_value}
-                                except UnicodeDecodeError:
-                                    # If decode fails, store as hex
-                                    cell_value = latest_cell.value.hex() if isinstance(latest_cell.value, bytes) else str(latest_cell.value)
-                                    result[family_name] = {'value': cell_value}
-                        else:
-                            # Multiple columns case - extract all columns
-                            family_dict = {}
-                            for column_qualifier, cells in family_cells.items():
-                                if cells:
-                                    latest_cell = cells[0]
-                                    column_name = column_qualifier.decode('utf-8') if isinstance(column_qualifier, bytes) else column_qualifier
-                                    
-                                    try:
-                                        cell_value = latest_cell.value.decode('utf-8') if isinstance(latest_cell.value, bytes) else latest_cell.value
-                                        
-                                        # Try to parse as JSON if it looks like JSON
-                                        if isinstance(cell_value, str) and (cell_value.startswith('{') or cell_value.startswith('[')):
-                                            try:
-                                                cell_value = json.loads(cell_value)
-                                            except json.JSONDecodeError:
-                                                pass  # Keep as string
-                                        
-                                        family_dict[column_name] = cell_value
-                                        
-                                    except UnicodeDecodeError:
-                                        family_dict[column_name] = latest_cell.value.hex() if isinstance(latest_cell.value, bytes) else str(latest_cell.value)
-                            
-                            result[family_name] = family_dict
-                            logging.info(f"Extracted {len(family_dict)} columns from family '{family_name}'")
-                    else:
-                        logging.warning(f"Family column '{family_name}' not found in row")
-                        result[family_name] = {}
-                
-                
-                # Yield the properly structured result
-                logging.info(f"Fetched data for personas_id {personas_id}: {result}")
-                yield result
-            else:
-                logging.warning(f"Row not found for personas_id: {personas_id}")
-
-        except Exception as e:
-            # Log error แต่ไม่ให้ pipeline fail
-            logging.error(f"Error processing personas_id {element.get('personas_id')}: {str(e)}")
-            # อาจจะ yield error record สำหรับ dead letter queue
-            yield {
-                'personas_id': element.get('personas_id'),
-                'error': str(e),
-                'error_type': 'processing_error'
-            }
-
-
-class FilterEmptyMemberIdDoFn(DoFn):
-    """
-    Filter out records that don't have memberId
-    This helps reduce noise in the pipeline and prevents errors in downstream processing
-    """
-    
-    def process(self, element):
-        """Check if element has memberId in profiles"""
-        try:
-            # Check if profiles exists and has memberId
-            profiles = element.get('profiles', {})
-            member_id = profiles.get('memberId')
-            
-            if member_id and str(member_id).strip():
-                # Valid memberId found
-                logging.debug(f"Valid record with memberId: {member_id}")
-                yield element
-            else:
-                # No memberId or empty - filter out
-                personas_id = element.get('personas_id', 'unknown')
-                logging.warning(f"Filtering out record without memberId. personas_id: {personas_id}")
-                
-        except Exception as e:
-            logging.error(f"Error in FilterEmptyMemberIdDoFn: {str(e)}", exc_info=True)
-
-class TransformSchemasDoFn(DoFn):
-    """Transform data according to mapping dictionary"""
-    def get_nested_value(self , data, path):
-        """ดึงค่าจาก nested dict ด้วย dot notation path"""
-        try:
-            return reduce(operator.getitem, path.split('.'), data)
-        except (KeyError, TypeError):
-            return None
-
-    def transform_message(self , message_dict, mapping_dict,target='gcp',table_name='ms_member'):
-        """แปลง message ตาม mapping"""
-        result = {}
-        # mapping_dict[row['table_name']]['gcp'][new_name] = row['mapping_column_name']
-        # mapping_dict[row['table_name']]['aws'][org_name] = row['mapping_column_name']
-        logging.info(f"TransformSchemasDoFn.transform_message called with org mapping_dict: {mapping_dict}")
-        mapping_dict = mapping_dict.get(table_name,{}).get(target,{})
-        logging.info(f"TransformSchemasDoFn.transform_message called with specific mapping_dict: {mapping_dict}")
-        # logging.info(f"TransformSchemasDoFn.transform_message called with mapping_dict: {mapping_dict}")
-        for new_key, path in mapping_dict.items():
-            logging.info(f"TransformSchemasDoFn.transform_message called mapping_dict.items with new_key :{new_key} , path: {path}")
-            value = self.get_nested_value(message_dict, path)
-            if value is not None:
-                result[new_key] = value
-            else:
-                result[new_key] = None
-        return result
-
-
-    def process(self, element, mapping_info, table_name='ms_personas'):
-        logging.info(f"TransformSchemasDoFn.process called with element: {element}")
-        mapping_dict = mapping_info.get('mapping_dict', {})
-        logging.info(f"TransformSchemasDoFn.process called with mapping_dict: {mapping_dict}")
-        aws_output = self.transform_message(element, mapping_dict=mapping_dict,target='aws',table_name=table_name)
-        gcp_output = self.transform_message(element, mapping_dict=mapping_dict,target='gcp',table_name=table_name)
-
-        logging.info(f"aws_output : {aws_output}")
-        logging.info(f"gcp_output : {gcp_output}")
-        yield beam.pvalue.TaggedOutput('aws', aws_output)
-        yield beam.pvalue.TaggedOutput('gcp', gcp_output)
-
-class FullfillSchemasDoFn(DoFn):
-    """Full fill schemas data according to mapping dictionary"""
-
-    def process(self, element, mapping_info):
-        logging.info(f"FullfillSchemasDoFn.process called with element: {element}")
-        schemas_dict = mapping_info.get('schemas_dict', [])
-        new_dict = {}
-        for i in schemas_dict:
-            new_dict[i] = element.get(i, None)
-        logging.info(f"Refreshed element to : {new_dict} ")
-        yield new_dict
-
-
-class WriteToBigLakeDoFn(DoFn):
-    """Custom write to BigLake with partitioning"""
-    
-    def __init__(self, table_name):
-        self.table_name = table_name
-        
-    def process(self, element):
-        # Prepare for BigLake write with proper data types
-        output = {}
-        for key, value in element.items():
-            # Convert None to appropriate BigQuery NULL
-            if value is None:
-                output[key] = None
-            elif isinstance(value, dict):
-                output[key] = json.dumps(value)
-            else:
-                output[key] = value
-        
-        # Add timestamp for partitioning
-        # output['_insert_timestamp'] = datetime.utcnow().isoformat()
-        
-        yield output
-
-# ----------------------------------------
-# 💡 แนะนำให้เปลี่ยนชื่อ DoFn นี้เป็น PrepareForBigQueryFn
-# ----------------------------------------
-# class PrepareForBigQueryFn(DoFn):
-#     """
-#     Flatten the 'profiles' dict from Bigtable 
-#     to match the BigQuery schema.
-#     """
-    
-#     def __init__(self, bq_schema_fields):
-#         # รับรายชื่อ field มาจาก schema
-#         self.schema_fields = [f['name'] for f in bq_schema_fields]
-        
-#     def process(self, element):
-#         # element คือ: {'personas_id': '...', 'profiles': {'accountId': 'a', ...}}
-        
-#         profile_data = element.get('profiles')
-        
-#         # if not profile_data or not isinstance(profile_data, dict):
-#         #     logging.warning(f"Skipping record, missing or invalid 'profiles' data for {element.get('personas_id')}")
-#         #     return
-
-#         # สร้าง record ใหม่ โดยดึงค่าจาก 'profiles'
-#         # output_record = {}
-#         # for field in self.schema_fields:
-#         #     # ดึงค่าจาก profile_data, ถ้าไม่มีให้เป็น None
-#         #     output_record[field] = profile_data.get(field)
-            
-#         # ⚠️ ตรวจสอบ Primary Key (memberId)
-#         # ถ้าไม่มี memberId การ Upsert จะล้มเหลว
-#         if not output_record.get('memberId'):
-#             logging.warning(f"Skipping record, 'memberId' (PK) is missing in profiles: {profile_data}")
-#             return
-            
-#         # Yield flat dict ที่พร้อมสำหรับ BQ
-#         # {'accountId': 'a', 'memberId': 'b', ...}
-#         yield output_record
-
-
-def create_pipeline():
-    """Create the main pipeline"""
-    
-    pipeline_options = PipelineOptions(
-        streaming=True,
-        runner='DataflowRunner',
-        project=PROJECT_ID,
-        job_name='ms-member-realtime-pipeline',
-        temp_location='t1-insight-audit-bucket/audit_log/dataflow/temp',
-        region='asia-southeast1',
-        autoscaling_algorithm='THROUGHPUT_BASED',
-        max_num_workers=10,
-        experiments=['use_runner_v2']
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Run ms_member_realtime pipeline")
+    parser.add_argument(
+        "--config_path",
+        default="configs/ms_member_realtime.yaml",
+        help="Path to the YAML configuration file"
     )
-    
+    parser.add_argument(
+        "--project",
+        help="GCP project ID (overrides config)"
+    )
+    parser.add_argument(
+        "--log_level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level"
+    )
+
+    known_args, pipeline_args = parser.parse_known_args()
+    return known_args, pipeline_args
+
+
+def create_pipeline(config, pipeline_options):
+    """Create the main pipeline with config-driven parameters.
+
+    Args:
+        config: PipelineConfig instance loaded from YAML
+        pipeline_options: PipelineOptions for Beam runner
+
+    Returns:
+        beam.Pipeline instance
+    """
+    LOGGER.info(f"Creating pipeline: {config.name} (mode: {config.mode})")
+
+    # Extract config values
+    project_id = config.io.bq['project']
+    subscription = config.io.pubsub['subscription']
+    mapping_table = config.mapping['table'].format(
+        io=config.io,
+        params=config.params
+    )
+    bt_project = config.io.bigtable['project']
+    bt_instance = config.io.bigtable['instance']
+    bt_table = config.io.bigtable['table']
+    bt_family_columns = config.io.bigtable['family_columns']
+    biglake_table = f"{project_id}.{config.io.bq['dataset']}.{config.io.bq['table']}"
+    s3_bucket = config.io.s3['bucket']
+    refresh_interval = config.mapping['refresh_interval_sec']
+    window_size = config.window['size_sec']
+
+    LOGGER.info(f"Config - Project: {project_id}, Subscription: {subscription}")
+    LOGGER.info(f"Config - BigTable: {bt_instance}/{bt_table}")
+    LOGGER.info(f"Config - BigLake: {biglake_table}")
+    LOGGER.info(f"Config - S3: {s3_bucket}")
+
     pipeline = beam.Pipeline(options=pipeline_options)
     # with beam.Pipeline(options=pipeline_options) as pipeline:
         
-    # Step 0: Cache mapping table (refresh every hour)
+    # Step 0: Cache mapping table (refresh periodically)
     mapping_refresh = (
         pipeline
         | 'PeriodicTrigger' >> PeriodicImpulse(
             start_timestamp=0,
-            # stop_timestamp=float('inf'),
-            # fire_interval=3600  # 1 hour in seconds
-            fire_interval=60
+            fire_interval=refresh_interval
         )
-        | 'RefreshMapping' >> ParDo(MappingRefreshDoFn(MAPPING_TABLE))
+        | 'RefreshMapping' >> ParDo(MappingRefreshDoFn(
+            mapping_table=mapping_table,
+            project_id=project_id
+        ))
         | 'WindowMapping' >> beam.WindowInto(
             window.GlobalWindows(),
             trigger=trigger.Repeatedly(trigger.AfterCount(1)),
             accumulation_mode=trigger.AccumulationMode.DISCARDING
         )
     )
-    
+
     # Step 1-2: Consume from PubSub and extract personasId
     messages = (
         pipeline
-        | 'ReadFromPubSub' >> ReadFromPubSub(subscription=SUBSCRIPTION_NAME)
+        | 'ReadFromPubSub' >> ReadFromPubSub(subscription=subscription)
         | 'ExtractPersonasId' >> ParDo(ExtractPersonasDoFn())
     )
-    
+
     # Step 3: Fetch from BigTable
     bigtable_data = (
         messages
         | 'FetchFromBigTable' >> ParDo(
-            FetchFromBigtableDoFn(BT_INSTANCE, BT_TABLE,parent_field=['profiles'])
+            FetchFromBigtableDoFn(
+                project_id=bt_project,
+                instance_id=bt_instance,
+                table_id=bt_table,
+                parent_field=bt_family_columns
+            )
         )
     )
     
@@ -818,7 +389,7 @@ def create_pipeline():
         #     )
         # )
         | 'CDCWriteToBigLakeIceberg' >> WriteToBigQuery(
-            table=BIGLAKE_TABLE,
+            table=biglake_table,
             # schema=MS_PERSONAS_BIGQUERY_SCHEMA,
             schema='accountId:STRING,dateOfBirth:STRING,gender:STRING,hasEmail:STRING,hasMobile:STRING,languagePrefer:STRING,memberId:STRING,nationalityId:STRING,profileId:STRING,updated_date:STRING',
             # schema='SCHEMA_AUTODETECT',
@@ -870,21 +441,21 @@ def create_pipeline():
     aws_data = full_aws
     (
         aws_data
-        # Window 5 นาที (เหมือนเดิม)
+        # Window based on config
         | 'ApplyFixedWindow' >> beam.WindowInto(
-            window.FixedWindows(300)
+            window.FixedWindows(window_size)
         )
-        
-        # เพิ่ม window info เข้าไปใน record
+
+        # Add window info to record
         | 'AddWindowInfo' >> beam.ParDo(AddWindowInfoFn())
-        
-        # Group by window timestamp เพื่อเขียนแยก path
+
+        # Group by window timestamp for separate paths
         | 'GroupByWindow' >> beam.GroupBy(lambda x: x['_window_path'])
-        
-        # เขียน Parquet แยกตาม window
+
+        # Write Parquet per window
         | 'WriteParquetPerWindow' >> beam.ParDo(
             WriteParquetByWindowFn(
-                base_path=S3_PARQUET_BUCKET,
+                base_path=s3_bucket,
                 schema=MS_PERSONAS_PARQUET_SCHEMA
             )
         )
@@ -944,16 +515,63 @@ def create_pipeline():
 #     except Exception as e:
 #         print(f"Subscription might already exist: {e}")
 
-if __name__ == "__main__":
-    # Setup infrastructure first (run once)
-    # setup_infrastructure()
-    
+def main():
+    """Main entry point."""
+    # Parse arguments
+    args, pipeline_args = parse_args()
+
+    # Setup logging
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        stream=sys.stderr
+    )
+
+    LOGGER.info("=" * 60)
+    LOGGER.info("Starting MS Member Realtime Pipeline")
+    LOGGER.info(f"Config path: {args.config_path}")
+    LOGGER.info(f"Log level: {args.log_level}")
+    LOGGER.info("=" * 60)
+
+    # Load config
+    LOGGER.info("Loading pipeline configuration...")
+    try:
+        config = load_config(args.config_path)
+        LOGGER.info(f"Pipeline: {config.name}, Mode: {config.mode}, Term: {config.term}")
+    except Exception as e:
+        LOGGER.error(f"Failed to load config: {e}", exc_info=True)
+        sys.exit(1)
+
+    # Override project if provided
+    if args.project:
+        config.io.bq['project'] = args.project
+        config.io.bigtable['project'] = args.project
+        LOGGER.info(f"Overriding project to: {args.project}")
+
+    # Create pipeline options
+    pipeline_options = PipelineOptions(pipeline_args)
+
+    # For streaming, ensure proper settings
+    standard_options = pipeline_options.view_as(StandardOptions)
+    standard_options.streaming = True
+
+    LOGGER.info("Creating and running pipeline...")
+
     # Create and run pipeline
-    pipeline = create_pipeline()
-    result = pipeline.run()
-    
-    # if isinstance(pipeline.options, PipelineOptions):
-    #     standard_options = pipeline.options.view_as(StandardOptions)
-    #     if standard_options.streaming:
-    #         print("Pipeline is running in streaming mode. Press Ctrl+C to stop.")
-    #         result.wait_until_finish()
+    try:
+        pipeline = create_pipeline(config, pipeline_options)
+        result = pipeline.run()
+
+        LOGGER.info("Pipeline submitted successfully!")
+        LOGGER.info("=" * 60)
+
+        # Note: Streaming pipelines don't have wait_until_finish in non-blocking mode
+        # The job will run continuously on Dataflow
+
+    except Exception as e:
+        LOGGER.error(f"Pipeline failed: {e}", exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
