@@ -185,6 +185,17 @@ class StreamingConfig:
     fixed_mapping: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
+class MappingConfig:
+    """Configuration for mapping table refresh in streaming pipelines"""
+    table: str = ""
+    refresh_interval_sec: int = 60
+
+@dataclass
+class WindowConfig:
+    """Configuration for windowing in streaming pipelines"""
+    size_sec: int = 300  # Default 5 minutes
+
+@dataclass
 class PipelineConfig:
     """Top‑level configuration for a single pipeline run.
 
@@ -201,7 +212,9 @@ class PipelineConfig:
     formats: FormatSpec = field(default_factory=FormatSpec)
     params: PipelineParams = field(default_factory=PipelineParams)
     io: IOConfig = field(default_factory=IOConfig)
-    streaming: Optional[StreamingConfig] = None  # เพิ่มนี้
+    streaming: Optional[StreamingConfig] = None
+    mapping: Optional[MappingConfig] = None  # For streaming pipelines
+    window: Optional[WindowConfig] = None    # For streaming pipelines
     plan: List[Dict[str, Any]] = field(default_factory=list)
     defaults_file: Optional[str] = None
 
@@ -239,6 +252,16 @@ class PipelineConfig:
         if "streaming" in data:
             streaming_spec = StreamingConfig(**data["streaming"])
 
+        # Build mapping config if present
+        mapping_spec = None
+        if "mapping" in data:
+            mapping_spec = MappingConfig(**data["mapping"])
+
+        # Build window config if present
+        window_spec = None
+        if "window" in data:
+            window_spec = WindowConfig(**data["window"])
+
         return PipelineConfig(
             name=data["pipeline"].get("name"),
             mode=data["pipeline"].get("mode"),
@@ -249,7 +272,9 @@ class PipelineConfig:
             io=io_spec,
             plan=plan,
             defaults_file=data.get("defaults_file"),
-            streaming=streaming_spec,  # เพิ่มนี้
+            streaming=streaming_spec,
+            mapping=mapping_spec,
+            window=window_spec,
         )
 
 
