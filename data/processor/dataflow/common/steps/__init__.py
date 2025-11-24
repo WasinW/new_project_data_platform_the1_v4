@@ -38,6 +38,19 @@ from dataflow_common.steps.realtime import (
     WriteToBigLakeDoFn,
 )
 
+# Import streaming steps (config-driven realtime pipeline)
+from dataflow_common.steps.streaming import (
+    RefreshMappingTableStep,
+    ReadFromPubSubStep,
+    ExtractPersonasStep,
+    FetchFromBigtableStep,
+    FilterEmptyMemberIdStep,
+    TransformSchemasStep,
+    FullfillSchemasStep,
+    WriteToBigQueryStep as WriteToBigQueryStreamingStep,
+    WriteToS3ParquetStep,
+)
+
 class ReadBQQueryStep(BaseStep):
     """Read a BigQuery SQL query into a PCollection of dictionaries."""
     
@@ -473,7 +486,7 @@ __all__ = [
     "WriteParquetStep",
     "WriteToBigQueryStep",
     "WriteGCSStep",
-    # Realtime pipeline DoFns (used in ms_member_realtime)
+    # Realtime pipeline DoFns (used in ms_member_realtime script)
     "AddWindowInfoFn",
     "WriteParquetByWindowFn",
     "MappingRefreshDoFn",
@@ -483,4 +496,14 @@ __all__ = [
     "TransformSchemasDoFn",
     "FullfillSchemasDoFn",
     "WriteToBigLakeDoFn",
+    # Streaming steps (config-driven realtime pipeline)
+    "RefreshMappingTableStep",
+    "ReadFromPubSubStep",
+    "ExtractPersonasStep",
+    "FetchFromBigtableStep",
+    "FilterEmptyMemberIdStep",
+    "TransformSchemasStep",
+    "FullfillSchemasStep",
+    "WriteToBigQueryStreamingStep",
+    "WriteToS3ParquetStep",
 ]
