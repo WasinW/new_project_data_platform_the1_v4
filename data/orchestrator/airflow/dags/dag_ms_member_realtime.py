@@ -378,7 +378,8 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
-        'sdk_container_image': 'gcr.io/dataflow-templates-base/python311-template-launcher-base:latest',
+        # ✅ Use custom container with dataflow_common installed
+        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.00',
         # ------------------------------------------------------------------------------------
 
         'experiments': [
@@ -398,7 +399,9 @@ dataflow_job = BeamRunPythonPipelineOperator(
         # Pipeline parameters
         # 'project_id': PROJECT_ID,
         'max_num_workers': 10,  # เพิ่ม workers สำหรับ streaming
-        # 'config_path': '{{ var.value.bucket_config }}/dags/composer/config/ms_member/batch/ms_member_short_init.yaml',
+
+        # ✅ Config path for streaming pipeline
+        'config_path': 'gs://t1-airflow-composer-bucket/dags/composer/config/ms_member/streaming/ms_member_realtime.yaml',
 
         # AWS S3 credentials
         's3_region_name': 'ap-southeast-1',
