@@ -423,20 +423,19 @@ dataflow_job = BeamRunPythonPipelineOperator(
     # ----------------------------
     # py_requirements_file='/home/airflow/gcs/dags/composer/requirements/beam-composer-reqs.txt',
     py_requirements=[
-        # 'apache-beam[gcp]==2.59.0',
-        # 'google-cloud-bigquery==3.25.0',
-        'apache-beam[gcp]==2.69.0',  # Update from 2.59.0 to 2.69.0
+        # Apache Beam and core dependencies
+        'apache-beam[gcp]==2.59.0',  # Match Dockerfile version
         'google-cloud-bigquery==3.25.0',
         'fastavro',
-        # FIXED: กลับไปใช้ versions เดิมที่ทำงานได้
-        'pyarrow>=12.0.0',      # ใช้ >= แทน == เพื่อให้ pip หา version ที่ compatible
-        'pandas>=1.5.0',         # ใช้ >= แทน == fixed version
-        's3fs>=2023.1.0',        # ใช้ >= แทน == fixed version  
-        'fsspec>=2023.1.0',      # ใช้ >= แทน == fixed version
+        'pyarrow>=12.0.0',
+        'pandas>=1.5.0',
+        's3fs>=2023.1.0',
+        'fsspec>=2023.1.0',
         'pyyaml>=6.0',
         'boto3>=1.28.0',
-        # REMOVED: 'numpy<2.0.0' - ให้ pip เลือก version ที่ compatible เอง
-        # REMOVED: 'aiobotocore==2.12.1' - ให้ s3fs เลือก version ที่ compatible เอง
+
+        # ✅ dataflow_common wheel for Composer/Airflow driver
+        '/home/airflow/gcs/dags/packages/dataflow_common-1.0.0-py3-none-any.whl',
     ],
     py_system_site_packages=False,
     dataflow_config=DataflowConfiguration(
