@@ -172,6 +172,9 @@ class IOConfig:
 
     s3: Dict[str, Any] = field(default_factory=dict)
     bq: Dict[str, Any] = field(default_factory=dict)
+    pubsub: Dict[str, Any] = field(default_factory=dict)
+    bigtable: Dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass
 class StreamingConfig:

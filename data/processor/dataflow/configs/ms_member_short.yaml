@@ -11,9 +11,9 @@ params:
 
 io:
   bq:
-    project: the1-insight-prod
+    project: the1-insight-{WORKSPACE_ENV}
     dataset: insight
-    temp_gcs: gs://the1-insight-prod-data-pipeline-data-staging/audit_log/dataflow/temp
+    temp_gcs: gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp
     # the1-insight-${terraform.workspace}-data-pipeline-data-staging
   s3:
     refined_prefix: s3://t1-analytics/refined/insights
@@ -76,7 +76,6 @@ plan:
         PARTITION BY JSON_VALUE(profiles, '$.memberId')
         ORDER BY TIMESTAMP DESC
       ) AS RN_PK
-      -- FROM `the1-insight-stg.insight.personas_snapshot24oct25`
       FROM `{io.bq.project}.{io.bq.dataset}.personas`
       WHERE TIMESTAMP BETWEEN TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR) AND CURRENT_TIMESTAMP()
     ) WHERE RN_PK = 1

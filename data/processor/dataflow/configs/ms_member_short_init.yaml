@@ -12,9 +12,9 @@ params:
 
 io:
   bq:
-    project: the1-insight-prod
+    project: the1-insight-{WORKSPACE_ENV}
     dataset: insight
-    temp_gcs: gs://the1-insight-prod-data-pipeline-data-staging/audit_log/dataflow/temp
+    temp_gcs: gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp
   s3:
     refined_prefix: s3://t1-analytics/refined/insights
     num_shards: 400
@@ -77,7 +77,6 @@ plan:
         PARTITION BY JSON_VALUE(profiles, '$.memberId')
         ORDER BY TIMESTAMP DESC
       ) AS RN_PK
-      -- FROM `the1-insight-stg.insight.personas_snapshot24oct25`
       FROM `{io.bq.project}.{io.bq.dataset}.personas`
       WHERE TIMESTAMP <= TIMESTAMP('2025-10-27 00:00:00')
       AND COALESCE(JSON_VALUE(profiles, '$.memberId'), '') <> ''
@@ -102,7 +101,6 @@ plan:
     ) origin
     INNER JOIN (
       SELECT JSON_VALUE(profiles, '$.memberId') as member_id
-      -- FROM `the1-insight-stg.insight.personas_snapshot24oct25`
       FROM `{io.bq.project}.{io.bq.dataset}.personas`
       WHERE TIMESTAMP <= TIMESTAMP('2025-10-27 00:00:00')
       AND COALESCE(JSON_VALUE(profiles, '$.memberId'), '') <> ''
