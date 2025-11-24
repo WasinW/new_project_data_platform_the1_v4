@@ -168,10 +168,15 @@ class IOConfig:
     may contain a ``project``, ``dataset`` and optional
     ``temp_gcs`` for BigQuery reads.  Additional keys can be added
     depending on your needs.
+
+    For streaming pipelines, ``pubsub`` and ``bigtable`` may be
+    used for Pub/Sub subscriptions and Bigtable connections.
     """
 
     s3: Dict[str, Any] = field(default_factory=dict)
     bq: Dict[str, Any] = field(default_factory=dict)
+    pubsub: Dict[str, Any] = field(default_factory=dict)
+    bigtable: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class StreamingConfig:
