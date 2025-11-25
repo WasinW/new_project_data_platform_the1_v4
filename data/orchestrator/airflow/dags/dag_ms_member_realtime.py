@@ -43,6 +43,7 @@ GCP_CONN_ID = "google_cloud_default"
 REGION = "asia-southeast1"
 JOB_NAME = 'ms-member-realtime'
 
+
 # ============================================
 # CUSTOM SENSOR FOR STREAMING JOBS
 # ============================================
@@ -187,8 +188,10 @@ def get_secret_value(secret_id, project_id):
 
 def get_aws_credentials(**context):
     """Get AWS credentials and push to XCom"""
-    access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_access_key']
-    secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_secret_key']
+    # access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_access_key']
+    # secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_secret_key']
+    access_key = get_secret_value('data-pipeline-aws-access-key', PROJECT_ID)
+    secret_key = get_secret_value('data-pipeline-aws-secret-key', PROJECT_ID)
     
     # Push to XCom for next tasks
     context['ti'].xcom_push(key='aws_access_key', value=access_key)
@@ -340,7 +343,7 @@ pre_check = PythonOperator(
 dataflow_job = BeamRunPythonPipelineOperator(
     task_id='run_dataflow_pipeline',
     runner='DataflowRunner',
-    py_file='{{ var.value.bucket_composer }}/dataflow/jobs/ms_member_realtime_pipeline.py',
+    py_file='{{ var.value.bucket_dataflow  }}/jobs/ms_member_realtime_pipeline.py',
 
     # Dataflow pipeline options
     # ----------------------------
@@ -378,7 +381,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
-        'sdk_container_image': 'gcr.io/dataflow-templates-base/python311-template-launcher-base:latest',
+        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.02',
         # ------------------------------------------------------------------------------------
 
         'experiments': [
@@ -398,7 +401,8 @@ dataflow_job = BeamRunPythonPipelineOperator(
         # Pipeline parameters
         # 'project_id': PROJECT_ID,
         'max_num_workers': 10,  # เพิ่ม workers สำหรับ streaming
-        # 'config_path': '{{ var.value.bucket_config }}/dags/composer/config/ms_member/batch/ms_member_short_init.yaml',
+        # t1-airflow-composer-bucket/dags/composer/config/ms_member/streaming
+        'config_path': '{{ var.value.bucket_config }}/dags/composer/config/ms_member/streaming/ms_member_realtime.yaml',
 
         # AWS S3 credentials
         's3_region_name': 'ap-southeast-1',
@@ -434,6 +438,8 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'boto3>=1.28.0',
         # REMOVED: 'numpy<2.0.0' - ให้ pip เลือก version ที่ compatible เอง
         # REMOVED: 'aiobotocore==2.12.1' - ให้ s3fs เลือก version ที่ compatible เอง
+                # ✅ dataflow_common wheel for Composer/Airflow driver
+        '/home/airflow/gcs/dags/packages/dataflow_common-1.0.0-py3-none-any.whl',
     ],
     py_system_site_packages=False,
     dataflow_config=DataflowConfiguration(
