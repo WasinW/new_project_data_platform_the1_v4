@@ -21,7 +21,13 @@ test = [
 ]
 
 [tool.setuptools]
-packages = ["dataflow_common"]
+packages = [
+    "dataflow_common",
+    "dataflow_common.connectors",
+    "dataflow_common.steps",
+    "dataflow_common.transforms",
+    "dataflow_common.utils"
+]
 
 [tool.setuptools.package-dir]
 dataflow_common = "."
