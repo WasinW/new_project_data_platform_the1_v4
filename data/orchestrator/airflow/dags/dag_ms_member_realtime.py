@@ -374,12 +374,12 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'worker_disk_type': 'compute.googleapis.com/projects//zones//diskTypes/pd-ssd',
         # cost: ~$0.17/GB/month ($0.00024/GB/hour)
 
-        'mode': 'streaming', 
+        'mode': 'streaming',
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
-        # ✅ Use custom container with dataflow_common installed
-        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.00',
+        # ✅ Use custom container with dataflow_common installed (v5.06: complete with all dependencies)
+        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.06',
         # ------------------------------------------------------------------------------------
 
         'experiments': [
