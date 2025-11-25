@@ -187,13 +187,13 @@ def get_secret_value(secret_id, project_id):
 
 def get_aws_credentials(**context):
     """Get AWS credentials and push to XCom"""
-    access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_access_key']
-    secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_secret_key']
-    
+    access_key = get_secret_value('data-pipeline-aws-access-key', PROJECT_ID)
+    secret_key = get_secret_value('data-pipeline-aws-secret-key', PROJECT_ID)
+
     # Push to XCom for next tasks
     context['ti'].xcom_push(key='aws_access_key', value=access_key)
     context['ti'].xcom_push(key='aws_secret_key', value=secret_key)
-    
+
     return {'status': 'credentials retrieved'}
 
 
@@ -340,7 +340,7 @@ pre_check = PythonOperator(
 dataflow_job = BeamRunPythonPipelineOperator(
     task_id='run_dataflow_pipeline',
     runner='DataflowRunner',
-    py_file='{{ var.value.bucket_composer }}/dataflow/jobs/ms_member_realtime_pipeline.py',
+    py_file='{{ var.value.bucket_dataflow }}/jobs/ms_member_realtime_pipeline.py',
 
     # Dataflow pipeline options
     # ----------------------------
@@ -401,7 +401,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'max_num_workers': 10,  # เพิ่ม workers สำหรับ streaming
 
         # ✅ Config path for streaming pipeline
-        'config_path': 'gs://t1-airflow-composer-bucket/dags/composer/config/ms_member/streaming/ms_member_realtime.yaml',
+        'config_path': '{{ var.value.bucket_config }}/dags/composer/config/ms_member/streaming/ms_member_realtime.yaml',
 
         # AWS S3 credentials
         's3_region_name': 'ap-southeast-1',

@@ -64,13 +64,13 @@ def get_secret_value(secret_id, project_id):
 
 def get_aws_credentials(**context):
     """Get AWS credentials and push to XCom"""
-    access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_access_key']
-    secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_secret_key']
-    
+    access_key = get_secret_value('data-pipeline-aws-access-key', PROJECT_ID)
+    secret_key = get_secret_value('data-pipeline-aws-secret-key', PROJECT_ID)
+
     # Push to XCom for next tasks
     context['ti'].xcom_push(key='aws_access_key', value=access_key)
     context['ti'].xcom_push(key='aws_secret_key', value=secret_key)
-    
+
     return {'status': 'credentials retrieved'}
 
 # ============================================
