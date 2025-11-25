@@ -18,7 +18,7 @@ import operator
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import s3fs
+# NOTE: s3fs imported lazily in WriteParquetByWindowFn to avoid requiring it on import
 
 import apache_beam as beam
 from apache_beam import DoFn
@@ -98,7 +98,8 @@ class WriteParquetByWindowFn(DoFn):
         # Write to S3 via pyarrow
         table = pa.Table.from_pandas(df, schema=self.schema)
 
-        # Use s3fs for S3 write
+        # Lazy import s3fs (only when actually writing to S3)
+        import s3fs
         fs = s3fs.S3FileSystem()
 
         with fs.open(output_path, 'wb') as f:

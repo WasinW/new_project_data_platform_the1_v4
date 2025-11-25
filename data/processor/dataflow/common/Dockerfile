@@ -46,8 +46,9 @@ RUN pip install --no-cache-dir --no-deps \
     s3transfer==0.10.1 \
     boto3==1.34.106
 
-# Install other dependencies
+# Install s3fs and other dependencies
 RUN pip install --no-cache-dir \
+    's3fs>=2024.6.0,<2025' \
     pyarrow==14.0.2 \
     google-cloud-bigquery==3.25.0 \
     pyyaml==6.0.1
