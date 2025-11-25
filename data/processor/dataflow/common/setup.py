@@ -36,6 +36,7 @@ setup(
         "google-cloud-bigtable>=2.26.0",
         "google-cloud-pubsub>=2.23.1",
         "pyarrow>=14.0.0",
+        "pandas>=1.5.0",
         "pyyaml>=6.0",
         "boto3>=1.26.0",
     ],
