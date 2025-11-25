@@ -429,8 +429,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'fastavro',
         'pyarrow>=12.0.0',
         'pandas>=1.5.0',
-        's3fs>=2023.1.0',
-        'fsspec>=2023.1.0',
+        's3fs>=2024.6.0,<2025',  # Use stable 2024.x version, avoid yanked 2025.3.1
         'pyyaml>=6.0',
         'boto3>=1.28.0',
 

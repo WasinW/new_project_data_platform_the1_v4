@@ -37,7 +37,7 @@ setup(
         "google-cloud-pubsub>=2.23.1",
         "pyarrow>=14.0.0",
         "pandas>=1.5.0",
-        "s3fs>=2023.1.0",  # s3fs will install compatible fsspec automatically
+        "s3fs>=2024.6.0,<2025",  # Use stable 2024.x, avoid yanked 2025.3.1
         "pyyaml>=6.0",
         "boto3>=1.26.0",
     ],
