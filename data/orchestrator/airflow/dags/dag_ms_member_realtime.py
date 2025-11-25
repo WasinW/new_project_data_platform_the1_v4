@@ -381,8 +381,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
-        # 'sdk_container_image': 'gcr.io/dataflow-templates-base/python311-template-launcher-base:latest',
-        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.00',
+        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.02',
         # ------------------------------------------------------------------------------------
 
         'experiments': [

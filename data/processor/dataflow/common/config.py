@@ -183,6 +183,17 @@ class StreamingConfig:
     fixed_mapping: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
+class MappingConfig:
+    """Configuration for mapping table refresh in streaming pipelines"""
+    table: str = ""
+    refresh_interval_sec: int = 60
+
+@dataclass
+class WindowConfig:
+    """Configuration for windowing in streaming pipelines"""
+    size_sec: int = 300  # Default 5 minutes
+
+@dataclass
 class PipelineConfig:
     """Top‑level configuration for a single pipeline run.
 
@@ -200,6 +211,8 @@ class PipelineConfig:
     params: PipelineParams = field(default_factory=PipelineParams)
     io: IOConfig = field(default_factory=IOConfig)
     streaming: Optional[StreamingConfig] = None  # เพิ่มนี้
+    mapping: Optional[MappingConfig] = None  # For streaming pipelines
+    window: Optional[WindowConfig] = None    # For streaming pipelines
     plan: List[Dict[str, Any]] = field(default_factory=list)
     defaults_file: Optional[str] = None
 
@@ -236,6 +249,10 @@ class PipelineConfig:
         streaming_spec = None
         if "streaming" in data:
             streaming_spec = StreamingConfig(**data["streaming"])
+        
+        if "mapping" in data:
+            mapping_spec = MappingConfig(**data["mapping"])
+
 
         return PipelineConfig(
             name=data["pipeline"].get("name"),
@@ -248,6 +265,7 @@ class PipelineConfig:
             plan=plan,
             defaults_file=data.get("defaults_file"),
             streaming=streaming_spec,  # เพิ่มนี้
+            mapping=mapping_spec if "mapping" in data else None,
         )
 
 
