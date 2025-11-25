@@ -252,9 +252,11 @@ dataflow_job = BeamRunPythonPipelineOperator(
     # 1) ฝั่ง Composer (driver)
     # ----------------------------
     # Python dependencies
-    # Only apache-beam needed on Composer side; all other deps in wheel
     py_requirements=[
-        'apache-beam[gcp]==2.59.0',  # Required for BeamRunPythonPipelineOperator
+        'apache-beam[gcp]==2.59.0',
+        'google-cloud-bigquery==3.25.0',
+        'pyarrow>=12.0.0',
+        'pyyaml>=6.0',
         '/home/airflow/gcs/dags/packages/dataflow_common-1.0.0-py3-none-any.whl',
     ],
     py_system_site_packages=False,
