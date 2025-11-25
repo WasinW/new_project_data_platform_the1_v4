@@ -421,19 +421,9 @@ dataflow_job = BeamRunPythonPipelineOperator(
     # ----------------------------
     # 1) ฝั่ง Composer (driver)
     # ----------------------------
-    # py_requirements_file='/home/airflow/gcs/dags/composer/requirements/beam-composer-reqs.txt',
+    # Only apache-beam needed on Composer side; all other deps in wheel
     py_requirements=[
-        # Apache Beam and core dependencies
-        'apache-beam[gcp]==2.59.0',  # Match Dockerfile version
-        'google-cloud-bigquery==3.25.0',
-        'fastavro',
-        'pyarrow>=12.0.0',
-        'pandas>=1.5.0',
-        's3fs>=2024.6.0,<2025',  # Use stable 2024.x version, avoid yanked 2025.3.1
-        'pyyaml>=6.0',
-        'boto3>=1.28.0',
-
-        # ✅ dataflow_common wheel for Composer/Airflow driver
+        'apache-beam[gcp]==2.59.0',  # Required for BeamRunPythonPipelineOperator
         '/home/airflow/gcs/dags/packages/dataflow_common-1.0.0-py3-none-any.whl',
     ],
     py_system_site_packages=False,
