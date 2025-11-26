@@ -18,7 +18,7 @@ import operator
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-# NOTE: s3fs imported lazily in WriteParquetByWindowFn to avoid requiring it on import
+# import s3fs
 
 import apache_beam as beam
 from apache_beam import DoFn
@@ -85,6 +85,7 @@ class WriteParquetByWindowFn(DoFn):
             Success message
         """
         LOGGER.info("[WriteParquetByWindowFn] Processing window group")
+        import s3fs
         window_path, records = group
 
         # Create full path

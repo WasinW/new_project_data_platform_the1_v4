@@ -147,7 +147,6 @@ class FetchFromBigtableStep(BaseStep):
         table = params.get("table")
         pk_col = params.get("pk_col", "personaId")
         parent_field = params.get("parent_field", ["profiles"])
-
         LOGGER.info(f"[{self.step_id}] Fetching from Bigtable: {project}/{instance}/{table}")
 
         pcoll = self.state[input_key]
@@ -284,7 +283,6 @@ class WriteToBigQueryStep(BaseStep):
         # Get params from params dict
         params = self.spec.get("params", {})
         table = params.get("table")
-
         LOGGER.info(f"[{self.step_id}] Writing to BigQuery: {table}")
 
         pcoll = self.state[input_key]

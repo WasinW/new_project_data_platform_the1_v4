@@ -29,6 +29,10 @@ def parse_args():
         default="configs/ms_member_realtime.yaml",
         help="Path to the YAML configuration file"
     )
+    # parser.add_argument(
+    #     "--project",
+    #     help="GCP project ID (overrides config)"
+    # )
     parser.add_argument(
         "--log_level",
         default="INFO",
@@ -68,6 +72,12 @@ def main():
     except Exception as e:
         LOGGER.error(f"Failed to load config: {e}", exc_info=True)
         sys.exit(1)
+
+    # # Override project if provided
+    # if args.project:
+    #     config.io.bq['project'] = args.project
+    #     config.io.bigtable['project'] = args.project
+    #     LOGGER.info(f"Overriding project to: {args.project}")
 
     # Create pipeline options
     pipeline_options = PipelineOptions(pipeline_args)

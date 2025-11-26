@@ -178,6 +178,7 @@ class IOConfig:
     pubsub: Dict[str, Any] = field(default_factory=dict)
     bigtable: Dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass
 class StreamingConfig:
     """Configuration specific to streaming pipelines"""
@@ -212,7 +213,7 @@ class PipelineConfig:
     formats: FormatSpec = field(default_factory=FormatSpec)
     params: PipelineParams = field(default_factory=PipelineParams)
     io: IOConfig = field(default_factory=IOConfig)
-    streaming: Optional[StreamingConfig] = None
+    streaming: Optional[StreamingConfig] = None  # เพิ่มนี้
     mapping: Optional[MappingConfig] = None  # For streaming pipelines
     window: Optional[WindowConfig] = None    # For streaming pipelines
     plan: List[Dict[str, Any]] = field(default_factory=list)
@@ -251,6 +252,10 @@ class PipelineConfig:
         streaming_spec = None
         if "streaming" in data:
             streaming_spec = StreamingConfig(**data["streaming"])
+        
+        if "mapping" in data:
+            mapping_spec = MappingConfig(**data["mapping"])
+
 
         # Build mapping config if present
         mapping_spec = None
