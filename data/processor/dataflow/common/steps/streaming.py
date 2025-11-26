@@ -42,9 +42,11 @@ class RefreshMappingTableStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
-        fire_interval = self.spec.get("fire_interval", 60)
-        mapping_table = self.spec.get("mapping_table")
-        query = self.spec.get("query")
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        fire_interval = params.get("fire_interval", 60)
+        mapping_table = params.get("mapping_table")
+        query = params.get("query")
 
         LOGGER.info(f"[{self.step_id}] Refreshing mapping table every {fire_interval}s")
         LOGGER.info(f"[{self.step_id}] Mapping table: {mapping_table}")
@@ -52,7 +54,8 @@ class RefreshMappingTableStep(BaseStep):
         # Create DoFn with parameters
         mapping_dofn = MappingRefreshDoFn(
             mapping_table=mapping_table,
-            project_id=self.config.project_id
+            # project_id=self.config.project_id
+            project_id=self.config.io.bq.get('project')
         )
 
         # Override query if provided
@@ -82,7 +85,8 @@ class ReadFromPubSubStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
-        subscription = self.spec.get("subscription")
+        params = self.spec.get("params", {})
+        subscription = params.get("subscription")
 
         LOGGER.info(f"[{self.step_id}] Reading from Pub/Sub: {subscription}")
 
@@ -105,7 +109,9 @@ class ExtractPersonasStep(BaseStep):
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
         input_key = self.spec.get("input")
-        pk_col = self.spec.get("pk_col", "personaId")
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        pk_col = params.get("pk_col", "personaId")
 
         LOGGER.info(f"[{self.step_id}] Extracting personas with pk_col={pk_col}")
 
@@ -134,12 +140,13 @@ class FetchFromBigtableStep(BaseStep):
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
         input_key = self.spec.get("input")
-        project = self.spec.get("project")
-        instance = self.spec.get("instance")
-        table = self.spec.get("table")
-        pk_col = self.spec.get("pk_col", "personaId")
-        parent_field = self.spec.get("parent_field", ["profiles"])
-
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        project = params.get("project")
+        instance = params.get("instance")
+        table = params.get("table")
+        pk_col = params.get("pk_col", "personaId")
+        parent_field = params.get("parent_field", ["profiles"])
         LOGGER.info(f"[{self.step_id}] Fetching from Bigtable: {project}/{instance}/{table}")
 
         pcoll = self.state[input_key]
@@ -170,7 +177,9 @@ class FilterEmptyMemberIdStep(BaseStep):
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
         input_key = self.spec.get("input")
-        pk_col = self.spec.get("pk_col", "profiles.memberId")
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        pk_col = params.get("pk_col", "profiles.memberId")
 
         LOGGER.info(f"[{self.step_id}] Filtering empty {pk_col}")
 
@@ -199,7 +208,9 @@ class TransformSchemasStep(BaseStep):
     def execute(self, pipeline: beam.Pipeline) -> Dict[str, beam.PCollection]:
         input_key = self.spec.get("input")
         mapping_info_key = self.spec.get("mapping_info")
-        table_name = self.spec.get("table_name", "ms_member")
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        table_name = params.get("table_name", "ms_member")
         outputs = self.spec.get("outputs", ["aws", "gcp"])
 
         LOGGER.info(f"[{self.step_id}] Transforming schemas for table={table_name}")
@@ -238,7 +249,9 @@ class FullfillSchemasStep(BaseStep):
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
         input_key = self.spec.get("input")
         mapping_info_key = self.spec.get("mapping_info")
-        table_name = self.spec.get("table_name", "ms_member")
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        table_name = params.get("table_name", "ms_member")
 
         LOGGER.info(f"[{self.step_id}] Fulfilling schema for table={table_name}")
 
@@ -267,8 +280,9 @@ class WriteToBigQueryStep(BaseStep):
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
         input_key = self.spec.get("input")
-        table = self.spec.get("table")
-
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        table = params.get("table")
         LOGGER.info(f"[{self.step_id}] Writing to BigQuery: {table}")
 
         pcoll = self.state[input_key]
@@ -304,16 +318,16 @@ class WriteToS3ParquetStep(BaseStep):
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
         input_key = self.spec.get("input")
-        bucket = self.spec.get("bucket")
-        window_size = self.spec.get("window_size", 3600)  # Default 1 hour
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        bucket = params.get("bucket")
+        window_size = params.get("window_size", 3600)  # Default 1 hour
+        schema = params.get("schema")
 
         LOGGER.info(f"[{self.step_id}] Writing to S3: {bucket}")
         LOGGER.info(f"[{self.step_id}] Window size: {window_size}s")
 
         pcoll = self.state[input_key]
-
-        # Get schema from mapping if available
-        schema = self.spec.get("schema")
 
         # Apply windowing
         windowed = (
