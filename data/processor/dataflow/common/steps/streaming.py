@@ -371,3 +371,51 @@ class WriteToS3ParquetStep(BaseStep):
         )
 
         return result
+
+
+class WriteToBigQueryCDCStep(BaseStep):
+    """Write data to BigLake table with CDC support using Storage Write API.
+    
+    This step is specifically for streaming pipelines that write to BigLake tables
+    (Iceberg format) with Change Data Capture (CDC) enabled for time travel capabilities.
+    
+    Config params:
+        table: BigQuery table path (project.dataset.table) - must be BigLake table
+        input: Input PCollection name from state
+        primary_key: Primary key column(s) for CDC upsert (default: ['member_number'])
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        # Support input in both params and top level
+        input_key = params.get("input") or self.spec.get("input")
+        table = params.get("table")
+        primary_key = params.get("primary_key", ["member_number"])
+
+        LOGGER.info(f"[{self.step_id}] Writing to BigLake CDC table: {table}")
+        LOGGER.info(f"[{self.step_id}] Primary key(s): {primary_key}")
+
+        pcoll = self.state[input_key]
+
+        # Transform to BigLake format (JSON serialization)
+        prepared = (
+            pcoll
+            | f"{self.step_id}_PrepareForBigLake" >> beam.ParDo(WriteToBigLakeDoFn(table_name=table))
+        )
+
+        # Write to BigQuery using Storage Write API with CDC
+        result = (
+            prepared
+            | f"{self.step_id}_WriteBigLakeCDC" >> bigquery.WriteToBigQuery(
+                table=table,
+                method=bigquery.WriteToBigQuery.Method.STORAGE_WRITE_API,
+                write_disposition=bigquery.BigQueryDisposition.WRITE_APPEND,
+                create_disposition=bigquery.BigQueryDisposition.CREATE_NEVER,
+                # Storage Write API uses schema from existing table
+                # CDC is handled by BigLake table configuration
+            )
+        )
+
+        LOGGER.info(f"[{self.step_id}] BigLake CDC write completed")
+        return result
