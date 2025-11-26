@@ -36,6 +36,7 @@ from dataflow_common.steps.realtime import (
     TransformSchemasDoFn,
     FullfillSchemasDoFn,
     WriteToBigLakeDoFn,
+    AddCDCMetadataDoFn,
 )
 
 # Import streaming steps (config-driven realtime pipeline)
@@ -497,6 +498,7 @@ __all__ = [
     "TransformSchemasDoFn",
     "FullfillSchemasDoFn",
     "WriteToBigLakeDoFn",
+    "AddCDCMetadataDoFn",
     # Streaming steps (config-driven realtime pipeline)
     "RefreshMappingTableStep",
     "ReadFromPubSubStep",

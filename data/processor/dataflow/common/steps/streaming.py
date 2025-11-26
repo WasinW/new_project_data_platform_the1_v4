@@ -375,14 +375,21 @@ class WriteToS3ParquetStep(BaseStep):
 
 class WriteToBigQueryCDCStep(BaseStep):
     """Write data to BigLake table with CDC support using Storage Write API.
-    
+
     This step is specifically for streaming pipelines that write to BigLake tables
     (Iceberg format) with Change Data Capture (CDC) enabled for time travel capabilities.
-    
+
     Config params:
         table: BigQuery table path (project.dataset.table) - must be BigLake table
         input: Input PCollection name from state
         primary_key: Primary key column(s) for CDC upsert (default: ['member_number'])
+        change_type: Default change type - 'UPSERT' or 'DELETE' (default: 'UPSERT')
+
+    CDC Requirements:
+        - Table must be BigLake table (Iceberg format) created beforehand
+        - Records will have _CHANGE_TYPE and _CHANGE_SEQUENCE_NUMBER added automatically
+        - Uses Storage Write API with at-least-once semantics
+        - Enables CDC writes for upsert/delete operations
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
@@ -392,30 +399,50 @@ class WriteToBigQueryCDCStep(BaseStep):
         input_key = params.get("input") or self.spec.get("input")
         table = params.get("table")
         primary_key = params.get("primary_key", ["member_number"])
+        change_type = params.get("change_type", "UPSERT")
 
         LOGGER.info(f"[{self.step_id}] Writing to BigLake CDC table: {table}")
         LOGGER.info(f"[{self.step_id}] Primary key(s): {primary_key}")
+        LOGGER.info(f"[{self.step_id}] Change type: {change_type}")
 
         pcoll = self.state[input_key]
 
-        # Transform to BigLake format (JSON serialization)
+        # Step 1: Transform to BigLake format (JSON serialization)
         prepared = (
             pcoll
             | f"{self.step_id}_PrepareForBigLake" >> beam.ParDo(WriteToBigLakeDoFn(table_name=table))
         )
 
-        # Write to BigQuery using Storage Write API with CDC
-        result = (
+        # Step 2: Add CDC metadata fields (_CHANGE_TYPE, _CHANGE_SEQUENCE_NUMBER)
+        from dataflow_common.steps.realtime import AddCDCMetadataDoFn
+
+        cdc_ready = (
             prepared
-            | f"{self.step_id}_WriteBigLakeCDC" >> bigquery.WriteToBigQuery(
-                table=table,
-                method=bigquery.WriteToBigQuery.Method.STORAGE_WRITE_API,
-                write_disposition=bigquery.BigQueryDisposition.WRITE_APPEND,
-                create_disposition=bigquery.BigQueryDisposition.CREATE_NEVER,
-                # Storage Write API uses schema from existing table
-                # CDC is handled by BigLake table configuration
+            | f"{self.step_id}_AddCDCMetadata" >> beam.ParDo(
+                AddCDCMetadataDoFn(
+                    primary_key_fields=primary_key,
+                    change_type=change_type
+                )
             )
         )
 
-        LOGGER.info(f"[{self.step_id}] BigLake CDC write completed")
+        # Step 3: Write to BigQuery using Storage Write API with CDC
+        result = (
+            cdc_ready
+            | f"{self.step_id}_WriteBigLakeCDC" >> bigquery.WriteToBigQuery(
+                table=table,
+                # Storage Write API with at-least-once semantics for CDC
+                method=bigquery.WriteToBigQuery.Method.STORAGE_API_AT_LEAST_ONCE,
+                # CDC writes enabled - required for upsert/delete operations
+                use_cdc_writes=True,
+                # Table must already exist (BigLake table)
+                create_disposition=bigquery.BigQueryDisposition.CREATE_NEVER,
+                # Append mode (CDC handles upsert/delete logic)
+                write_disposition=bigquery.BigQueryDisposition.WRITE_APPEND,
+                # At-least-once delivery
+                use_at_least_once=True,
+            )
+        )
+
+        LOGGER.info(f"[{self.step_id}] BigLake CDC write configured successfully")
         return result
