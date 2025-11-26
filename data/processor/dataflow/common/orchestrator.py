@@ -76,6 +76,22 @@ def _format_value(value: str, cfg: PipelineConfig) -> str:
         raise
 
 
+def _format_spec_recursive(obj: Any, cfg: PipelineConfig) -> Any:
+    """Recursively format strings in nested structures.
+
+    Walks through dictionaries and lists, formatting any string values
+    that contain placeholders like {io.bq.project}.
+    """
+    if isinstance(obj, str):
+        return _format_value(obj, cfg)
+    elif isinstance(obj, dict):
+        return {k: _format_spec_recursive(v, cfg) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_format_spec_recursive(item, cfg) for item in obj]
+    else:
+        return obj
+
+
 class Orchestrator:
     """Construct and run a Beam pipeline from a :class:`PipelineConfig`.
 
@@ -130,12 +146,12 @@ class Orchestrator:
                 LOGGER.error(f"Error formatting schema fields: {e}")
                 raise
 
-            # Format string fields in the plan prior to execution
+            # Format string fields in the plan prior to execution (recursively)
             for idx, spec in enumerate(plan):
                 try:
+                    # Use recursive formatting to handle nested params dicts
                     for key, val in list(spec.items()):
-                        if isinstance(val, str):
-                            spec[key] = _format_value(val, cfg)
+                        spec[key] = _format_spec_recursive(val, cfg)
                     LOGGER.debug(f"Step {idx} spec formatted successfully")
                 except Exception as e:
                     LOGGER.error(f"Error formatting step {idx} spec: {e}")
