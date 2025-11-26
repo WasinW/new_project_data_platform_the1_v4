@@ -49,6 +49,7 @@ from dataflow_common.steps.streaming import (
     FullfillSchemasStep,
     WriteToBigQueryStep as WriteToBigQueryStreamingStep,
     WriteToS3ParquetStep,
+    WriteToBigQueryCDCStep,
 )
 
 class ReadBQQueryStep(BaseStep):
@@ -377,11 +378,8 @@ class WriteToBigQueryStep(BaseStep):
     
     def execute(self, pipeline: beam.Pipeline) -> None:
         try:
-            # Get params from params dict
-            params = self.spec.get("params", {})
-            # Support input in both params and top level (try "input" and "in")
-            input_key = params.get("input") or params.get("in") or self.spec.get("input") or self.spec.get("in")
-            table = params.get("table") or self.spec.get("table")
+            input_key = self.spec.get("in")
+            table = self.spec.get("table")
 
             LOGGER.info(f"[{self.step_id}] Writing to BigQuery - input: {input_key}, table: {table}")
             
@@ -509,4 +507,5 @@ __all__ = [
     "FullfillSchemasStep",
     "WriteToBigQueryStreamingStep",
     "WriteToS3ParquetStep",
+    "WriteToBigQueryCDCStep",
 ]
