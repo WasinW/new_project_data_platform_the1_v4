@@ -43,6 +43,9 @@ from dataflow_common.steps import (
     WriteToS3ParquetStep,
 )
 
+# Import WriteToBigQueryCDCStep from streaming module
+from dataflow_common.steps.streaming import WriteToBigQueryCDCStep
+
 # Mapping from step type string in a plan to the corresponding class
 # Only steps used in YAML configs need to be registered here
 STEP_REGISTRY: Dict[str, Type] = {
@@ -68,6 +71,7 @@ STEP_REGISTRY: Dict[str, Type] = {
     "TransformSchemas": TransformSchemasStep,
     "FullfillSchemas": FullfillSchemasStep,
     "WriteToS3Parquet": WriteToS3ParquetStep,
+    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,  # For BigLake CDC streaming writes
 }
 
 __all__ = ["STEP_REGISTRY"]

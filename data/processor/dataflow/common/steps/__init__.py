@@ -49,6 +49,7 @@ from dataflow_common.steps.streaming import (
     FullfillSchemasStep,
     WriteToBigQueryStep as WriteToBigQueryStreamingStep,
     WriteToS3ParquetStep,
+    WriteToBigQueryCDCStep,
 )
 
 class ReadBQQueryStep(BaseStep):
@@ -506,4 +507,5 @@ __all__ = [
     "FullfillSchemasStep",
     "WriteToBigQueryStreamingStep",
     "WriteToS3ParquetStep",
+    "WriteToBigQueryCDCStep",
 ]
