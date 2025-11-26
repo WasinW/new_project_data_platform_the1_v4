@@ -77,20 +77,6 @@ def _format_value(value: str, cfg: PipelineConfig) -> str:
 
 def _format_spec_recursive(obj: Any, cfg: PipelineConfig) -> Any:
     """Recursively format strings in nested structures.
-    Walks through dictionaries and lists, formatting any string values
-    that contain placeholders like {io.bq.project}.
-    """
-    if isinstance(obj, str):
-        return _format_value(obj, cfg)
-    elif isinstance(obj, dict):
-        return {k: _format_spec_recursive(v, cfg) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [_format_spec_recursive(item, cfg) for item in obj]
-    else:
-        return obj
-
-def _format_spec_recursive(obj: Any, cfg: PipelineConfig) -> Any:
-    """Recursively format strings in nested structures.
 
     Walks through dictionaries and lists, formatting any string values
     that contain placeholders like {io.bq.project}.
