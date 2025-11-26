@@ -196,7 +196,7 @@ def get_aws_credentials(**context):
     # Push to XCom for next tasks
     context['ti'].xcom_push(key='aws_access_key', value=access_key)
     context['ti'].xcom_push(key='aws_secret_key', value=secret_key)
-    
+
     return {'status': 'credentials retrieved'}
 
 
@@ -377,7 +377,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'worker_disk_type': 'compute.googleapis.com/projects//zones//diskTypes/pd-ssd',
         # cost: ~$0.17/GB/month ($0.00024/GB/hour)
 
-        'mode': 'streaming', 
+        'mode': 'streaming',
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
@@ -423,11 +423,8 @@ dataflow_job = BeamRunPythonPipelineOperator(
     # ----------------------------
     # 1) ฝั่ง Composer (driver)
     # ----------------------------
-    # py_requirements_file='/home/airflow/gcs/dags/composer/requirements/beam-composer-reqs.txt',
     py_requirements=[
-        # 'apache-beam[gcp]==2.59.0',
-        # 'google-cloud-bigquery==3.25.0',
-        'apache-beam[gcp]==2.69.0',  # Update from 2.59.0 to 2.69.0
+        'apache-beam[gcp]==2.59.0',
         'google-cloud-bigquery==3.25.0',
         'fastavro',
         # FIXED: กลับไปใช้ versions เดิมที่ทำงานได้

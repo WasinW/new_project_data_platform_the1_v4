@@ -168,6 +168,9 @@ class IOConfig:
     may contain a ``project``, ``dataset`` and optional
     ``temp_gcs`` for BigQuery reads.  Additional keys can be added
     depending on your needs.
+
+    For streaming pipelines, ``pubsub`` and ``bigtable`` may be
+    used for Pub/Sub subscriptions and Bigtable connections.
     """
 
     s3: Dict[str, Any] = field(default_factory=dict)
@@ -254,6 +257,16 @@ class PipelineConfig:
             mapping_spec = MappingConfig(**data["mapping"])
 
 
+        # Build mapping config if present
+        mapping_spec = None
+        if "mapping" in data:
+            mapping_spec = MappingConfig(**data["mapping"])
+
+        # Build window config if present
+        window_spec = None
+        if "window" in data:
+            window_spec = WindowConfig(**data["window"])
+
         return PipelineConfig(
             name=data["pipeline"].get("name"),
             mode=data["pipeline"].get("mode"),
@@ -264,8 +277,9 @@ class PipelineConfig:
             io=io_spec,
             plan=plan,
             defaults_file=data.get("defaults_file"),
-            streaming=streaming_spec,  # เพิ่มนี้
-            mapping=mapping_spec if "mapping" in data else None,
+            streaming=streaming_spec,
+            mapping=mapping_spec,
+            window=window_spec,
         )
 
 

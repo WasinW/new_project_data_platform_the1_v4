@@ -54,7 +54,6 @@ class RefreshMappingTableStep(BaseStep):
         # Create DoFn with parameters
         mapping_dofn = MappingRefreshDoFn(
             mapping_table=mapping_table,
-            # project_id=self.config.project_id
             project_id=self.config.io.bq.get('project')
         )
 
@@ -85,6 +84,7 @@ class ReadFromPubSubStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        # Get subscription from params dict
         params = self.spec.get("params", {})
         subscription = params.get("subscription")
 

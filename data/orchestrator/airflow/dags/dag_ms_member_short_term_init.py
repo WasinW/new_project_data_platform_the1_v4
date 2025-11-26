@@ -70,7 +70,7 @@ def get_aws_credentials(**context):
     # Push to XCom for next tasks
     context['ti'].xcom_push(key='aws_access_key', value=access_key)
     context['ti'].xcom_push(key='aws_secret_key', value=secret_key)
-    
+
     return {'status': 'credentials retrieved'}
 
 # ============================================
@@ -264,7 +264,6 @@ dataflow_job = BeamRunPythonPipelineOperator(
     # ----------------------------
     # 1) ฝั่ง Composer (driver)
     # ----------------------------
-    # py_requirements_file='/home/airflow/gcs/dags/composer/requirements/beam-composer-reqs.txt',
     py_requirements=[
         'apache-beam[gcp]==2.59.0',
         'google-cloud-bigquery==3.25.0',
