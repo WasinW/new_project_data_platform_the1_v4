@@ -52,7 +52,7 @@ class RefreshMappingTableStep(BaseStep):
         # Create DoFn with parameters
         mapping_dofn = MappingRefreshDoFn(
             mapping_table=mapping_table,
-            project_id=self.config.project_id
+            project_id=self.config.io.bq.get('project')
         )
 
         # Override query if provided
