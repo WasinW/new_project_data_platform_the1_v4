@@ -108,9 +108,10 @@ class ExtractPersonasStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
-        input_key = self.spec.get("input")
         # Get params from params dict
         params = self.spec.get("params", {})
+        # Support input in both params and top level
+        input_key = params.get("input") or self.spec.get("input")
         pk_col = params.get("pk_col", "personaId")
 
         LOGGER.info(f"[{self.step_id}] Extracting personas with pk_col={pk_col}")
@@ -139,9 +140,10 @@ class FetchFromBigtableStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
-        input_key = self.spec.get("input")
         # Get params from params dict
         params = self.spec.get("params", {})
+        # Support input in both params and top level
+        input_key = params.get("input") or self.spec.get("input")
         project = params.get("project")
         instance = params.get("instance")
         table = params.get("table")
@@ -176,9 +178,10 @@ class FilterEmptyMemberIdStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
-        input_key = self.spec.get("input")
         # Get params from params dict
         params = self.spec.get("params", {})
+        # Support input in both params and top level
+        input_key = params.get("input") or self.spec.get("input")
         pk_col = params.get("pk_col", "profiles.memberId")
 
         LOGGER.info(f"[{self.step_id}] Filtering empty {pk_col}")
@@ -206,10 +209,11 @@ class TransformSchemasStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> Dict[str, beam.PCollection]:
-        input_key = self.spec.get("input")
-        mapping_info_key = self.spec.get("mapping_info")
         # Get params from params dict
         params = self.spec.get("params", {})
+        # Support input/mapping_info in both params and top level
+        input_key = params.get("input") or self.spec.get("input")
+        mapping_info_key = params.get("mapping_info") or self.spec.get("mapping_info")
         table_name = params.get("table_name", "ms_member")
         outputs = self.spec.get("outputs", ["aws", "gcp"])
 
@@ -247,10 +251,11 @@ class FullfillSchemasStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
-        input_key = self.spec.get("input")
-        mapping_info_key = self.spec.get("mapping_info")
         # Get params from params dict
         params = self.spec.get("params", {})
+        # Support input/mapping_info in both params and top level
+        input_key = params.get("input") or self.spec.get("input")
+        mapping_info_key = params.get("mapping_info") or self.spec.get("mapping_info")
         table_name = params.get("table_name", "ms_member")
 
         LOGGER.info(f"[{self.step_id}] Fulfilling schema for table={table_name}")
@@ -279,9 +284,10 @@ class WriteToBigQueryStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
-        input_key = self.spec.get("input")
         # Get params from params dict
         params = self.spec.get("params", {})
+        # Support input in both params and top level
+        input_key = params.get("input") or self.spec.get("input")
         table = params.get("table")
         LOGGER.info(f"[{self.step_id}] Writing to BigQuery: {table}")
 
@@ -317,9 +323,10 @@ class WriteToS3ParquetStep(BaseStep):
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
-        input_key = self.spec.get("input")
         # Get params from params dict
         params = self.spec.get("params", {})
+        # Support input in both params and top level
+        input_key = params.get("input") or self.spec.get("input")
         bucket = params.get("bucket")
         window_size = params.get("window_size", 3600)  # Default 1 hour
         schema = params.get("schema")
