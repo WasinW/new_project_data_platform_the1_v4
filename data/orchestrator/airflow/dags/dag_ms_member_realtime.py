@@ -381,7 +381,8 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
-        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.02',
+        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.05',
+        'sdk_location': 'container',
         # ------------------------------------------------------------------------------------
 
         'experiments': [
@@ -410,7 +411,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         's3_secret_access_key': "{{ ti.xcom_pull(task_ids='get_aws_credentials', key='aws_secret_key') }}",
 
         'labels': {
-            'environment': 'staging',  # หรือ dev/staging
+            'environment': 'dev',  # หรือ dev/staging
             'pipeline': 'ms-member-realtime',
             'team': 'data-team',
             'cost-center': 'data-engineering',
@@ -432,7 +433,8 @@ dataflow_job = BeamRunPythonPipelineOperator(
         # FIXED: กลับไปใช้ versions เดิมที่ทำงานได้
         'pyarrow>=12.0.0',      # ใช้ >= แทน == เพื่อให้ pip หา version ที่ compatible
         'pandas>=1.5.0',         # ใช้ >= แทน == fixed version
-        's3fs>=2023.1.0',        # ใช้ >= แทน == fixed version  
+        # 's3fs>=2023.1.0',        # ใช้ >= แทน == fixed version  
+        # 's3fs>=2024.6.0,<2025',  # Use stable 2024.x version, avoid yanked 2025.3.1
         'fsspec>=2023.1.0',      # ใช้ >= แทน == fixed version
         'pyyaml>=6.0',
         'boto3>=1.28.0',
