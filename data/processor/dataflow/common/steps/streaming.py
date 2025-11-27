@@ -431,16 +431,18 @@ class WriteToBigQueryCDCStep(BaseStep):
             cdc_ready
             | f"{self.step_id}_WriteBigLakeCDC" >> bigquery.WriteToBigQuery(
                 table=table,
-                # Storage Write API with at-least-once semantics for CDC
-                method=bigquery.WriteToBigQuery.Method.STORAGE_API_AT_LEAST_ONCE,
+                # Storage Write API - correct method name for Beam 2.69.0
+                method=bigquery.WriteToBigQuery.Method.STORAGE_WRITE_API,
                 # CDC writes enabled - required for upsert/delete operations
                 use_cdc_writes=True,
+                # At-least-once delivery semantics (required for use_cdc_writes)
+                use_at_least_once=True,
+                # Primary key for CDC upsert operations
+                primary_key=primary_key,
                 # Table must already exist (BigLake table)
                 create_disposition=bigquery.BigQueryDisposition.CREATE_NEVER,
                 # Append mode (CDC handles upsert/delete logic)
                 write_disposition=bigquery.BigQueryDisposition.WRITE_APPEND,
-                # At-least-once delivery
-                use_at_least_once=True,
             )
         )
 
