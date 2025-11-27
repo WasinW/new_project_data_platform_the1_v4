@@ -417,17 +417,26 @@ class WriteToBigQueryCDCStep(BaseStep):
                 bq_schema = table_ref.schema
 
                 # Convert BigQuery SchemaField objects to Beam-compatible dict format
+                # Note: Beam 2.59.0 doesn't support DATE, TIME, DATETIME - convert to STRING
+                unsupported_types = {'DATE', 'TIME', 'DATETIME'}
+
                 schema_param = {
                     'fields': [
                         {
                             'name': field.name,
-                            'type': field.field_type,
+                            # Convert unsupported types to STRING for Beam 2.59.0
+                            'type': 'STRING' if field.field_type in unsupported_types else field.field_type,
                             'mode': field.mode or 'NULLABLE',
                         }
                         for field in bq_schema
                     ]
                 }
                 LOGGER.info(f"[{self.step_id}] Schema fetched and converted: {len(bq_schema)} fields")
+
+                # Log any type conversions
+                converted = [f.name for f in bq_schema if f.field_type in unsupported_types]
+                if converted:
+                    LOGGER.warning(f"[{self.step_id}] Converted {unsupported_types} → STRING for fields: {converted}")
             except Exception as e:
                 LOGGER.error(f"[{self.step_id}] Failed to fetch schema: {e}")
                 raise ValueError(f"Could not fetch schema from table {table}. Please provide schema in config.")
