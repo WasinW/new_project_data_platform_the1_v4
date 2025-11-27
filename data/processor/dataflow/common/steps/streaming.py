@@ -384,15 +384,17 @@ class WriteToBigQueryCDCStep(BaseStep):
         input: Input PCollection name from state
         primary_key: Primary key column(s) for CDC upsert (default: ['member_number'])
         change_type: Default change type - 'UPSERT' or 'DELETE' (default: 'UPSERT')
+        schema: (Optional) BigQuery schema - if not provided, will read from existing table
 
     CDC Requirements:
         - Table must be BigLake table (Iceberg format) created beforehand
         - Records will have _CHANGE_TYPE and _CHANGE_SEQUENCE_NUMBER added automatically
-        - Uses Storage Write API with at-least-once semantics
-        - Enables CDC writes for upsert/delete operations
+        - Uses Storage Write API (Note: Beam 2.59.0 doesn't support native CDC, uses custom fields)
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        from google.cloud import bigquery as bq_client
+
         # Get params from params dict
         params = self.spec.get("params", {})
         # Support input in both params and top level
@@ -400,10 +402,23 @@ class WriteToBigQueryCDCStep(BaseStep):
         table = params.get("table")
         primary_key = params.get("primary_key", ["member_number"])
         change_type = params.get("change_type", "UPSERT")
+        schema_param = params.get("schema")
 
         LOGGER.info(f"[{self.step_id}] Writing to BigLake CDC table: {table}")
         LOGGER.info(f"[{self.step_id}] Primary key(s): {primary_key}")
         LOGGER.info(f"[{self.step_id}] Change type: {change_type}")
+
+        # Get schema from table if not provided
+        if not schema_param:
+            LOGGER.info(f"[{self.step_id}] Fetching schema from existing table...")
+            try:
+                client = bq_client.Client()
+                table_ref = client.get_table(table)
+                schema_param = table_ref.schema
+                LOGGER.info(f"[{self.step_id}] Schema fetched: {len(schema_param)} fields")
+            except Exception as e:
+                LOGGER.error(f"[{self.step_id}] Failed to fetch schema: {e}")
+                raise ValueError(f"Could not fetch schema from table {table}. Please provide schema in config.")
 
         pcoll = self.state[input_key]
 
@@ -426,22 +441,19 @@ class WriteToBigQueryCDCStep(BaseStep):
             )
         )
 
-        # Step 3: Write to BigQuery using Storage Write API with CDC
+        # Step 3: Write to BigQuery using Storage Write API
+        # Note: Beam 2.59.0 doesn't support use_cdc_writes parameter
+        # CDC logic is handled via _CHANGE_TYPE and _CHANGE_SEQUENCE_NUMBER fields
         result = (
             cdc_ready
             | f"{self.step_id}_WriteBigLakeCDC" >> bigquery.WriteToBigQuery(
                 table=table,
-                # Storage Write API - correct method name for Beam 2.69.0
+                schema=schema_param,
+                # Storage Write API - required for BigLake tables
                 method=bigquery.WriteToBigQuery.Method.STORAGE_WRITE_API,
-                # CDC writes enabled - required for upsert/delete operations
-                use_cdc_writes=True,
-                # At-least-once delivery semantics (required for use_cdc_writes)
-                use_at_least_once=True,
-                # Primary key for CDC upsert operations
-                primary_key=primary_key,
                 # Table must already exist (BigLake table)
                 create_disposition=bigquery.BigQueryDisposition.CREATE_NEVER,
-                # Append mode (CDC handles upsert/delete logic)
+                # Append mode (CDC fields handle upsert/delete logic)
                 write_disposition=bigquery.BigQueryDisposition.WRITE_APPEND,
             )
         )
