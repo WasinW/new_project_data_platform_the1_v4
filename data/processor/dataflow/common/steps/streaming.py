@@ -414,8 +414,20 @@ class WriteToBigQueryCDCStep(BaseStep):
             try:
                 client = bq_client.Client()
                 table_ref = client.get_table(table)
-                schema_param = table_ref.schema
-                LOGGER.info(f"[{self.step_id}] Schema fetched: {len(schema_param)} fields")
+                bq_schema = table_ref.schema
+
+                # Convert BigQuery SchemaField objects to Beam-compatible dict format
+                schema_param = {
+                    'fields': [
+                        {
+                            'name': field.name,
+                            'type': field.field_type,
+                            'mode': field.mode or 'NULLABLE',
+                        }
+                        for field in bq_schema
+                    ]
+                }
+                LOGGER.info(f"[{self.step_id}] Schema fetched and converted: {len(bq_schema)} fields")
             except Exception as e:
                 LOGGER.error(f"[{self.step_id}] Failed to fetch schema: {e}")
                 raise ValueError(f"Could not fetch schema from table {table}. Please provide schema in config.")
