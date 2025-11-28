@@ -1,7 +1,7 @@
 """Streaming pipeline Step implementations.
 
 This module contains Step classes for streaming (realtime) pipelines,
-wrapping DoFn-based logic from stream_step.py to config-driven Step pattern.
+wrapping DoFn-based logic from dofns/stream.py to config-driven Step pattern.
 
 These Step classes are used by the Orchestrator to build streaming pipelines
 from YAML configuration files.
@@ -16,7 +16,7 @@ from apache_beam.io.gcp.pubsub import ReadFromPubSub as PubSubRead
 from apache_beam.io.gcp import bigquery
 
 from dataflow_common.core import BaseStep
-from dataflow_common.steps.stream_step import (
+from dataflow_common.steps.dofns.stream import (
     MappingRefreshDoFn,
     ExtractPersonasDoFn,
     FetchFromBigtableDoFn,

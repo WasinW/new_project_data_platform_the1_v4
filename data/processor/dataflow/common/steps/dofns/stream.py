@@ -1,5 +1,5 @@
 """
-Stream processing DoFn classes for ms_member realtime pipeline.
+Stream processing DoFn classes for streaming pipelines.
 Extracted from TESTED ms_member_realtime_pipeline_full_scripts.py
 
 This module contains all DoFn classes for streaming pipelines that:

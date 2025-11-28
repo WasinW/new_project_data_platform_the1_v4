@@ -2,9 +2,9 @@
 Generic Beam pipeline steps for dataflow_common.
 
 This module serves as an index for importing steps from:
-- batch_step: Steps for batch pipelines (ms_member_short)
-- stream_step: DoFns for streaming pipelines (ms_member_realtime)
-- streaming_step: Step wrapper classes for streaming pipelines (config-driven)
+- batch_step: Step classes for batch pipelines (ms_member_short)
+- streaming_step: Step classes for streaming pipelines (config-driven)
+- dofns/: DoFn classes for streaming pipelines
 """
 from __future__ import annotations
 
@@ -29,24 +29,6 @@ from dataflow_common.steps.batch_step import (
 )
 
 # =============================================================================
-# STREAM PIPELINE DoFns
-# =============================================================================
-from dataflow_common.steps.stream_step import (
-    SyncToIcebergDoFn,
-    AddWindowInfoFn,
-    WriteParquetByWindowFn,
-    MappingRefreshDoFn,
-    ExtractPersonasDoFn,
-    FetchFromBigtableDoFn,
-    FilterEmptyMemberIdDoFn,
-    TransformSchemasDoFn,
-    FullfillSchemasDoFn,
-    WriteToBigLakeDoFn,
-    MapToCdcTableRow,
-    AddCDCMetadataDoFn,
-)
-
-# =============================================================================
 # STREAM PIPELINE STEP WRAPPERS (for Orchestrator/config-driven pipelines)
 # =============================================================================
 from dataflow_common.steps.streaming_step import (
@@ -60,6 +42,24 @@ from dataflow_common.steps.streaming_step import (
     WriteToBigQueryStreamingStep,
     WriteToS3ParquetStep,
     WriteToBigQueryCDCStep,
+)
+
+# =============================================================================
+# DoFn CLASSES (from dofns/ subpackage)
+# =============================================================================
+from dataflow_common.steps.dofns import (
+    SyncToIcebergDoFn,
+    AddWindowInfoFn,
+    WriteParquetByWindowFn,
+    MappingRefreshDoFn,
+    ExtractPersonasDoFn,
+    FetchFromBigtableDoFn,
+    FilterEmptyMemberIdDoFn,
+    TransformSchemasDoFn,
+    FullfillSchemasDoFn,
+    WriteToBigLakeDoFn,
+    MapToCdcTableRow,
+    AddCDCMetadataDoFn,
 )
 
 
