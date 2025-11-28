@@ -1,0 +1,225 @@
+# Refactored ms_member_realtime config
+# This config is for the refactored pipeline that uses stream_step.py
+# instead of streaming.py (which uses realtime.py)
+
+defaults_file: null
+
+pipeline:
+  name: ms_member_realtime_refactor
+  mode: streaming
+  term: realtime
+
+params:
+  pk: member_number
+  run_dt: null
+
+io:
+  pubsub:
+    subscription: "projects/the1-insight-stg/subscriptions/ms-personas-datapipeline-dataflow-subscription"
+  bigtable:
+    project: the1-insight-stg
+    instance: t1-insight-bt
+    table: personas
+    family_columns:
+      - profiles
+  bq:
+    project: the1-insight-stg
+    dataset: insight
+    table: ms_personas
+    iceberg_table: ms_personas_iceberg
+    temp_gcs: gs://the1-insight-stg-data-pipeline-data-staging/audit_log/dataflow/temp
+  s3:
+    bucket: s3://t1-analytics/refined/insights/ms_personas_realtime_dev
+    region: ap-southeast-1
+
+# Mapping refresh configuration
+mapping:
+  table: "{io.bq.project}.{io.bq.dataset}.mapping_reconcile"
+  refresh_interval_sec: 60
+  query: |
+    SELECT * EXCEPT(row_num) FROM (
+      SELECT
+        reconcile_column_name,
+        mapping_column_name,
+        reconcile_retrieved,
+        reconcile_confirmed,
+        table_name,
+        ROW_NUMBER() OVER (
+          PARTITION BY reconcile_column_name
+          ORDER BY updated_date DESC
+        ) AS row_num
+      FROM `{io.bq.project}.{io.bq.dataset}.mapping_reconcile`
+    )
+    WHERE row_num = 1
+
+# Sync configuration (for Iceberg sync)
+sync:
+  window_seconds: 10
+  lookback_minutes: 30
+  # MERGE query template for Iceberg sync
+  # Placeholders: {iceberg_table}, {native_table}, {lookback_minutes}
+  merge_query: |
+    MERGE `{iceberg_table}` AS T
+    USING (
+        SELECT * EXCEPT(rn)
+        FROM (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY memberId
+                    ORDER BY updated_date DESC
+                ) AS rn
+            FROM `{native_table}`
+            WHERE COALESCE(updated_date, CURRENT_TIMESTAMP()) >=
+                  TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+        )
+        WHERE rn = 1
+    ) AS S
+    ON T.memberId = S.memberId
+
+    WHEN MATCHED AND S.updated_date > T.updated_date THEN
+        UPDATE SET
+            accountId = S.accountId,
+            dateOfBirth = S.dateOfBirth,
+            gender = S.gender,
+            hasEmail = S.hasEmail,
+            hasMobile = S.hasMobile,
+            languagePrefer = S.languagePrefer,
+            nationalityId = S.nationalityId,
+            profileId = S.profileId,
+            updated_date = S.updated_date
+
+    WHEN NOT MATCHED THEN
+        INSERT (accountId, dateOfBirth, gender, hasEmail, hasMobile,
+                languagePrefer, memberId, nationalityId, profileId, updated_date)
+        VALUES (S.accountId, S.dateOfBirth, S.gender, S.hasEmail, S.hasMobile,
+                S.languagePrefer, S.memberId, S.nationalityId, S.profileId, S.updated_date)
+
+# Window configuration
+window:
+  size_sec: 300  # 5 minutes
+
+# Parquet output configuration
+parquet:
+  # Date columns to convert (for Parquet output to S3)
+  date_columns:
+    - birth_date
+    - consent_date
+    - created_date
+    - register_date
+    - employee_join_date
+    - employee_resign_date
+    - passport_exp
+    - updated_date
+  output_filename: ms-member.parquet
+
+# DLQ configuration (commented - not yet implemented)
+# dlq:
+#   topic: "projects/the1-insight-stg/topics/dlq-realtime"
+
+schema:
+  bq:
+    project: "{io.bq.project}"
+    dataset: "{io.bq.dataset}"
+    table: "{io.bq.table}"
+
+formats:
+  date:
+    - "%Y-%m-%d"
+    - "%d/%m/%Y"
+  timestamp:
+    - "%Y-%m-%d %H:%M:%S.%f"
+    - "%Y-%m-%d %H:%M:%S"
+    - "%Y-%m-%dT%H:%M:%S.%f"
+    - "%Y-%m-%dT%H:%M:%S"
+
+# Pipeline plan for streaming realtime (config-driven)
+plan:
+# Step 1: Periodically refresh mapping table from BigQuery
+- step: RefreshMappingTable
+  id: mapping_refresh
+  params:
+    fire_interval: 60
+    mapping_table: "{mapping.table}"
+    query: "{mapping.query}"
+  outputs:
+    - mapping_refresh
+
+# Step 2: Read messages from Pub/Sub
+- step: ReadFromPubSub
+  id: message_rows
+  params:
+    subscription: "{io.pubsub.subscription}"
+  outputs:
+    - message_rows
+
+# Step 3: Extract persona IDs from messages
+- step: ExtractPersonas
+  id: pk_value
+  params:
+    pk_col: personaId
+    input: message_rows
+  outputs:
+    - pk_value
+
+# Step 4: Fetch data from Bigtable using persona IDs
+- step: FetchFromBigtable
+  id: bt_rows
+  params:
+    project: "{io.bigtable.project}"
+    instance: "{io.bigtable.instance}"
+    table: "{io.bigtable.table}"
+    pk_col: personaId
+    parent_field:
+      - profiles
+    input: pk_value
+  outputs:
+    - bt_rows
+
+# Step 5: Filter out records with empty member IDs
+- step: FilterEmptyMemberId
+  id: bt_rows_filtered
+  params:
+    input: bt_rows
+    pk_col: profiles.memberId
+  outputs:
+    - bt_rows_filtered
+
+# Step 6: Transform to target schemas (AWS and GCP branches)
+- step: TransformSchemas
+  id: transform_output
+  params:
+    mapping_info: mapping_refresh
+    table_name: ms_member
+    input: bt_rows_filtered
+  outputs:
+    - aws
+    - gcp
+
+# Step 7: Fulfill AWS schema with all fields
+- step: FullfillSchemas
+  id: full_aws
+  params:
+    table_name: ms_member
+    mapping_info: mapping_refresh
+    input: aws
+  outputs:
+    - full_aws
+
+# Step 8: Write GCP data to BigQuery CDC
+- step: WriteToBigQueryCDC
+  id: write_bq_cdc
+  params:
+    table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+    input: gcp
+    primary_key: ["memberId"]
+    change_type: "UPSERT"
+
+# Step 9: Write AWS data to S3 as Parquet
+- step: WriteToS3Parquet
+  id: write_s3
+  params:
+    bucket: "{io.s3.bucket}"
+    window_size: "{window.size_sec}"
+    date_columns: "{parquet.date_columns}"
+    output_filename: "{parquet.output_filename}"
+    input: full_aws

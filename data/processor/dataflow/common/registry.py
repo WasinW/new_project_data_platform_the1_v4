@@ -7,9 +7,8 @@ classes that implement each step.  When adding a new step class you
 should also add an entry here so that the orchestrator can discover
 it at runtime.
 
-Note: This registry is used by config-driven pipelines (e.g., ms_member_short).
-For custom pipeline scripts (e.g., ms_member_realtime), DoFns are imported
-directly from dataflow_common.steps.realtime.
+Note: This registry is used by config-driven pipelines (e.g., ms_member_short, ms_member_realtime).
+Step classes wrap DoFns from stream_step.py into config-driven Step pattern.
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ from dataflow_common.steps import (
     WriteParquetStep,
     WriteToBigQueryStep,
     WriteGCSStep,
-    # Streaming steps (config-driven realtime pipeline)
+    # Streaming steps (config-driven realtime pipeline) - from streaming_step.py
     RefreshMappingTableStep,
     ReadFromPubSubStep,
     ExtractPersonasStep,
@@ -41,10 +40,8 @@ from dataflow_common.steps import (
     FullfillSchemasStep,
     WriteToBigQueryStreamingStep,
     WriteToS3ParquetStep,
+    WriteToBigQueryCDCStep,
 )
-
-# Import WriteToBigQueryCDCStep from streaming module
-from dataflow_common.steps.streaming import WriteToBigQueryCDCStep
 
 # Mapping from step type string in a plan to the corresponding class
 # Only steps used in YAML configs need to be registered here

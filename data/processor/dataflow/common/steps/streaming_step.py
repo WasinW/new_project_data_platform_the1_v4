@@ -1,7 +1,10 @@
-"""Streaming pipeline step implementations.
+"""Streaming pipeline Step implementations.
 
 This module contains Step classes for streaming (realtime) pipelines,
-converting DoFn-based logic to config-driven Step pattern.
+wrapping DoFn-based logic from stream_step.py to config-driven Step pattern.
+
+These Step classes are used by the Orchestrator to build streaming pipelines
+from YAML configuration files.
 """
 import logging
 from typing import Any, Dict
@@ -13,7 +16,7 @@ from apache_beam.io.gcp.pubsub import ReadFromPubSub as PubSubRead
 from apache_beam.io.gcp import bigquery
 
 from dataflow_common.core import BaseStep
-from dataflow_common.steps.realtime import (
+from dataflow_common.steps.stream_step import (
     MappingRefreshDoFn,
     ExtractPersonasDoFn,
     FetchFromBigtableDoFn,
@@ -23,6 +26,7 @@ from dataflow_common.steps.realtime import (
     AddWindowInfoFn,
     WriteParquetByWindowFn,
     WriteToBigLakeDoFn,
+    AddCDCMetadataDoFn,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -149,6 +153,7 @@ class FetchFromBigtableStep(BaseStep):
         table = params.get("table")
         pk_col = params.get("pk_col", "personaId")
         parent_field = params.get("parent_field", ["profiles"])
+
         LOGGER.info(f"[{self.step_id}] Fetching from Bigtable: {project}/{instance}/{table}")
 
         pcoll = self.state[input_key]
@@ -256,27 +261,26 @@ class FullfillSchemasStep(BaseStep):
         # Support input/mapping_info in both params and top level
         input_key = params.get("input") or self.spec.get("input")
         mapping_info_key = params.get("mapping_info") or self.spec.get("mapping_info")
-        table_name = params.get("table_name", "ms_member")
 
-        LOGGER.info(f"[{self.step_id}] Fulfilling schema for table={table_name}")
+        LOGGER.info(f"[{self.step_id}] Fulfilling schemas from: {input_key}")
+        LOGGER.info(f"[{self.step_id}] Using mapping from: {mapping_info_key}")
 
         pcoll = self.state[input_key]
         mapping_pcoll = self.state[mapping_info_key]
 
         result = (
             pcoll
-            | f"{self.step_id}_Fulfill" >> beam.ParDo(
+            | f"{self.step_id}_Fullfill" >> beam.ParDo(
                 FullfillSchemasDoFn(),
-                mapping_info=pvalue.AsSingleton(mapping_pcoll),
-                table_name=table_name
+                mapping_info=pvalue.AsSingleton(mapping_pcoll)
             )
         )
 
         return result
 
 
-class WriteToBigQueryStep(BaseStep):
-    """Write data to BigQuery table.
+class WriteToBigQueryStreamingStep(BaseStep):
+    """Write streaming data to BigQuery using append mode.
 
     Config params:
         table: BigQuery table path (project.dataset.table)
@@ -289,6 +293,7 @@ class WriteToBigQueryStep(BaseStep):
         # Support input in both params and top level
         input_key = params.get("input") or self.spec.get("input")
         table = params.get("table")
+
         LOGGER.info(f"[{self.step_id}] Writing to BigQuery: {table}")
 
         pcoll = self.state[input_key]
@@ -319,6 +324,8 @@ class WriteToS3ParquetStep(BaseStep):
         bucket: S3 bucket path (s3://bucket/path)
         window_size: Window size in seconds
         schema: PyArrow schema dict (optional)
+        date_columns: List of column names to convert to date (optional)
+        output_filename: Name of output file (default: ms-member.parquet)
         input: Input PCollection name from state
     """
 
@@ -330,6 +337,8 @@ class WriteToS3ParquetStep(BaseStep):
         bucket = params.get("bucket")
         window_size = int(params.get("window_size", 3600))
         schema = params.get("schema")
+        date_columns = params.get("date_columns")
+        output_filename = params.get("output_filename", "ms-member.parquet")
 
         LOGGER.info(f"[{self.step_id}] Writing to S3: {bucket}")
         LOGGER.info(f"[{self.step_id}] Window size: {window_size}s")
@@ -365,7 +374,9 @@ class WriteToS3ParquetStep(BaseStep):
             | f"{self.step_id}_WriteParquet" >> beam.ParDo(
                 WriteParquetByWindowFn(
                     base_path=bucket,
-                    schema=schema
+                    schema=schema,
+                    date_columns=date_columns,
+                    output_filename=output_filename
                 )
             )
         )
@@ -436,7 +447,7 @@ class WriteToBigQueryCDCStep(BaseStep):
                 # Log any type conversions
                 converted = [f.name for f in bq_schema if f.field_type in unsupported_types]
                 if converted:
-                    LOGGER.warning(f"[{self.step_id}] Converted {unsupported_types} → STRING for fields: {converted}")
+                    LOGGER.warning(f"[{self.step_id}] Converted {unsupported_types} -> STRING for fields: {converted}")
             except Exception as e:
                 LOGGER.error(f"[{self.step_id}] Failed to fetch schema: {e}")
                 raise ValueError(f"Could not fetch schema from table {table}. Please provide schema in config.")
@@ -450,8 +461,6 @@ class WriteToBigQueryCDCStep(BaseStep):
         )
 
         # Step 2: Add CDC metadata fields (_CHANGE_TYPE, _CHANGE_SEQUENCE_NUMBER)
-        from dataflow_common.steps.realtime import AddCDCMetadataDoFn
-
         cdc_ready = (
             prepared
             | f"{self.step_id}_AddCDCMetadata" >> beam.ParDo(
@@ -481,3 +490,17 @@ class WriteToBigQueryCDCStep(BaseStep):
 
         LOGGER.info(f"[{self.step_id}] BigLake CDC write configured successfully")
         return result
+
+
+__all__ = [
+    'RefreshMappingTableStep',
+    'ReadFromPubSubStep',
+    'ExtractPersonasStep',
+    'FetchFromBigtableStep',
+    'FilterEmptyMemberIdStep',
+    'TransformSchemasStep',
+    'FullfillSchemasStep',
+    'WriteToBigQueryStreamingStep',
+    'WriteToS3ParquetStep',
+    'WriteToBigQueryCDCStep',
+]
