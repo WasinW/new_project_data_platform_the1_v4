@@ -1,6 +1,7 @@
 # Instruction: Refactor ms_member_realtime Pipeline
 **Date:** 2025-11-28
-**Status:** Pending Review
+**Status:** Confirmed - Ready to Execute
+**Source Branch:** `feature/agent_helper_restructure`
 
 ---
 
@@ -58,34 +59,141 @@ Pub/Sub           →                          →
 - Current script (`scripts/ms_member_realtime_pipeline.py`) uses DoFns from `steps/realtime.py`
 - However, `steps/realtime.py` **may have issues** and hasn't been fully tested
 
-### 2.2 Issue with `ms_member_realtime_pipeline_full_scripts`
-- ผู้ใช้มีไฟล์ `ms_member_realtime_pipeline_full_scripts` ที่ **tested and working**
-- ไฟล์นี้รวมทุกอย่างไว้ในไฟล์เดียว (config + dataflow scripts + common module)
-- **ไฟล์นี้ยังไม่ได้อยู่ใน repository** - ต้องขอจากผู้ใช้
+### 2.2 Working Version: `ms_member_realtime_pipeline_full_scripts.py`
+**Location:** `feature/agent_helper_restructure` branch
+**Path:** `data/processor/dataflow/scripts/ms_member_realtime_pipeline_full_scripts.py`
+**Status:** ✅ Tested and Working
+
+ไฟล์นี้รวมทุกอย่างไว้ในไฟล์เดียว:
+- **Configurations** (hard-coded):
+  - `PROJECT_ID = "the1-insight-stg"`
+  - `BT_PROJECT_ID = "the1-insight-stg"`
+  - `SUBSCRIPTION_NAME = "projects/the1-insight-stg/subscriptions/ms-personas-datapipeline-dataflow-subscription"`
+  - `MAPPING_TABLE = f"{PROJECT_ID}.insight.mapping_reconcile"`
+  - `NATIVE_TABLE = f"{PROJECT_ID}.insight.ms_personas"`
+  - `ICEBERG_TABLE = f"{PROJECT_ID}.insight.ms_personas_iceberg"`
+  - `S3_PARQUET_BUCKET = "s3://t1-analytics/refined/insights/ms_personas_realtime_dev"`
+  - `SYNC_WINDOW_SECONDS = 10`
+  - `SYNC_LOOKBACK_MINUTES = 30`
+
+- **Schema Definitions**:
+  - `MS_PERSONAS_PARQUET_SCHEMA` (pa.schema with ~100 fields)
+  - `MS_PERSONAS_CDC_SCHEMA` (BigQuery CDC format with row_mutation_info)
+  - `CDC_ROW_TYPE` (beam.Row type)
+
+- **DoFn Classes**:
+  - `SyncToIcebergDoFn` - Sync data to Iceberg historical table
+  - `AddWindowInfoFn` - Add window partition info
+  - `WriteParquetByWindowFn` - Write Parquet to S3
+  - `MappingRefreshDoFn` - Refresh mapping from BigQuery
+  - `ExtractPersonasDoFn` - Extract personasId from Pub/Sub
+  - `FetchFromBigtableDoFn` - Fetch from BigTable
+  - `FilterEmptyMemberIdDoFn` - Filter empty memberId
+  - `TransformSchemasDoFn` - Transform according to mapping
+  - `FullfillSchemasDoFn` - Fill all schema fields
 
 ### 2.3 Issue with `steps/` Directory
-- มี module ที่ไม่ถูกใช้งาน: `steps/realtime.py`, `steps/streaming.py`
-- `steps/__init__.py` มีเฉพาะ batch steps
-- ต้องการ reorganize structure
+
+**Current files in `feature/agent_helper_restructure`:**
+```
+steps/
+├── __init__.py      # Batch steps + imports from realtime.py
+├── realtime.py      # DoFn classes (may have issues)
+└── streaming.py     # Step wrapper classes using realtime.py DoFns
+```
+
+**Problems:**
+- `realtime.py` - มี DoFns แต่อาจมีปัญหา ยังไม่ได้ test
+- `streaming.py` - เป็น Step wrapper classes ที่ใช้ DoFns จาก realtime.py
+- `__init__.py` - มี batch steps แต่ import จาก realtime.py ด้วย
 
 ---
 
-## 3. Refactoring Goals
+## 3. Source Files Analysis
 
-### 3.1 แยก `ms_member_realtime_pipeline_full_scripts` เป็น 3 ส่วน
+### 3.1 `ms_member_realtime_pipeline_full_scripts.py` (WORKING)
+
+**Hard-coded values ที่ต้องแยกไป config:**
+```python
+PROJECT_ID = "the1-insight-stg"
+BT_PROJECT_ID = "the1-insight-stg"
+SUBSCRIPTION_NAME = "projects/the1-insight-stg/subscriptions/ms-personas-datapipeline-dataflow-subscription"
+MAPPING_TABLE = f"{PROJECT_ID}.insight.mapping_reconcile"
+NATIVE_TABLE = f"{PROJECT_ID}.insight.ms_personas"
+ICEBERG_TABLE = f"{PROJECT_ID}.insight.ms_personas_iceberg"
+BT_INSTANCE = "t1-insight-bt"
+BT_TABLE = "personas"
+S3_PARQUET_BUCKET = "s3://t1-analytics/refined/insights/ms_personas_realtime_dev"
+SYNC_WINDOW_SECONDS = 10
+SYNC_LOOKBACK_MINUTES = 30
+TZ_BANGKOK = timezone(timedelta(hours=7))
+```
+
+**Mapping Query ที่ต้องแยกไป config:**
+```sql
+SELECT * EXCEPT(row_num) FROM (
+    SELECT
+        reconcile_column_name,
+        mapping_column_name,
+        reconcile_retrieved,
+        reconcile_confirmed,
+        table_name,
+        ROW_NUMBER() OVER (PARTITION BY reconcile_column_name ORDER BY updated_date DESC) AS row_num
+    FROM `{mapping_table}`
+)
+WHERE row_num = 1
+```
+
+**Iceberg Sync Query (MERGE):**
+```sql
+MERGE `{iceberg_table}` AS T
+USING (
+    SELECT * EXCEPT(rn)
+    FROM (
+        SELECT *,
+            ROW_NUMBER() OVER (
+                PARTITION BY memberId
+                ORDER BY updated_date DESC
+            ) AS rn
+        FROM `{native_table}`
+        WHERE COALESCE(updated_date,CURRENT_TIMESTAMP()) >=
+              TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+    )
+    WHERE rn = 1
+) AS S
+ON T.memberId = S.memberId
+WHEN MATCHED AND S.updated_date > T.updated_date THEN UPDATE SET ...
+WHEN NOT MATCHED THEN INSERT ...
+```
+
+### 3.2 `streaming.py` (Step Wrapper Classes)
+
+Step classes ที่ wrap DoFns จาก realtime.py:
+- `RefreshMappingTableStep`
+- `ReadFromPubSubStep`
+- `ExtractPersonasStep`
+- `FetchFromBigtableStep`
+- `FilterEmptyMemberIdStep`
+- `TransformSchemasStep`
+- `FullfillSchemasStep`
+- `WriteToBigQueryStep`
+- `WriteToS3ParquetStep`
+- `WriteToBigQueryCDCStep`
+
+**Note:** streaming.py uses DoFns from realtime.py which may have issues.
+
+---
+
+## 4. Refactoring Goals
+
+### 4.1 แยก `ms_member_realtime_pipeline_full_scripts.py` เป็น 3 ส่วน
 
 #### Part 1: Config YAML
-**File:** `configs/ms_member_realtime_refactor_config.yaml`
-
-รวมสิ่งที่ต้องแยกออกมา:
-- Hard-coded values (bucket paths, project IDs, etc.)
-- Query strings
-- Schema definitions (reference only, actual schema in script)
-- Step configurations
-- Window/refresh intervals
+**File:** `configs/ms_member_realtime_refactor.yaml`
 
 ```yaml
-# Example structure
+defaults_file: null
+
 pipeline:
   name: ms_member_realtime_refactor
   mode: streaming
@@ -93,50 +201,85 @@ pipeline:
 
 params:
   pk: member_number
+  run_dt: null
 
 io:
   pubsub:
-    subscription: "projects/{project}/subscriptions/{subscription}"
+    subscription: "projects/the1-insight-stg/subscriptions/ms-personas-datapipeline-dataflow-subscription"
   bigtable:
     project: the1-insight-stg
     instance: t1-insight-bt
     table: personas
-    family_columns: [profiles]
+    family_columns:
+      - profiles
   bq:
     project: the1-insight-stg
     dataset: insight
     table: ms_personas
+    iceberg_table: ms_personas_iceberg
+    temp_gcs: gs://the1-insight-stg-data-pipeline-data-staging/audit_log/dataflow/temp
   s3:
     bucket: s3://t1-analytics/refined/insights/ms_personas_realtime_dev
+    region: ap-southeast-1
 
 mapping:
   table: "{io.bq.project}.{io.bq.dataset}.mapping_reconcile"
   refresh_interval_sec: 60
   query: |
     SELECT * EXCEPT(row_num) FROM (
-      SELECT reconcile_column_name, mapping_column_name, ...
-    ) WHERE row_num = 1
+        SELECT
+            reconcile_column_name,
+            mapping_column_name,
+            reconcile_retrieved,
+            reconcile_confirmed,
+            table_name,
+            ROW_NUMBER() OVER (PARTITION BY reconcile_column_name ORDER BY updated_date DESC) AS row_num
+        FROM `{io.bq.project}.{io.bq.dataset}.mapping_reconcile`
+    )
+    WHERE row_num = 1
+
+sync:
+  window_seconds: 10
+  lookback_minutes: 30
 
 window:
   size_sec: 300  # 5 minutes
+
+schema:
+  bq:
+    project: "{io.bq.project}"
+    dataset: "{io.bq.dataset}"
+    table: "{io.bq.table}"
+
+formats:
+  date:
+    - "%Y-%m-%d"
+    - "%d/%m/%Y"
+  timestamp:
+    - "%Y-%m-%d %H:%M:%S.%f"
+    - "%Y-%m-%d %H:%M:%S"
+    - "%Y-%m-%dT%H:%M:%S.%f"
+    - "%Y-%m-%dT%H:%M:%S"
 ```
 
 #### Part 2: Dataflow Script
 **File:** `scripts/ms_member_realtime_pipeline_refactor.py`
 
-รวมสิ่งที่เก็บไว้ใน script:
+เก็บไว้ใน script:
 - Pipeline logic (create_pipeline function)
-- PyArrow schema definitions:
-  - `MS_PERSONAS_PARQUET_SCHEMA`
-  - `MS_PERSONAS_CDC_SCHEMA` (if exists)
-  - `MS_PERSONAS_BIGQUERY_SCHEMA`
+- PyArrow schema definitions: `MS_PERSONAS_PARQUET_SCHEMA`
+- BigQuery CDC schema: `MS_PERSONAS_CDC_SCHEMA`
 - Main entry point
-- Import statements from common modules
+- Import DoFns from `stream_step.py`
 
 ```python
-# Example structure
+import apache_beam as beam
+from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
+import pyarrow as pa
+
 from dataflow_common.config import load_config
 from dataflow_common.steps.stream_step import (
+    SyncToIcebergDoFn,
     AddWindowInfoFn,
     WriteParquetByWindowFn,
     MappingRefreshDoFn,
@@ -149,10 +292,10 @@ from dataflow_common.steps.stream_step import (
 
 # Schema definitions stay here
 MS_PERSONAS_PARQUET_SCHEMA = pa.schema([...])
-MS_PERSONAS_BIGQUERY_SCHEMA = {...}
+MS_PERSONAS_CDC_SCHEMA = {...}
 
 def create_pipeline(config, pipeline_options):
-    # Pipeline logic
+    # Pipeline logic from full_scripts
     pass
 
 def main():
@@ -163,166 +306,140 @@ def main():
 #### Part 3: Common Module (Stream Step)
 **File:** `common/steps/stream_step.py`
 
-รวม DoFn classes ที่แยกออกมา:
-- `AddWindowInfoFn` - Add window partition info
-- `WriteParquetByWindowFn` - Write Parquet to S3 by window
-- `MappingRefreshDoFn` - Refresh mapping from BigQuery
-- `ExtractPersonasDoFn` - Extract personasId from Pub/Sub
-- `FetchFromBigtableDoFn` - Fetch from BigTable
-- `FilterEmptyMemberIdDoFn` - Filter empty memberId
-- `TransformSchemasDoFn` - Transform according to mapping
-- `FullfillSchemasDoFn` - Fill all schema fields
-- `WriteToBigLakeDoFn` - Prepare for BigLake write (if needed)
+DoFn classes แยกมาจาก full_scripts (WORKING version):
 
 ```python
-# stream_step.py structure
 """
 Stream processing DoFn classes for ms_member realtime pipeline.
-Extracted from ms_member_realtime_pipeline_full_scripts.
+Extracted from TESTED ms_member_realtime_pipeline_full_scripts.py
 """
+from apache_beam import DoFn
+import logging
+
+LOGGER = logging.getLogger(__name__)
+
+class SyncToIcebergDoFn(DoFn):
+    """Sync data from Native CDC table to Iceberg Historical table."""
+    ...
 
 class AddWindowInfoFn(DoFn):
+    """Add window path and timestamp to each element."""
     ...
 
 class WriteParquetByWindowFn(DoFn):
+    """Write Parquet files to S3 grouped by window."""
     ...
-# etc.
+
+class MappingRefreshDoFn(DoFn):
+    """Refresh mapping table periodically from BigQuery."""
+    ...
+
+class ExtractPersonasDoFn(DoFn):
+    """Extract personaId from Pub/Sub message."""
+    ...
+
+class FetchFromBigtableDoFn(DoFn):
+    """Fetch data from BigTable using personasId."""
+    ...
+
+class FilterEmptyMemberIdDoFn(DoFn):
+    """Filter out records without memberId."""
+    ...
+
+class TransformSchemasDoFn(DoFn):
+    """Transform data according to mapping dictionary."""
+    ...
+
+class FullfillSchemasDoFn(DoFn):
+    """Fill in all schema fields from schemas_dict."""
+    ...
+
+__all__ = [
+    'SyncToIcebergDoFn',
+    'AddWindowInfoFn',
+    'WriteParquetByWindowFn',
+    'MappingRefreshDoFn',
+    'ExtractPersonasDoFn',
+    'FetchFromBigtableDoFn',
+    'FilterEmptyMemberIdDoFn',
+    'TransformSchemasDoFn',
+    'FullfillSchemasDoFn',
+]
 ```
 
 ---
 
-### 3.2 Reorganize `steps/` Directory
+### 4.2 Reorganize `steps/` Directory
 
 #### Current Structure (Problems)
 ```
 steps/
 ├── __init__.py      # Contains batch steps + imports from realtime.py
-├── realtime.py      # May have issues, unused/untested DoFns
-└── streaming.py     # May have issues, unused/untested DoFns (if exists)
+├── realtime.py      # DoFn classes (may have issues, NOT TESTED)
+└── streaming.py     # Step wrapper classes (uses realtime.py, may have issues)
 ```
 
 #### Target Structure
 ```
 steps/
-├── __init__.py      # Index file - import from batch_step and stream_step
+├── __init__.py      # Index file - import from batch_step and stream_step only
 ├── batch_step.py    # Batch pipeline steps (moved from __init__.py)
-└── stream_step.py   # Stream pipeline DoFns (from full_scripts)
+└── stream_step.py   # Stream DoFns (from TESTED full_scripts)
 ```
 
-#### Details:
-
-**`steps/__init__.py`** (New - Index only)
-```python
-"""
-Generic Beam pipeline steps for dataflow_common.
-"""
-# Batch steps
-from dataflow_common.steps.batch_step import (
-    ReadBQQueryStep,
-    BuildMappingDictStep,
-    ParseJsonStep,
-    MapRecordStep,
-    KVPairsStep,
-    CoGroupByKeyStep,
-    CoalesceByMappingStep,
-    NormalizeToSchemaStep,
-    WriteParquetStep,
-    WriteToBigQueryStep,
-    WriteGCSStep,
-)
-
-# Stream DoFns
-from dataflow_common.steps.stream_step import (
-    AddWindowInfoFn,
-    WriteParquetByWindowFn,
-    MappingRefreshDoFn,
-    ExtractPersonasDoFn,
-    FetchFromBigtableDoFn,
-    FilterEmptyMemberIdDoFn,
-    TransformSchemasDoFn,
-    FullfillSchemasDoFn,
-    WriteToBigLakeDoFn,
-)
-
-__all__ = [
-    # Batch
-    "ReadBQQueryStep", ...
-    # Stream
-    "AddWindowInfoFn", ...
-]
-```
-
-**`steps/batch_step.py`** (Moved from __init__.py)
-```python
-"""
-Batch pipeline steps for ms_member_short pipelines.
-"""
-class ReadBQQueryStep(BaseStep): ...
-class BuildMappingDictStep(BaseStep): ...
-# etc. - All batch step classes
-```
-
-**`steps/stream_step.py`** (New - from full_scripts)
-```python
-"""
-Stream pipeline DoFns for ms_member_realtime pipeline.
-Extracted from tested ms_member_realtime_pipeline_full_scripts.
-"""
-class AddWindowInfoFn(DoFn): ...
-class WriteParquetByWindowFn(DoFn): ...
-# etc. - All stream DoFn classes
-```
+#### Files to Remove (Unused/Problematic)
+- `steps/realtime.py` - Replaced by stream_step.py
+- `steps/streaming.py` - Unused, uses problematic realtime.py
 
 ---
 
-## 4. Execution Steps
+## 5. Execution Steps
 
-### Step 1: Setup Branch
+### Step 1: Setup Branch ✅
 ```bash
-# Checkout from feature/agent_helper_restructure
 git fetch origin feature/agent_helper_restructure
 git checkout -b feature/agent_helper_refactor_update_20251128 origin/feature/agent_helper_restructure
 ```
 
-**Note:** Branch `feature/agent_helper_restructure` not found in remote. Need to confirm correct branch name.
-
-### Step 2: Get Full Scripts File
-**ACTION REQUIRED:** ผู้ใช้ต้องให้ไฟล์ `ms_member_realtime_pipeline_full_scripts.py` ที่ tested and working
+### Step 2: Read Full Scripts ✅
+**File available at:** `data/processor/dataflow/scripts/ms_member_realtime_pipeline_full_scripts.py`
 
 ### Step 3: Create Config YAML
-- สร้าง `configs/ms_member_realtime_refactor_config.yaml`
-- แยก hard-coded values, queries จาก full_scripts
+สร้าง `configs/ms_member_realtime_refactor.yaml` โดยแยก hard-coded values และ queries จาก full_scripts
 
 ### Step 4: Create Stream Step Module
-- สร้าง `common/steps/stream_step.py`
-- แยก DoFn classes จาก full_scripts
-- ไม่ใช้ `steps/realtime.py` หรือ `steps/streaming.py` (เพราะอาจมีปัญหา)
+สร้าง `common/steps/stream_step.py` โดยแยก DoFn classes จาก full_scripts:
+- Copy DoFn classes ที่ TESTED และ WORKING
+- ไม่ใช้โค้ดจาก realtime.py หรือ streaming.py
 
 ### Step 5: Create Refactored Pipeline Script
-- สร้าง `scripts/ms_member_realtime_pipeline_refactor.py`
-- เก็บ schema definitions และ pipeline logic
-- Import DoFns จาก `stream_step.py`
+สร้าง `scripts/ms_member_realtime_pipeline_refactor.py`:
+- เก็บ schema definitions (MS_PERSONAS_PARQUET_SCHEMA, MS_PERSONAS_CDC_SCHEMA)
+- Pipeline logic
+- Import DoFns จาก stream_step.py
+- ใช้ config จาก YAML แทน hard-coded values
 
 ### Step 6: Reorganize Steps Directory
-- สร้าง `steps/batch_step.py` (move from __init__.py)
-- Update `steps/__init__.py` (index only)
-- ลบ `steps/realtime.py` และ `steps/streaming.py` (unused)
+1. สร้าง `steps/batch_step.py` (move batch steps จาก __init__.py)
+2. Update `steps/__init__.py` (index only - import from batch_step และ stream_step)
+3. ลบ `steps/realtime.py` (replaced by stream_step.py)
+4. ลบ `steps/streaming.py` (unused)
 
 ### Step 7: Test & Deploy
-- Test deploy streaming job
-- Test deploy batch job
-- Verify both work correctly
+1. Test deploy streaming job (ms_member_realtime)
+2. Test deploy batch job (ms_member_short_term)
+3. Verify both work correctly
 
 ---
 
-## 5. Files to Create/Modify
+## 6. Files Summary
 
 ### Create New Files:
 | File | Description |
 |------|-------------|
-| `configs/ms_member_realtime_refactor_config.yaml` | Refactored config for streaming |
-| `common/steps/stream_step.py` | Stream DoFn module |
-| `common/steps/batch_step.py` | Batch step module |
+| `configs/ms_member_realtime_refactor.yaml` | Refactored config for streaming |
+| `common/steps/stream_step.py` | Stream DoFn module (from TESTED full_scripts) |
+| `common/steps/batch_step.py` | Batch step module (from __init__.py) |
 | `scripts/ms_member_realtime_pipeline_refactor.py` | Refactored streaming script |
 
 ### Modify Files:
@@ -334,27 +451,13 @@ git checkout -b feature/agent_helper_refactor_update_20251128 origin/feature/age
 | File | Reason |
 |------|--------|
 | `common/steps/realtime.py` | Replaced by stream_step.py |
-| `common/steps/streaming.py` | Unused (if exists) |
-
----
-
-## 6. Questions/Clarifications Needed
-
-1. **Branch Name:** `feature/agent_helper_restructure` ไม่พบใน remote - ต้องการยืนยันชื่อ branch ที่ถูกต้อง
-
-2. **Full Scripts File:** ไฟล์ `ms_member_realtime_pipeline_full_scripts.py` ไม่พบใน repository - ต้องการให้ผู้ใช้ provide ไฟล์นี้
-
-3. **Testing Environment:** ต้องการ credentials และ environment สำหรับ deploy & run test หรือไม่?
-
-4. **Schema Definitions:** `MS_PERSONAS_CDC_SCHEMA` มีอยู่ใน full_scripts หรือไม่?
-
-5. **Streaming.py:** มีไฟล์ `steps/streaming.py` อยู่หรือไม่? (ไม่พบใน current codebase)
+| `common/steps/streaming.py` | Unused, uses problematic realtime.py |
 
 ---
 
 ## 7. Future Considerations (Post-refactor)
 
-> ผู้ใช้กล่าวถึงว่าหลังจาก refactor เสร็จ อาจจะแยก step module กับ function module ออกจากกัน เหมือน concept ของ steps/realtime กับ steps/streaming
+> หลังจาก refactor เสร็จ อาจจะแยก step module กับ function module ออกจากกัน
 
 ### Potential Future Structure:
 ```
@@ -374,12 +477,21 @@ steps/
 
 ---
 
-## 8. Reference Documents
+## 8. Reference Files
 
-- `/home/user/new_project_data_platform_the1_v4/data/processor/dataflow/tests/integration/README.md` - Integration tests documentation
-- `/home/user/new_project_data_platform_the1_v4/README.md` - Project README (minimal)
+**Source Branch:** `feature/agent_helper_restructure`
+
+| File | Path |
+|------|------|
+| Full Scripts (WORKING) | `data/processor/dataflow/scripts/ms_member_realtime_pipeline_full_scripts.py` |
+| streaming.py (Reference) | `data/processor/dataflow/common/steps/streaming.py` |
+| realtime.py (Reference) | `data/processor/dataflow/common/steps/realtime.py` |
+| Current __init__.py | `data/processor/dataflow/common/steps/__init__.py` |
+| ms_member_realtime.yaml | `data/processor/dataflow/configs/ms_member_realtime.yaml` |
+| ms_member_short_init.yaml | `data/processor/dataflow/configs/ms_member_short_init.yaml` |
 
 ---
 
 **Prepared by:** Claude AI
-**Review Required:** Yes - waiting for user confirmation and additional files
+**Status:** ✅ Confirmed - Ready to Execute
+**Waiting for:** User approval to proceed with implementation
