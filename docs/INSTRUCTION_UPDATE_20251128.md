@@ -260,6 +260,103 @@ formats:
     - "%Y-%m-%d %H:%M:%S"
     - "%Y-%m-%dT%H:%M:%S.%f"
     - "%Y-%m-%dT%H:%M:%S"
+
+# Pipeline plan for streaming realtime (config-driven)
+plan:
+# Step 1: Periodically refresh mapping table from BigQuery
+- step: RefreshMappingTable
+  id: mapping_refresh
+  params:
+    fire_interval: 60
+    mapping_table: "{mapping.table}"
+    query: |
+      SELECT * EXCEPT(row_num) FROM (
+        SELECT *, ROW_NUMBER() OVER (
+          PARTITION BY table_name, target, reconcile_column_name
+          ORDER BY last_update DESC
+        ) AS row_num
+        FROM `{mapping.table}`
+      ) WHERE row_num = 1
+  outputs:
+    - mapping_refresh
+
+# Step 2: Read messages from Pub/Sub
+- step: ReadFromPubSub
+  id: message_rows
+  params:
+    subscription: "{io.pubsub.subscription}"
+  outputs:
+    - message_rows
+
+# Step 3: Extract persona IDs from messages
+- step: ExtractPersonas
+  id: pk_value
+  params:
+    pk_col: personaId
+    input: message_rows
+  outputs:
+    - pk_value
+
+# Step 4: Fetch data from Bigtable
+- step: FetchFromBigtable
+  id: bt_rows
+  params:
+    project: "{io.bigtable.project}"
+    instance: "{io.bigtable.instance}"
+    table: "{io.bigtable.table}"
+    pk_col: personaId
+    parent_field:
+      - profiles
+    input: pk_value
+  outputs:
+    - bt_rows
+
+# Step 5: Filter out records with empty member IDs
+- step: FilterEmptyMemberId
+  id: bt_rows_filtered
+  params:
+    input: bt_rows
+    pk_col: profiles.memberId
+  outputs:
+    - bt_rows_filtered
+
+# Step 6: Transform to target schemas (AWS and GCP branches)
+- step: TransformSchemas
+  id: transform_output
+  params:
+    mapping_info: mapping_refresh
+    table_name: ms_member
+    input: bt_rows_filtered
+  outputs:
+    - aws
+    - gcp
+
+# Step 7: Fulfill AWS schema with all fields
+- step: FullfillSchemas
+  id: full_aws
+  params:
+    table_name: ms_member
+    mapping_info: mapping_refresh
+    input: aws
+  outputs:
+    - full_aws
+
+# Step 8: Write GCP data to BigQuery CDC
+- step: WriteToBigQueryCDC
+  id: write_bq_cdc
+  params:
+    table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+    input: gcp
+    primary_key: ["memberId"]
+    change_type: "UPSERT"
+
+# Step 9: Write AWS data to S3 as Parquet
+- step: WriteToS3Parquet
+  id: write_s3
+  params:
+    bucket: "{io.s3.bucket}"
+    window_size: "{window.size_sec}"
+    input: full_aws
 ```
 
 #### Part 2: Dataflow Script
