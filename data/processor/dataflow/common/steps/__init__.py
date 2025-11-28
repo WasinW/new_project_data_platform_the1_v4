@@ -37,6 +37,8 @@ from dataflow_common.steps.realtime import (
     FullfillSchemasDoFn,
     WriteToBigLakeDoFn,
     AddCDCMetadataDoFn,
+    MapToCdcTableRow,
+    SyncToIcebergDoFn,
 )
 
 # Import streaming steps (config-driven realtime pipeline)

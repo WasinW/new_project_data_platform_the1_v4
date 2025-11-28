@@ -524,19 +524,22 @@ __all__ = [
     'TransformSchemasDoFn',
     'FullfillSchemasDoFn',
     'WriteToBigLakeDoFn',
+    'AddCDCMetadataDoFn',
+    'MapToCdcTableRow',
+    'SyncToIcebergDoFn',
 ]
 
 
 class AddCDCMetadataDoFn(DoFn):
     """Add CDC metadata fields for BigLake table writes.
-    
+
     Adds _CHANGE_TYPE and _CHANGE_SEQUENCE_NUMBER fields required for
     CDC writes to BigLake tables using Storage Write API.
     """
 
     def __init__(self, primary_key_fields=None, change_type='UPSERT'):
         """Initialize CDC metadata DoFn.
-        
+
         Args:
             primary_key_fields: List of primary key field names (for logging/validation)
             change_type: Default change type ('UPSERT' or 'DELETE')
@@ -547,27 +550,27 @@ class AddCDCMetadataDoFn(DoFn):
 
     def process(self, element):
         """Add CDC metadata fields to each record.
-        
+
         Args:
             element: Input record (dict)
-            
+
         Yields:
             Record with CDC metadata fields added
         """
         try:
             # Create a copy to avoid modifying the original
             record = dict(element)
-            
+
             # Add _CHANGE_TYPE field (UPSERT or DELETE)
             # Check if record has a deletion flag
             is_delete = record.get('is_delete', False) or record.get('_is_deleted', False)
             record['_CHANGE_TYPE'] = 'DELETE' if is_delete else self.change_type
-            
+
             # Add _CHANGE_SEQUENCE_NUMBER field
             # Use timestamp if available, otherwise use current time
             # This must be a monotonically increasing value for correct CDC ordering
             timestamp = record.get('updated_at') or record.get('timestamp') or record.get('event_timestamp')
-            
+
             if timestamp:
                 # If timestamp is datetime object, convert to ISO format string
                 if isinstance(timestamp, datetime):
@@ -577,13 +580,210 @@ class AddCDCMetadataDoFn(DoFn):
             else:
                 # Use current timestamp as fallback
                 sequence_num = datetime.now(timezone.utc).isoformat()
-            
+
             record['_CHANGE_SEQUENCE_NUMBER'] = sequence_num
-            
+
             yield record
-            
+
         except Exception as e:
             LOGGER.error(f"[AddCDCMetadataDoFn] Error adding CDC metadata: {e}")
             LOGGER.error(f"[AddCDCMetadataDoFn] Problematic record: {element}")
             # Re-raise to fail the pipeline (don't silently drop bad records)
             raise
+
+
+class MapToCdcTableRow(DoFn):
+    """
+    Format data for BigQuery CDC write using Storage Write API.
+
+    Required schema for CDC:
+    {
+        "row_mutation_info": {"mutation_type": "UPSERT" | "DELETE", "change_sequence_number": "..."},
+        "record": { actual data fields }
+    }
+    """
+
+    def process(self, element):
+        """
+        Format element for CDC API.
+
+        Args:
+            element: Input record with optional cdc_type, is_delete fields
+
+        Yields:
+            CDC-formatted record with row_mutation_info and record fields
+        """
+        import time
+
+        # Get CDC operation type
+        cdc_type = element.get('cdc_type', 'UPSERT')
+        is_delete = element.get('is_delete', False)
+
+        # Determine mutation type
+        if is_delete:
+            mutation_type = 'DELETE'
+        elif cdc_type == 'DELETE':
+            mutation_type = 'DELETE'
+        else:
+            mutation_type = 'UPSERT'  # INSERT or UPDATE both use UPSERT
+
+        # Generate sequence number (timestamp-based for ordering)
+        # Use updated_date if available, otherwise current time
+        if element.get('updated_date'):
+            if isinstance(element['updated_date'], datetime):
+                seq_num = str(int(element['updated_date'].timestamp() * 1000000))
+            else:
+                seq_num = str(int(time.time() * 1000000))
+        else:
+            seq_num = str(int(time.time() * 1000000))
+
+        # Clean up internal fields from record
+        record = dict(element)
+        record.pop('cdc_type', None)
+        record.pop('is_delete', None)
+        record.pop('_CHANGE_TYPE', None)
+        record.pop('_CHANGE_SEQUENCE_NUMBER', None)
+
+        LOGGER.debug(f"[MapToCdcTableRow] Preparing record for {mutation_type}")
+
+        # Convert dateOfBirth to proper format if exists
+        if record.get('dateOfBirth'):
+            try:
+                if isinstance(record['dateOfBirth'], str):
+                    from datetime import datetime, date
+                    dt = datetime.strptime(record['dateOfBirth'], '%Y-%m-%d').date()
+                    record['dateOfBirth'] = dt.isoformat()
+            except:
+                pass
+
+        # Format for CDC API: must have "row_mutation_info" and "record" fields
+        cdc_row = {
+            'row_mutation_info': {
+                'mutation_type': mutation_type,
+                'change_sequence_number': seq_num
+            },
+            'record': record
+        }
+
+        LOGGER.info(f"[MapToCdcTableRow] Formatted CDC row for {mutation_type}")
+        yield cdc_row
+
+
+class SyncToIcebergDoFn(DoFn):
+    """
+    Sync data from Native CDC table to Iceberg Historical table.
+    Uses MERGE to upsert only changed records.
+
+    Triggered by window closing (e.g., every SYNC_WINDOW_SECONDS).
+    """
+
+    def __init__(self, project_id: str, native_table: str, iceberg_table: str, lookback_minutes: int = 30):
+        """
+        Initialize Iceberg sync DoFn.
+
+        Args:
+            project_id: GCP project ID
+            native_table: Source native CDC table (project.dataset.table)
+            iceberg_table: Target Iceberg table (project.dataset.table)
+            lookback_minutes: Minutes to lookback for changed records
+        """
+        self.project_id = project_id
+        self.native_table = native_table
+        self.iceberg_table = iceberg_table
+        self.lookback_minutes = lookback_minutes
+        self._client = None
+
+    def setup(self):
+        """Initialize BigQuery client once per worker."""
+        self._client = bigquery.Client(project=self.project_id)
+        LOGGER.info(f"[SyncToIcebergDoFn] Initialized: {self.native_table} → {self.iceberg_table}")
+
+    def process(self, trigger_element, window=DoFn.WindowParam):
+        """
+        Execute MERGE query to sync data to Iceberg.
+
+        Args:
+            trigger_element: Trigger element (typically a count)
+            window: Beam window parameter
+
+        Yields:
+            Sync result dict with status and metrics
+        """
+        window_start = datetime.fromtimestamp(window.start.micros / 1e6, tz=timezone.utc)
+        window_end = datetime.fromtimestamp(window.end.micros / 1e6, tz=timezone.utc)
+
+        LOGGER.info(f"[SyncToIcebergDoFn] Triggered for window {window_start.isoformat()} - {window_end.isoformat()}")
+        LOGGER.info(f"[SyncToIcebergDoFn] Trigger count: {trigger_element}")
+
+        # MERGE query: Get latest version per memberId, upsert to Iceberg
+        merge_query = f"""
+        MERGE `{self.iceberg_table}` AS T
+        USING (
+            -- Get latest version of each member updated in lookback window
+            SELECT * EXCEPT(rn)
+            FROM (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY memberId
+                        ORDER BY updated_date DESC
+                    ) AS rn
+                FROM `{self.native_table}`
+                WHERE COALESCE(updated_date,CURRENT_TIMESTAMP()) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {self.lookback_minutes} MINUTE)
+            )
+            WHERE rn = 1
+        ) AS S
+        ON T.memberId = S.memberId
+
+        -- Update if source is newer
+        WHEN MATCHED AND S.updated_date > T.updated_date THEN
+            UPDATE SET
+                accountId = S.accountId,
+                dateOfBirth = S.dateOfBirth,
+                gender = S.gender,
+                hasEmail = S.hasEmail,
+                hasMobile = S.hasMobile,
+                languagePrefer = S.languagePrefer,
+                nationalityId = S.nationalityId,
+                profileId = S.profileId,
+                updated_date = S.updated_date
+
+        -- Insert new records
+        WHEN NOT MATCHED THEN
+            INSERT (accountId, dateOfBirth, gender, hasEmail, hasMobile,
+                    languagePrefer, memberId, nationalityId, profileId, updated_date)
+            VALUES (S.accountId, S.dateOfBirth, S.gender, S.hasEmail, S.hasMobile,
+                    S.languagePrefer, S.memberId, S.nationalityId, S.profileId, S.updated_date)
+        """
+
+        try:
+            job = self._client.query(merge_query)
+            result = job.result()  # Wait for completion
+
+            rows_affected = job.num_dml_affected_rows or 0
+            bytes_processed = job.total_bytes_processed or 0
+            slot_ms = job.slot_millis or 0
+
+            LOGGER.info(
+                f"[SyncToIcebergDoFn] SUCCESS: "
+                f"window={window_end.isoformat()}, "
+                f"rows_affected={rows_affected}, "
+                f"bytes={bytes_processed / (1024*1024):.2f}MB, "
+                f"slot_ms={slot_ms}"
+            )
+
+            yield {
+                'window_end': window_end.isoformat(),
+                'rows_affected': rows_affected,
+                'bytes_processed_mb': round(bytes_processed / (1024*1024), 2),
+                'slot_ms': slot_ms,
+                'status': 'success'
+            }
+
+        except Exception as e:
+            LOGGER.error(f"[SyncToIcebergDoFn] FAILED: {e}")
+            # Don't fail pipeline, just log error
+            yield {
+                'window_end': window_end.isoformat(),
+                'status': 'failed',
+                'error': str(e)
+            }
