@@ -36,6 +36,21 @@ from dataflow_common.steps.realtime import (
     TransformSchemasDoFn,
     FullfillSchemasDoFn,
     WriteToBigLakeDoFn,
+    AddCDCMetadataDoFn,
+)
+
+# Import streaming steps (config-driven realtime pipeline)
+from dataflow_common.steps.streaming import (
+    RefreshMappingTableStep,
+    ReadFromPubSubStep,
+    ExtractPersonasStep,
+    FetchFromBigtableStep,
+    FilterEmptyMemberIdStep,
+    TransformSchemasStep,
+    FullfillSchemasStep,
+    WriteToBigQueryStep as WriteToBigQueryStreamingStep,
+    WriteToS3ParquetStep,
+    WriteToBigQueryCDCStep,
 )
 
 class ReadBQQueryStep(BaseStep):
@@ -366,7 +381,7 @@ class WriteToBigQueryStep(BaseStep):
         try:
             input_key = self.spec.get("in")
             table = self.spec.get("table")
-            
+
             LOGGER.info(f"[{self.step_id}] Writing to BigQuery - input: {input_key}, table: {table}")
             
             if not input_key or input_key not in self.state:
@@ -473,7 +488,7 @@ __all__ = [
     "WriteParquetStep",
     "WriteToBigQueryStep",
     "WriteGCSStep",
-    # Realtime pipeline DoFns (used in ms_member_realtime)
+    # Realtime pipeline DoFns (used in ms_member_realtime script)
     "AddWindowInfoFn",
     "WriteParquetByWindowFn",
     "MappingRefreshDoFn",
@@ -483,4 +498,16 @@ __all__ = [
     "TransformSchemasDoFn",
     "FullfillSchemasDoFn",
     "WriteToBigLakeDoFn",
+    "AddCDCMetadataDoFn",
+    # Streaming steps (config-driven realtime pipeline)
+    "RefreshMappingTableStep",
+    "ReadFromPubSubStep",
+    "ExtractPersonasStep",
+    "FetchFromBigtableStep",
+    "FilterEmptyMemberIdStep",
+    "TransformSchemasStep",
+    "FullfillSchemasStep",
+    "WriteToBigQueryStreamingStep",
+    "WriteToS3ParquetStep",
+    "WriteToBigQueryCDCStep",
 ]

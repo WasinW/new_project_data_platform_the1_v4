@@ -18,7 +18,7 @@ import operator
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import s3fs
+# import s3fs
 
 import apache_beam as beam
 from apache_beam import DoFn
@@ -85,6 +85,7 @@ class WriteParquetByWindowFn(DoFn):
             Success message
         """
         LOGGER.info("[WriteParquetByWindowFn] Processing window group")
+        import s3fs
         window_path, records = group
 
         # Create full path
@@ -98,7 +99,8 @@ class WriteParquetByWindowFn(DoFn):
         # Write to S3 via pyarrow
         table = pa.Table.from_pandas(df, schema=self.schema)
 
-        # Use s3fs for S3 write
+        # Lazy import s3fs (only when actually writing to S3)
+        import s3fs
         fs = s3fs.S3FileSystem()
 
         with fs.open(output_path, 'wb') as f:
@@ -523,3 +525,65 @@ __all__ = [
     'FullfillSchemasDoFn',
     'WriteToBigLakeDoFn',
 ]
+
+
+class AddCDCMetadataDoFn(DoFn):
+    """Add CDC metadata fields for BigLake table writes.
+    
+    Adds _CHANGE_TYPE and _CHANGE_SEQUENCE_NUMBER fields required for
+    CDC writes to BigLake tables using Storage Write API.
+    """
+
+    def __init__(self, primary_key_fields=None, change_type='UPSERT'):
+        """Initialize CDC metadata DoFn.
+        
+        Args:
+            primary_key_fields: List of primary key field names (for logging/validation)
+            change_type: Default change type ('UPSERT' or 'DELETE')
+        """
+        self.primary_key_fields = primary_key_fields or ['memberId']
+        self.change_type = change_type
+        LOGGER.info(f"[AddCDCMetadataDoFn] Initialized with PK: {self.primary_key_fields}, type: {self.change_type}")
+
+    def process(self, element):
+        """Add CDC metadata fields to each record.
+        
+        Args:
+            element: Input record (dict)
+            
+        Yields:
+            Record with CDC metadata fields added
+        """
+        try:
+            # Create a copy to avoid modifying the original
+            record = dict(element)
+            
+            # Add _CHANGE_TYPE field (UPSERT or DELETE)
+            # Check if record has a deletion flag
+            is_delete = record.get('is_delete', False) or record.get('_is_deleted', False)
+            record['_CHANGE_TYPE'] = 'DELETE' if is_delete else self.change_type
+            
+            # Add _CHANGE_SEQUENCE_NUMBER field
+            # Use timestamp if available, otherwise use current time
+            # This must be a monotonically increasing value for correct CDC ordering
+            timestamp = record.get('updated_at') or record.get('timestamp') or record.get('event_timestamp')
+            
+            if timestamp:
+                # If timestamp is datetime object, convert to ISO format string
+                if isinstance(timestamp, datetime):
+                    sequence_num = timestamp.isoformat()
+                else:
+                    sequence_num = str(timestamp)
+            else:
+                # Use current timestamp as fallback
+                sequence_num = datetime.now(timezone.utc).isoformat()
+            
+            record['_CHANGE_SEQUENCE_NUMBER'] = sequence_num
+            
+            yield record
+            
+        except Exception as e:
+            LOGGER.error(f"[AddCDCMetadataDoFn] Error adding CDC metadata: {e}")
+            LOGGER.error(f"[AddCDCMetadataDoFn] Problematic record: {element}")
+            # Re-raise to fail the pipeline (don't silently drop bad records)
+            raise

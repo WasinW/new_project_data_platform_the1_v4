@@ -404,6 +404,7 @@ ms-personas:upload-scripts:nonprod:
   # Upload configs if they exist
   - |
     if [ -d "data/processor/dataflow/configs" ] && [ "$(ls -A data/processor/dataflow/configs/*.yaml 2>/dev/null)" ]; then
+      sed -i "s/{WORKSPACE_ENV}/${WORKSPACE_ENV}/g" data/processor/dataflow/configs/*.yaml
       gsutil cp data/processor/dataflow/configs/*.yaml gs://${COMPOSER_BUCKET}/config/
     fi
   # # Upload scripts
@@ -497,7 +498,6 @@ ms-personas:integration-tests:nonprod:
       --location $COMPOSER_LOCATION \
       --output-dir $CI_PROJECT_DIR/integration_test_results \
       --skip-common || echo "Some integration tests failed but continuing..."
-
   # Archive test results
   artifacts:
     when: always
@@ -514,8 +514,8 @@ ms-personas:integration-tests:nonprod:
   - ms-personas:upload-scripts:nonprod
   - api:create-image:dataflow-common:nonprod
 
-  allow_failure: true  # Don't block pipeline if tests fail
-  when: manual  # Run manually to avoid unnecessary test runs
+  allow_failure: true # Don't block pipeline if tests fail
+  when: manual # Run manually to avoid unnecessary test runs
 
   rules:
   - !reference [ .execute-pipeline-template, rules ]

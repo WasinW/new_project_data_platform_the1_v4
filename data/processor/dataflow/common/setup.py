@@ -20,25 +20,31 @@ import os
 setup(
     name="dataflow_common",
     version="1.0.0",
-    packages=['dataflow_common'],
+    # Explicitly list all packages (main + sub-packages)
+    packages=[
+        'dataflow_common',
+        'dataflow_common.connectors',
+        'dataflow_common.steps',
+        'dataflow_common.transforms',
+        'dataflow_common.utils',
+    ],
     package_dir={'dataflow_common': '.'},
-    package_data={
-        'dataflow_common': [
-            '*.py',
-            'connectors/*.py',
-            'steps/*.py', 
-            'transforms/*.py',
-            'utils/*.py'
-        ]
-    },
     python_requires=">=3.9",
     install_requires=[
         "apache-beam[gcp]==2.59.0",
         "google-cloud-bigquery==3.25.0",
+        "google-cloud-bigtable>=2.26.0",
+        "google-cloud-pubsub>=2.23.1",
         "pyarrow>=14.0.0",
+        "pandas>=1.5.0",
+        # "s3fs>=2023.1.0",
+        # "fsspec>=2023.1.0",
         "pyyaml>=6.0",
-        "boto3>=1.26.0",
+        # "boto3>=1.26.0",
     ],
+    # Include all Python files
+    include_package_data=False,
+    zip_safe=False,
 )
 
 # # Get all Python modules in current directory
