@@ -52,5 +52,13 @@ def get_step_logger(step_class):
     """Get logger for a step class"""
     return get_dataflow_logger(f"dataflow_common.steps.{step_class.__class__.__name__}")
 
+# Import CDC utilities
+from dataflow_common.utils.cdc import format_for_cdc
+
 # Export
-__all__ = ['get_dataflow_logger', 'get_step_logger', 'CompatibleLogger']
+__all__ = [
+    'get_dataflow_logger',
+    'get_step_logger',
+    'CompatibleLogger',
+    'format_for_cdc',
+]

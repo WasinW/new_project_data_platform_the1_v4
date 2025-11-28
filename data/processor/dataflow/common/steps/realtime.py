@@ -94,6 +94,15 @@ class WriteParquetByWindowFn(DoFn):
 
         # Convert to pandas and write parquet
         df = pd.DataFrame(list(records))
+
+        # Convert date columns to proper date format
+        date_columns = ['birth_date', 'consent_date', 'created_date', 'register_date',
+                        'employee_join_date', 'employee_resign_date', 'passport_exp', 'updated_date']
+
+        for col in date_columns:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
+
         df.drop(columns=['_window_path', '_window_timestamp'], inplace=True, errors='ignore')
 
         # Write to S3 via pyarrow

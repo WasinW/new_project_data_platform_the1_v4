@@ -35,6 +35,8 @@ __all__ = [
     "registry",
     "steps",
     "transforms",
+    "schemas",
+    "utils",
 ]
 
 # Updated version to reflect the new generic implementation.
