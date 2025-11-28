@@ -541,7 +541,7 @@ class AddCDCMetadataDoFn(DoFn):
             primary_key_fields: List of primary key field names (for logging/validation)
             change_type: Default change type ('UPSERT' or 'DELETE')
         """
-        self.primary_key_fields = primary_key_fields or ['member_number']
+        self.primary_key_fields = primary_key_fields or ['memberId']
         self.change_type = change_type
         LOGGER.info(f"[AddCDCMetadataDoFn] Initialized with PK: {self.primary_key_fields}, type: {self.change_type}")
 

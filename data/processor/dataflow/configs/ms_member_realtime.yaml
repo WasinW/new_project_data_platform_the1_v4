@@ -141,11 +141,19 @@ plan:
   - full_aws
 
 # Step 8: Write GCP data to BigQuery
-- step: WriteToBigQuery
-  id: write_bq
+- step: WriteToBigQueryCDC # ⬅️ ใช้ตัวใหม่สำหรับ streaming CDC
+  id: write_bq_cdc
   params:
     table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
-    input: gcp
+    input: "gcp"
+    primary_key: [ "memberId" ] # Optional
+    change_type: "UPSERT" # Optional
+
+# - step: WriteToBigQuery
+#   id: write_bq
+#   params:
+#     table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+#     input: gcp
 
 # Step 9: Write AWS data to S3 as Parquet
 - step: WriteToS3Parquet

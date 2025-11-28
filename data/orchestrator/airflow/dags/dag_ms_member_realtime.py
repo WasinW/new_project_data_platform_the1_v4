@@ -381,7 +381,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
-        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.05',
+        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.07',
         'sdk_location': 'container',
         # ------------------------------------------------------------------------------------
 
@@ -424,7 +424,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
     # 1) ฝั่ง Composer (driver)
     # ----------------------------
     py_requirements=[
-        'apache-beam[gcp]==2.59.0',
+        'apache-beam[gcp]==2.69.0',
         'google-cloud-bigquery==3.25.0',
         'fastavro',
         # FIXED: กลับไปใช้ versions เดิมที่ทำงานได้

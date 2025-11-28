@@ -328,7 +328,7 @@ class WriteToS3ParquetStep(BaseStep):
         # Support input in both params and top level
         input_key = params.get("input") or self.spec.get("input")
         bucket = params.get("bucket")
-        window_size = params.get("window_size", 3600)  # Default 1 hour
+        window_size = int(params.get("window_size", 3600))
         schema = params.get("schema")
 
         LOGGER.info(f"[{self.step_id}] Writing to S3: {bucket}")
