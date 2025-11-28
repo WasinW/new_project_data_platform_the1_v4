@@ -56,10 +56,61 @@ mapping:
 sync:
   window_seconds: 10
   lookback_minutes: 30
+  # MERGE query template for Iceberg sync
+  # Placeholders: {iceberg_table}, {native_table}, {lookback_minutes}
+  merge_query: |
+    MERGE `{iceberg_table}` AS T
+    USING (
+        SELECT * EXCEPT(rn)
+        FROM (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY memberId
+                    ORDER BY updated_date DESC
+                ) AS rn
+            FROM `{native_table}`
+            WHERE COALESCE(updated_date, CURRENT_TIMESTAMP()) >=
+                  TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+        )
+        WHERE rn = 1
+    ) AS S
+    ON T.memberId = S.memberId
+
+    WHEN MATCHED AND S.updated_date > T.updated_date THEN
+        UPDATE SET
+            accountId = S.accountId,
+            dateOfBirth = S.dateOfBirth,
+            gender = S.gender,
+            hasEmail = S.hasEmail,
+            hasMobile = S.hasMobile,
+            languagePrefer = S.languagePrefer,
+            nationalityId = S.nationalityId,
+            profileId = S.profileId,
+            updated_date = S.updated_date
+
+    WHEN NOT MATCHED THEN
+        INSERT (accountId, dateOfBirth, gender, hasEmail, hasMobile,
+                languagePrefer, memberId, nationalityId, profileId, updated_date)
+        VALUES (S.accountId, S.dateOfBirth, S.gender, S.hasEmail, S.hasMobile,
+                S.languagePrefer, S.memberId, S.nationalityId, S.profileId, S.updated_date)
 
 # Window configuration
 window:
   size_sec: 300  # 5 minutes
+
+# Parquet output configuration
+parquet:
+  # Date columns to convert (for Parquet output to S3)
+  date_columns:
+    - birth_date
+    - consent_date
+    - created_date
+    - register_date
+    - employee_join_date
+    - employee_resign_date
+    - passport_exp
+    - updated_date
+  output_filename: ms-member.parquet
 
 # DLQ configuration (commented - not yet implemented)
 # dlq:
@@ -169,4 +220,6 @@ plan:
   params:
     bucket: "{io.s3.bucket}"
     window_size: "{window.size_sec}"
+    date_columns: "{parquet.date_columns}"
+    output_filename: "{parquet.output_filename}"
     input: full_aws

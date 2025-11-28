@@ -40,7 +40,14 @@ class SyncToIcebergDoFn(DoFn):
     Triggered by window closing (e.g., every 5 minutes).
     """
 
-    def __init__(self, project_id: str, native_table: str, iceberg_table: str, lookback_minutes: int = 30):
+    def __init__(
+        self,
+        project_id: str,
+        native_table: str,
+        iceberg_table: str,
+        lookback_minutes: int = 30,
+        merge_query: Optional[str] = None
+    ):
         """
         Initialize Iceberg sync.
 
@@ -49,11 +56,14 @@ class SyncToIcebergDoFn(DoFn):
             native_table: Source table (Native CDC)
             iceberg_table: Target table (Iceberg Historical)
             lookback_minutes: Query lookback window
+            merge_query: Custom MERGE query template (optional).
+                         Supports placeholders: {iceberg_table}, {native_table}, {lookback_minutes}
         """
         self.project_id = project_id
         self.native_table = native_table
         self.iceberg_table = iceberg_table
         self.lookback_minutes = lookback_minutes
+        self.merge_query_template = merge_query
         self._client = None
 
     def setup(self):
@@ -61,14 +71,9 @@ class SyncToIcebergDoFn(DoFn):
         self._client = bigquery.Client(project=self.project_id)
         LOGGER.info(f"[SyncToIcebergDoFn] Initialized: {self.native_table} -> {self.iceberg_table}")
 
-    def process(self, trigger_element, window=DoFn.WindowParam):
-        """Execute MERGE query to sync data to Iceberg."""
-        window_start = datetime.fromtimestamp(window.start.micros / 1e6, tz=timezone.utc)
-        window_end = datetime.fromtimestamp(window.end.micros / 1e6, tz=timezone.utc)
-
-        LOGGER.info(f"[SyncToIcebergDoFn] Triggered: window {window_start.isoformat()} - {window_end.isoformat()}")
-
-        merge_query = f"""
+    def _get_default_merge_query(self) -> str:
+        """Return default MERGE query for ms_personas table."""
+        return f"""
         MERGE `{self.iceberg_table}` AS T
         USING (
             SELECT * EXCEPT(rn)
@@ -104,6 +109,23 @@ class SyncToIcebergDoFn(DoFn):
             VALUES (S.accountId, S.dateOfBirth, S.gender, S.hasEmail, S.hasMobile,
                     S.languagePrefer, S.memberId, S.nationalityId, S.profileId, S.updated_date)
         """
+
+    def process(self, trigger_element, window=DoFn.WindowParam):
+        """Execute MERGE query to sync data to Iceberg."""
+        window_start = datetime.fromtimestamp(window.start.micros / 1e6, tz=timezone.utc)
+        window_end = datetime.fromtimestamp(window.end.micros / 1e6, tz=timezone.utc)
+
+        LOGGER.info(f"[SyncToIcebergDoFn] Triggered: window {window_start.isoformat()} - {window_end.isoformat()}")
+
+        # Use custom merge query if provided, otherwise use default
+        if self.merge_query_template:
+            merge_query = self.merge_query_template.format(
+                iceberg_table=self.iceberg_table,
+                native_table=self.native_table,
+                lookback_minutes=self.lookback_minutes
+            )
+        else:
+            merge_query = self._get_default_merge_query()
 
         try:
             job = self._client.query(merge_query)
@@ -167,16 +189,33 @@ class AddWindowInfoFn(DoFn):
 class WriteParquetByWindowFn(DoFn):
     """Write Parquet files to S3 grouped by window."""
 
-    def __init__(self, base_path: str, schema: pa.Schema):
+    # Default date columns for ms_member pipeline
+    DEFAULT_DATE_COLUMNS = [
+        'birth_date', 'consent_date', 'created_date', 'register_date',
+        'employee_join_date', 'employee_resign_date', 'passport_exp', 'updated_date'
+    ]
+
+    def __init__(
+        self,
+        base_path: str,
+        schema: pa.Schema,
+        date_columns: Optional[List[str]] = None,
+        output_filename: str = "ms-member.parquet"
+    ):
         """
         Initialize Parquet writer.
 
         Args:
             base_path: S3 base path (e.g., s3://bucket/prefix)
             schema: PyArrow schema for Parquet
+            date_columns: List of column names to convert to date type.
+                          If None, uses DEFAULT_DATE_COLUMNS.
+            output_filename: Name of the output Parquet file (default: ms-member.parquet)
         """
         self.base_path = base_path
         self.schema = schema
+        self.date_columns = date_columns if date_columns is not None else self.DEFAULT_DATE_COLUMNS
+        self.output_filename = output_filename
 
     def process(self, group):
         """
@@ -193,15 +232,13 @@ class WriteParquetByWindowFn(DoFn):
         LOGGER.info("[WriteParquetByWindowFn] Processing window group")
         window_path, records = group
 
-        output_path = f"{self.base_path}/{window_path}/ms-member.parquet"
+        output_path = f"{self.base_path}/{window_path}/{self.output_filename}"
         LOGGER.info(f"[WriteParquetByWindowFn] Output path: {output_path}")
 
         df = pd.DataFrame(list(records))
 
-        # Convert date columns
-        date_columns = ['birth_date', 'consent_date', 'created_date', 'register_date',
-                        'employee_join_date', 'employee_resign_date', 'passport_exp', 'updated_date']
-        for col in date_columns:
+        # Convert date columns (configurable)
+        for col in self.date_columns:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
 
