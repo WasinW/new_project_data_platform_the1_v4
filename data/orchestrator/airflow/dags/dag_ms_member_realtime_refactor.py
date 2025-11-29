@@ -343,8 +343,8 @@ get_credentials = PythonOperator(
 dataflow_job = BeamRunPythonPipelineOperator(
     task_id='run_dataflow_pipeline',
     runner='DataflowRunner',
-    # Use refactored pipeline script
-    py_file='{{ var.value.bucket_dataflow }}/jobs/ms_member_realtime_pipeline_refactor.py',
+    # Use refactored pipeline script (path matches GitLab CI upload location)
+    py_file='{{ var.value.bucket_dataflow }}/scripts/ms_member_realtime_pipeline_refactor.py',
 
     # Dataflow pipeline options
     # ----------------------------
@@ -389,9 +389,9 @@ dataflow_job = BeamRunPythonPipelineOperator(
             'enable_streaming_engine',
         ],
 
-        # Pipeline parameters - use refactored config
+        # Pipeline parameters - use refactored config (path matches GitLab CI upload location)
         'max_num_workers': 10,
-        'config_path': '{{ var.value.bucket_config }}/dags/composer/config/ms_member/streaming/ms_member_realtime_refactor.yaml',
+        'config_path': '{{ var.value.bucket_config }}/ms_member_realtime_refactor.yaml',
 
         # AWS S3 credentials
         's3_region_name': 'ap-southeast-1',

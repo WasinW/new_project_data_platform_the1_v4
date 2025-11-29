@@ -594,6 +594,10 @@ ms-personas:setup-composer-variables:nonprod:
     set_var "dataflow_subnetwork" "https://www.googleapis.com/compute/v1/projects/the1-network-$WORKSPACE_ENV/regions/asia-southeast1/subnetworks/the1-subnet-dataflow-$WORKSPACE_ENV"
     set_var "dataflow_common_image" "$ARTIFACT_REGISTRY_URL/dataflow-common:latest"
 
+    # Bucket paths for DAGs (matches upload locations in ms-personas:upload-scripts)
+    set_var "bucket_dataflow" "gs://$COMPOSER_BUCKET/dataflow"
+    set_var "bucket_config" "gs://$COMPOSER_BUCKET/config"
+
     echo "Composer variables setup completed!"
 
   after_script:
@@ -652,7 +656,9 @@ ms-personas:setup-composer-variables:prod:
     set_var "dataflow_common_image" "$ARTIFACT_REGISTRY_URL/dataflow-common:latest"
     set_var "dataflow_sa_email" "t1-ins-$WORKSPACE_ENV-sa-data@the1-insight-$WORKSPACE_ENV.iam.gserviceaccount.com"
     set_var "dataflow_subnetwork" "https://www.googleapis.com/compute/v1/projects/the1-network-$WORKSPACE_ENV/regions/asia-southeast1/subnetworks/the1-subnet-dataflow-$WORKSPACE_ENV"
-    # ... other variables ...
+    # Bucket paths for DAGs (matches upload locations)
+    set_var "bucket_dataflow" "gs://$COMPOSER_BUCKET/dataflow"
+    set_var "bucket_config" "gs://$COMPOSER_BUCKET/config"
 
   after_script:
   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
