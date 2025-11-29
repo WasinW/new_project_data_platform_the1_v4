@@ -40,6 +40,7 @@ ENV RUN_PYTHON_SDK_IN_DEFAULT_ENVIRONMENT=1
 # Install S3 dependencies with compatible versions
 # s3fs → aiobotocore → botocore chain (aiobotocore pulls aiohttp automatically)
 # CRITICAL: numpy<2 required because pyarrow 14.0.2 was compiled with NumPy 1.x
+# NOTE: Quote all version specs with < or > to avoid shell redirect issues
 RUN pip install --no-cache-dir \
     'numpy<2' \
     boto3==1.34.106 \
@@ -49,10 +50,10 @@ RUN pip install --no-cache-dir \
     fsspec==2024.6.1 \
     pyarrow==14.0.2 \
     google-cloud-bigquery==3.25.0 \
-    google-cloud-bigtable>=2.26.0 \
+    'google-cloud-bigtable>=2.26.0' \
     pyyaml==6.0.1 \
-    fastavro>=1.9.0 \
-    pandas>=1.5.0
+    'fastavro>=1.9.0' \
+    'pandas>=1.5.0'
 
 # Copy และ install wheel
 COPY dist/dataflow_common-1.0.0-py3-none-any.whl /tmp/
