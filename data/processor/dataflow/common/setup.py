@@ -35,7 +35,7 @@ setup(
     # s3fs → aiobotocore → botocore chain has STRICT version requirements
     # See: https://stackoverflow.com/questions/75743038
     install_requires=[
-        "apache-beam[gcp]==2.59.0",  # MUST match Dockerfile SDK version
+        "apache-beam[gcp]==2.69.0",  # MUST match Dockerfile SDK version
         "google-cloud-bigquery==3.25.0",
         "google-cloud-bigtable>=2.26.0",
         "google-cloud-pubsub>=2.23.1",

@@ -33,30 +33,16 @@
 
 # --------------------------------- VERSION FIX ---------------------------------
 # TESTED COMPATIBLE SET - All versions must match across driver and worker!
-FROM apache/beam_python3.11_sdk:2.59.0
+FROM apache/beam_python3.11_sdk:2.69.0
 
 ENV RUN_PYTHON_SDK_IN_DEFAULT_ENVIRONMENT=1
 
-# CRITICAL: boto3/botocore/aiobotocore versions must be compatible with s3fs
-# s3fs==2024.6.1 → aiobotocore==2.13.0 → botocore>=1.34.70,<1.34.107
-# boto3 version must match botocore exactly!
-RUN pip install --no-cache-dir --no-deps \
-    six==1.16.0 \
-    python-dateutil==2.9.0.post0 \
-    jmespath==1.0.1 \
-    urllib3==1.26.18 \
-    botocore==1.34.106 \
-    s3transfer==0.10.1 \
-    boto3==1.34.106
-
-# Install aiobotocore (compatible with botocore 1.34.106)
-RUN pip install --no-cache-dir --no-deps \
-    aiohttp>=3.9.0 \
-    aioitertools>=0.11.0 \
-    aiobotocore==2.13.0
-
-# Install s3fs and other dependencies (s3fs 2024.6.1 works with aiobotocore 2.13.0)
+# Install S3 dependencies with compatible versions
+# s3fs → aiobotocore → botocore chain (aiobotocore pulls aiohttp automatically)
 RUN pip install --no-cache-dir \
+    boto3==1.34.106 \
+    botocore==1.34.106 \
+    aiobotocore==2.13.0 \
     s3fs==2024.6.1 \
     fsspec==2024.6.1 \
     pyarrow==14.0.2 \
