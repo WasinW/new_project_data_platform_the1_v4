@@ -207,10 +207,10 @@ dataflow_job = BeamRunPythonPipelineOperator(
         # 'worker_machine_type': 'n1-standard-2',
         # 'worker_machine_type': 'n1-standard-4',  # 15GB RAM - ไม่พอสำหรับ heap 20GB
         'worker_machine_type': 'n1-standard-8',  # 30GB RAM - พอสำหรับ heap 20GB
-        'max_num_workers': 8,
+        'max_num_workers': 4,
         'num_workers': 2,  # ลดลงเพราะ machine ใหญ่ขึ้น
         'disk_size_gb': 100,
-        'number_of_worker_harness_threads': 8,
+        'number_of_worker_harness_threads': 4,  # ลดจาก 8 เป็น 4 เพื่อลด memory usage
         'save_main_session': True,
         # ------------------------------------------------------------------------------------
         # Standard persistent disk (lowest cost but slowest)
@@ -224,11 +224,12 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'experiments': [
             'use_runner_v2'
             ,'enable_stackdriver_agent_metrics'
-            ,'worker_log_level_debug'
-            ,'shuffle_mode=service' 
+            # ,'worker_log_level_debug'  # ปิดไว้ก่อนเพื่อลด overhead
+            ,'shuffle_mode=service'
             #  shuffle_mode : +$0.048/GB shuffled (~1.6 bath/GB)
             # Reduced disk I/O on worker , Better Scale , Reduced issue disk space exhaustion
-            ,'worker_heap_size_mb=20000' 
+            ,'worker_heap_size_mb=15000'  # ลดจาก 20GB เป็น 15GB เพื่อเผื่อ overhead
+            ,'no_use_multiple_sdk_containers'  # ใช้ single SDK container per worker
             # 'min_cpu_platform=Intel Skylake'  # ← ใส่ตรงนี้ถ้าอยากใช้
             ],
         # Control log levels
