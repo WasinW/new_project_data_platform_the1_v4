@@ -1,5 +1,5 @@
 """
-Stream processing DoFn classes for ms_member realtime pipeline.
+Stream processing DoFn classes for streaming pipelines.
 Extracted from TESTED ms_member_realtime_pipeline_full_scripts.py
 
 This module contains all DoFn classes for streaming pipelines that:
@@ -46,7 +46,7 @@ class SyncToIcebergDoFn(DoFn):
         native_table: str,
         iceberg_table: str,
         lookback_minutes: int = 30,
-        merge_query: Optional[str] = None
+        merge_query: str = None
     ):
         """
         Initialize Iceberg sync.
@@ -56,7 +56,7 @@ class SyncToIcebergDoFn(DoFn):
             native_table: Source table (Native CDC)
             iceberg_table: Target table (Iceberg Historical)
             lookback_minutes: Query lookback window
-            merge_query: Custom MERGE query template (optional).
+            merge_query: MERGE query template from config.
                          Supports placeholders: {iceberg_table}, {native_table}, {lookback_minutes}
         """
         self.project_id = project_id
@@ -71,45 +71,6 @@ class SyncToIcebergDoFn(DoFn):
         self._client = bigquery.Client(project=self.project_id)
         LOGGER.info(f"[SyncToIcebergDoFn] Initialized: {self.native_table} -> {self.iceberg_table}")
 
-    def _get_default_merge_query(self) -> str:
-        """Return default MERGE query for ms_personas table."""
-        return f"""
-        MERGE `{self.iceberg_table}` AS T
-        USING (
-            SELECT * EXCEPT(rn)
-            FROM (
-                SELECT *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY memberId
-                        ORDER BY updated_date DESC
-                    ) AS rn
-                FROM `{self.native_table}`
-                WHERE COALESCE(updated_date, CURRENT_TIMESTAMP()) >=
-                      TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {self.lookback_minutes} MINUTE)
-            )
-            WHERE rn = 1
-        ) AS S
-        ON T.memberId = S.memberId
-
-        WHEN MATCHED AND S.updated_date > T.updated_date THEN
-            UPDATE SET
-                accountId = S.accountId,
-                dateOfBirth = S.dateOfBirth,
-                gender = S.gender,
-                hasEmail = S.hasEmail,
-                hasMobile = S.hasMobile,
-                languagePrefer = S.languagePrefer,
-                nationalityId = S.nationalityId,
-                profileId = S.profileId,
-                updated_date = S.updated_date
-
-        WHEN NOT MATCHED THEN
-            INSERT (accountId, dateOfBirth, gender, hasEmail, hasMobile,
-                    languagePrefer, memberId, nationalityId, profileId, updated_date)
-            VALUES (S.accountId, S.dateOfBirth, S.gender, S.hasEmail, S.hasMobile,
-                    S.languagePrefer, S.memberId, S.nationalityId, S.profileId, S.updated_date)
-        """
-
     def process(self, trigger_element, window=DoFn.WindowParam):
         """Execute MERGE query to sync data to Iceberg."""
         window_start = datetime.fromtimestamp(window.start.micros / 1e6, tz=timezone.utc)
@@ -117,15 +78,21 @@ class SyncToIcebergDoFn(DoFn):
 
         LOGGER.info(f"[SyncToIcebergDoFn] Triggered: window {window_start.isoformat()} - {window_end.isoformat()}")
 
-        # Use custom merge query if provided, otherwise use default
-        if self.merge_query_template:
-            merge_query = self.merge_query_template.format(
-                iceberg_table=self.iceberg_table,
-                native_table=self.native_table,
-                lookback_minutes=self.lookback_minutes
-            )
-        else:
-            merge_query = self._get_default_merge_query()
+        # merge_query must be provided from config
+        if not self.merge_query_template:
+            LOGGER.error("[SyncToIcebergDoFn] merge_query not provided in config")
+            yield {
+                'window_end': window_end.isoformat(),
+                'status': 'failed',
+                'error': 'merge_query not configured'
+            }
+            return
+
+        merge_query = self.merge_query_template.format(
+            iceberg_table=self.iceberg_table,
+            native_table=self.native_table,
+            lookback_minutes=self.lookback_minutes
+        )
 
         try:
             job = self._client.query(merge_query)
@@ -189,12 +156,6 @@ class AddWindowInfoFn(DoFn):
 class WriteParquetByWindowFn(DoFn):
     """Write Parquet files to S3 grouped by window."""
 
-    # Default date columns for ms_member pipeline
-    DEFAULT_DATE_COLUMNS = [
-        'birth_date', 'consent_date', 'created_date', 'register_date',
-        'employee_join_date', 'employee_resign_date', 'passport_exp', 'updated_date'
-    ]
-
     def __init__(
         self,
         base_path: str,
@@ -209,12 +170,12 @@ class WriteParquetByWindowFn(DoFn):
             base_path: S3 base path (e.g., s3://bucket/prefix)
             schema: PyArrow schema for Parquet
             date_columns: List of column names to convert to date type.
-                          If None, uses DEFAULT_DATE_COLUMNS.
+                          Should be provided from config. If None, no date conversion is done.
             output_filename: Name of the output Parquet file (default: ms-member.parquet)
         """
         self.base_path = base_path
         self.schema = schema
-        self.date_columns = date_columns if date_columns is not None else self.DEFAULT_DATE_COLUMNS
+        self.date_columns = date_columns or []
         self.output_filename = output_filename
 
     def process(self, group):
@@ -261,33 +222,24 @@ class WriteParquetByWindowFn(DoFn):
 class MappingRefreshDoFn(DoFn):
     """Refresh mapping table periodically from BigQuery."""
 
-    def __init__(self, mapping_table: str, project_id: str):
+    def __init__(self, mapping_table: str, project_id: str, query: Optional[str] = None):
         """
         Initialize mapping refresh.
 
         Args:
             mapping_table: Full table path (project.dataset.table)
             project_id: GCP project ID
+            query: Custom SQL query for mapping data (optional).
+                   If not provided, uses default query based on mapping_table.
         """
         self.mapping_table = mapping_table
         self.project_id = project_id
+        self.query_template = query
         LOGGER.info(f"[MappingRefreshDoFn] Initialized with table: {mapping_table}")
 
-    def process(self, element):
-        """
-        Refresh mapping from BigQuery.
-
-        Args:
-            element: Trigger element (from PeriodicImpulse)
-
-        Yields:
-            Dictionary containing mapping_dict and schemas_dict
-        """
-        try:
-            client = bigquery.Client(project=self.project_id)
-            LOGGER.info("[MappingRefreshDoFn] Querying mapping table")
-
-            query = f"""
+    def _get_default_query(self) -> str:
+        """Return default query for mapping table."""
+        return f"""
             SELECT * EXCEPT(row_num) FROM (
                 SELECT
                     reconcile_column_name,
@@ -303,6 +255,23 @@ class MappingRefreshDoFn(DoFn):
             )
             WHERE row_num = 1
             """
+
+    def process(self, element):
+        """
+        Refresh mapping from BigQuery.
+
+        Args:
+            element: Trigger element (from PeriodicImpulse)
+
+        Yields:
+            Dictionary containing mapping_dict and schemas_dict
+        """
+        try:
+            client = bigquery.Client(project=self.project_id)
+            LOGGER.info("[MappingRefreshDoFn] Querying mapping table")
+
+            # Use custom query if provided, otherwise use default
+            query = self.query_template if self.query_template else self._get_default_query()
 
             try:
                 results = client.query(query).result()

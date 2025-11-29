@@ -1,10 +1,11 @@
 """
-Generic Beam pipeline steps for dataflow_common.
+Generic Beam pipeline Step classes for dataflow_common.
 
-This module serves as an index for importing steps from:
-- batch_step: Steps for batch pipelines (ms_member_short)
-- stream_step: DoFns for streaming pipelines (ms_member_realtime)
-- streaming_step: Step wrapper classes for streaming pipelines (config-driven)
+This module serves as an index for importing Step classes from:
+- batch_step: Step classes for batch pipelines (ms_member_short)
+- streaming_step: Step classes for streaming pipelines (config-driven)
+
+For DoFn classes, import from dataflow_common.steps.dofns instead.
 """
 from __future__ import annotations
 
@@ -29,25 +30,7 @@ from dataflow_common.steps.batch_step import (
 )
 
 # =============================================================================
-# STREAM PIPELINE DoFns
-# =============================================================================
-from dataflow_common.steps.stream_step import (
-    SyncToIcebergDoFn,
-    AddWindowInfoFn,
-    WriteParquetByWindowFn,
-    MappingRefreshDoFn,
-    ExtractPersonasDoFn,
-    FetchFromBigtableDoFn,
-    FilterEmptyMemberIdDoFn,
-    TransformSchemasDoFn,
-    FullfillSchemasDoFn,
-    WriteToBigLakeDoFn,
-    MapToCdcTableRow,
-    AddCDCMetadataDoFn,
-)
-
-# =============================================================================
-# STREAM PIPELINE STEP WRAPPERS (for Orchestrator/config-driven pipelines)
+# STREAMING PIPELINE STEPS
 # =============================================================================
 from dataflow_common.steps.streaming_step import (
     RefreshMappingTableStep,
@@ -80,21 +63,7 @@ __all__ = [
     "WriteToBigQueryStep",
     "WriteGCSStep",
 
-    # Stream pipeline DoFns
-    "SyncToIcebergDoFn",
-    "AddWindowInfoFn",
-    "WriteParquetByWindowFn",
-    "MappingRefreshDoFn",
-    "ExtractPersonasDoFn",
-    "FetchFromBigtableDoFn",
-    "FilterEmptyMemberIdDoFn",
-    "TransformSchemasDoFn",
-    "FullfillSchemasDoFn",
-    "WriteToBigLakeDoFn",
-    "MapToCdcTableRow",
-    "AddCDCMetadataDoFn",
-
-    # Streaming Step wrappers (config-driven)
+    # Streaming pipeline steps
     "RefreshMappingTableStep",
     "ReadFromPubSubStep",
     "ExtractPersonasStep",
