@@ -415,6 +415,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'fastavro>=1.9.0',
         'pyarrow==14.0.2',
         'pandas>=1.5.0',
+        'numpy<2',  # CRITICAL: pyarrow requires numpy 1.x
         # S3 dependencies - versions MUST be compatible!
         's3fs==2024.6.1',
         'fsspec==2024.6.1',

@@ -252,10 +252,12 @@ dataflow_job = BeamRunPythonPipelineOperator(
     # 1) ฝั่ง Composer (driver)
     # ----------------------------
     # Python dependencies
+    # TESTED COMPATIBLE SET - MUST match Dockerfile SDK version!
     py_requirements=[
-        'apache-beam[gcp]==2.59.0',
+        'apache-beam[gcp]==2.69.0',  # MUST match Dockerfile SDK version
         'google-cloud-bigquery==3.25.0',
-        'pyarrow>=12.0.0',
+        'pyarrow==14.0.2',
+        'numpy<2',  # CRITICAL: pyarrow requires numpy 1.x
         'pyyaml>=6.0',
         '/home/airflow/gcs/dags/packages/dataflow_common-1.0.0-py3-none-any.whl',
     ],
