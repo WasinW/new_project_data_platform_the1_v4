@@ -42,12 +42,12 @@ setup(
         "pyarrow==14.0.2",           # Pin to avoid conflicts
         "pandas>=1.5.0",
         # S3 dependencies - versions MUST be compatible!
-        # s3fs==2024.6.1 → aiobotocore>=2.5.4,<2.14.0 → botocore>=1.34.41,<1.34.52
+        # s3fs==2024.6.1 → aiobotocore==2.13.0 → botocore>=1.34.70,<1.34.107
         "s3fs==2024.6.1",
         "fsspec==2024.6.1",
         "aiobotocore==2.13.0",
-        "boto3==1.34.51",
-        "botocore==1.34.51",
+        "boto3==1.34.106",
+        "botocore==1.34.106",
         "pyyaml>=6.0",
         "fastavro>=1.9.0",
     ],

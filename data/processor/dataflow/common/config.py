@@ -190,11 +190,25 @@ class MappingConfig:
     """Configuration for mapping table refresh in streaming pipelines"""
     table: str = ""
     refresh_interval_sec: int = 60
+    query: str = ""  # Optional custom query for mapping refresh
 
 @dataclass
 class WindowConfig:
     """Configuration for windowing in streaming pipelines"""
     size_sec: int = 300  # Default 5 minutes
+
+@dataclass
+class SyncConfig:
+    """Configuration for Iceberg sync in streaming pipelines"""
+    window_seconds: int = 10
+    lookback_minutes: int = 30
+    merge_query: str = ""  # MERGE query template for Iceberg sync
+
+@dataclass
+class ParquetConfig:
+    """Configuration for Parquet output in streaming pipelines"""
+    date_columns: List[str] = field(default_factory=list)
+    output_filename: str = "output.parquet"
 
 @dataclass
 class PipelineConfig:
@@ -213,9 +227,11 @@ class PipelineConfig:
     formats: FormatSpec = field(default_factory=FormatSpec)
     params: PipelineParams = field(default_factory=PipelineParams)
     io: IOConfig = field(default_factory=IOConfig)
-    streaming: Optional[StreamingConfig] = None  # เพิ่มนี้
-    mapping: Optional[MappingConfig] = None  # For streaming pipelines
-    window: Optional[WindowConfig] = None    # For streaming pipelines
+    streaming: Optional[StreamingConfig] = None
+    mapping: Optional[MappingConfig] = None   # For streaming pipelines
+    window: Optional[WindowConfig] = None     # For streaming pipelines
+    sync: Optional[SyncConfig] = None         # For Iceberg sync
+    parquet: Optional[ParquetConfig] = None   # For Parquet output
     plan: List[Dict[str, Any]] = field(default_factory=list)
     defaults_file: Optional[str] = None
 
@@ -267,6 +283,16 @@ class PipelineConfig:
         if "window" in data:
             window_spec = WindowConfig(**data["window"])
 
+        # Build sync config if present (for Iceberg sync)
+        sync_spec = None
+        if "sync" in data:
+            sync_spec = SyncConfig(**data["sync"])
+
+        # Build parquet config if present
+        parquet_spec = None
+        if "parquet" in data:
+            parquet_spec = ParquetConfig(**data["parquet"])
+
         return PipelineConfig(
             name=data["pipeline"].get("name"),
             mode=data["pipeline"].get("mode"),
@@ -280,6 +306,8 @@ class PipelineConfig:
             streaming=streaming_spec,
             mapping=mapping_spec,
             window=window_spec,
+            sync=sync_spec,
+            parquet=parquet_spec,
         )
 
 
