@@ -1,0 +1,14 @@
+[
+  {
+    "RECONCILE_COLUMN_NAME": "MEMBER_NUMBER",
+    "MAPPING_COLUMN_NAME": "profiles.memberId",
+    "RECONCILE_RETRIEVED": true,
+    "RECONCILE_CONFIRMED": false
+  },
+  {
+    "RECONCILE_COLUMN_NAME": "EMAIL",
+    "MAPPING_COLUMN_NAME": "profiles.email",
+    "RECONCILE_RETRIEVED": true,
+    "RECONCILE_CONFIRMED": true
+  }
+]
