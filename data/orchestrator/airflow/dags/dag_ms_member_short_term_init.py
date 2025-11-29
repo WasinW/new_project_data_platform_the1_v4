@@ -205,9 +205,10 @@ dataflow_job = BeamRunPythonPipelineOperator(
         
         # Worker configuration
         # 'worker_machine_type': 'n1-standard-2',
-        'worker_machine_type': 'n1-standard-4',
+        # 'worker_machine_type': 'n1-standard-4',  # 15GB RAM - ไม่พอสำหรับ heap 20GB
+        'worker_machine_type': 'n1-standard-8',  # 30GB RAM - พอสำหรับ heap 20GB
         'max_num_workers': 8,
-        'num_workers': 4,
+        'num_workers': 2,  # ลดลงเพราะ machine ใหญ่ขึ้น
         'disk_size_gb': 100,
         'number_of_worker_harness_threads': 8,
         'save_main_session': True,
