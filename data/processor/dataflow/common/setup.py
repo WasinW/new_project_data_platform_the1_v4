@@ -31,17 +31,25 @@ setup(
     ],
     package_dir={'dataflow_common': '.'},
     python_requires=">=3.9",
+    # TESTED COMPATIBLE SET - Must match Dockerfile versions!
+    # s3fs → aiobotocore → botocore chain has STRICT version requirements
+    # See: https://stackoverflow.com/questions/75743038
     install_requires=[
-        "apache-beam[gcp]>=2.59.0",
+        "apache-beam[gcp]==2.59.0",  # MUST match Dockerfile SDK version
         "google-cloud-bigquery==3.25.0",
         "google-cloud-bigtable>=2.26.0",
         "google-cloud-pubsub>=2.23.1",
-        "pyarrow>=14.0.0",
+        "pyarrow==14.0.2",           # Pin to avoid conflicts
         "pandas>=1.5.0",
-        "s3fs>=2023.1.0",      # Required for S3 Parquet writes
-        "fsspec>=2023.1.0",    # Required for filesystem abstraction
-        "boto3>=1.28.0",       # Required for AWS S3 access
+        # S3 dependencies - versions MUST be compatible!
+        # s3fs==2024.6.1 → aiobotocore>=2.5.4,<2.14.0 → botocore>=1.34.41,<1.34.52
+        "s3fs==2024.6.1",
+        "fsspec==2024.6.1",
+        "aiobotocore==2.13.0",
+        "boto3==1.34.51",
+        "botocore==1.34.51",
         "pyyaml>=6.0",
+        "fastavro>=1.9.0",
     ],
     # Include all Python files
     include_package_data=False,

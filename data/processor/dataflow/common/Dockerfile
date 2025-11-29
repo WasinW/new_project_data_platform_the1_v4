@@ -32,26 +32,39 @@
 # WORKDIR /
 
 # --------------------------------- VERSION FIX ---------------------------------
+# TESTED COMPATIBLE SET - All versions must match across driver and worker!
 FROM apache/beam_python3.11_sdk:2.59.0
 
 ENV RUN_PYTHON_SDK_IN_DEFAULT_ENVIRONMENT=1
 
-# Install boto3 dependencies ตามลำดับ
+# CRITICAL: boto3/botocore/aiobotocore versions must be compatible with s3fs
+# s3fs==2024.6.1 → aiobotocore>=2.5.4,<2.14.0 → botocore>=1.34.41,<1.34.52
+# boto3 version must match botocore exactly!
 RUN pip install --no-cache-dir --no-deps \
     six==1.16.0 \
     python-dateutil==2.9.0.post0 \
     jmespath==1.0.1 \
     urllib3==1.26.18 \
-    botocore==1.34.106 \
+    botocore==1.34.51 \
     s3transfer==0.10.1 \
-    boto3==1.34.106
+    boto3==1.34.51
 
-# Install s3fs and other dependencies
+# Install aiobotocore (compatible with botocore 1.34.51)
+RUN pip install --no-cache-dir --no-deps \
+    aiohttp>=3.9.0 \
+    aioitertools>=0.11.0 \
+    aiobotocore==2.13.0
+
+# Install s3fs and other dependencies (s3fs 2024.6.1 works with aiobotocore 2.13.0)
 RUN pip install --no-cache-dir \
-    's3fs>=2024.6.0,<2025' \
+    s3fs==2024.6.1 \
+    fsspec==2024.6.1 \
     pyarrow==14.0.2 \
     google-cloud-bigquery==3.25.0 \
-    pyyaml==6.0.1
+    google-cloud-bigtable>=2.26.0 \
+    pyyaml==6.0.1 \
+    fastavro>=1.9.0 \
+    pandas>=1.5.0
 
 # Copy และ install wheel
 COPY dist/dataflow_common-1.0.0-py3-none-any.whl /tmp/

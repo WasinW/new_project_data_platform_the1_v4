@@ -407,15 +407,21 @@ dataflow_job = BeamRunPythonPipelineOperator(
         },
     },
     # Python dependencies for driver (Composer/Airflow)
+    # TESTED COMPATIBLE SET - MUST match Dockerfile SDK version!
+    # Driver (Composer) and Worker (Dataflow) must use same Beam version
     py_requirements=[
-        'apache-beam[gcp]==2.69.0',
+        'apache-beam[gcp]==2.59.0',  # MUST match Dockerfile SDK version
         'google-cloud-bigquery==3.25.0',
-        'fastavro',
-        'pyarrow>=12.0.0',
+        'fastavro>=1.9.0',
+        'pyarrow==14.0.2',
         'pandas>=1.5.0',
-        'fsspec>=2023.1.0',
+        # S3 dependencies - versions MUST be compatible!
+        's3fs==2024.6.1',
+        'fsspec==2024.6.1',
+        'aiobotocore==2.13.0',
+        'boto3==1.34.51',
+        'botocore==1.34.51',
         'pyyaml>=6.0',
-        'boto3>=1.28.0',
         # dataflow_common wheel for Composer/Airflow driver
         '/home/airflow/gcs/dags/packages/dataflow_common-1.0.0-py3-none-any.whl',
     ],
