@@ -375,8 +375,8 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
-        # SDK container
-        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.07',
+        # SDK container - uses Airflow variable updated by GitLab CI
+        'sdk_container_image': '{{ var.value.dataflow_common_image }}',
         'sdk_location': 'container',
 
         # Experiments
