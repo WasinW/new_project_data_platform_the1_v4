@@ -54,16 +54,15 @@ class RefreshMappingTableStep(BaseStep):
 
         LOGGER.info(f"[{self.step_id}] Refreshing mapping table every {fire_interval}s")
         LOGGER.info(f"[{self.step_id}] Mapping table: {mapping_table}")
+        if query:
+            LOGGER.info(f"[{self.step_id}] Using custom query from config")
 
-        # Create DoFn with parameters
+        # Create DoFn with parameters (including query from config)
         mapping_dofn = MappingRefreshDoFn(
             mapping_table=mapping_table,
-            project_id=self.config.io.bq.get('project')
+            project_id=self.config.io.bq.get('project'),
+            query=query
         )
-
-        # Override query if provided
-        if query:
-            mapping_dofn.query_template = query
 
         # Build pipeline: PeriodicImpulse -> DoFn -> GlobalWindows
         result = (
