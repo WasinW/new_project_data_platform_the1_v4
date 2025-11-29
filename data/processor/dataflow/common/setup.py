@@ -25,22 +25,23 @@ setup(
         'dataflow_common',
         'dataflow_common.connectors',
         'dataflow_common.steps',
+        'dataflow_common.steps.dofns',  # Added: DoFn classes subpackage
         'dataflow_common.transforms',
         'dataflow_common.utils',
     ],
     package_dir={'dataflow_common': '.'},
     python_requires=">=3.9",
     install_requires=[
-        "apache-beam[gcp]==2.59.0",
+        "apache-beam[gcp]>=2.59.0",
         "google-cloud-bigquery==3.25.0",
         "google-cloud-bigtable>=2.26.0",
         "google-cloud-pubsub>=2.23.1",
         "pyarrow>=14.0.0",
         "pandas>=1.5.0",
-        # "s3fs>=2023.1.0",
-        # "fsspec>=2023.1.0",
+        "s3fs>=2023.1.0",      # Required for S3 Parquet writes
+        "fsspec>=2023.1.0",    # Required for filesystem abstraction
+        "boto3>=1.28.0",       # Required for AWS S3 access
         "pyyaml>=6.0",
-        # "boto3>=1.26.0",
     ],
     # Include all Python files
     include_package_data=False,
