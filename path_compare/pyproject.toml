@@ -15,6 +15,7 @@ dependencies = [
     "google-cloud-bigtable>=2.26.0",
     "google-cloud-pubsub>=2.23.1",
     "pyarrow==14.0.2",
+    "numpy<2",  # CRITICAL: pyarrow 14.x requires numpy 1.x, numpy 2.x causes incompatibility
     "pandas>=1.5.0",
     "fastavro>=1.9.0",
     # S3 dependencies - versions MUST be compatible!

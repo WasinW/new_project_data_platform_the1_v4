@@ -54,14 +54,21 @@ RUN pip install --no-cache-dir \
     fastavro>=1.9.0 \
     pandas>=1.5.0
 
-# Copy และ install wheel
+# Copy และ install wheel (--no-deps because dependencies are already installed above)
 COPY dist/dataflow_common-1.0.0-py3-none-any.whl /tmp/
 
-# RUN pip install --no-cache-dir /tmp/dataflow_common-1.0.0-py3-none-any.whl && \
 RUN pip install --no-cache-dir --no-deps /tmp/dataflow_common-1.0.0-py3-none-any.whl && \
     rm /tmp/dataflow_common-1.0.0-py3-none-any.whl
 
-# Verify
-RUN python -c "from dataflow_common.config import load_config; print('✅ Import OK')"
+# Comprehensive verification - all these imports must succeed for SDK harness to register
+# If any import fails, worker will crash with "SDK harnesses are not healthy" error
+RUN python -c "\
+from dataflow_common.config import load_config; \
+from dataflow_common.orchestrator import Orchestrator; \
+from dataflow_common.registry import STEP_REGISTRY; \
+from dataflow_common.steps import ReadBQQueryStep, WriteParquetStep; \
+print('✅ All dataflow_common imports successful'); \
+print(f'✅ Registered steps: {len(STEP_REGISTRY)} steps available'); \
+"
 
 WORKDIR /

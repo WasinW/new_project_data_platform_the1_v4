@@ -210,7 +210,11 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'num_workers': 2,
         'disk_size_gb': 100,
         'number_of_worker_harness_threads': 4,
-        'save_main_session': False,
+        # IMPORTANT: save_main_session should be True when using custom packages
+        # This ensures global context (imports, functions) are serialized to workers
+        # Setting to False can cause "SDK harnesses are not healthy" if workers
+        # cannot find the necessary code/modules
+        'save_main_session': True,
         # ------------------------------------------------------------------------------------
         # Standard persistent disk (lowest cost but slowest)
         # 'worker_disk_type': 'compute.googleapis.com/projects//zones//diskTypes/pd-standard',
@@ -221,16 +225,18 @@ dataflow_job = BeamRunPythonPipelineOperator(
         # ------------------------------------------------------------------------------------
 
         'experiments': [
-            'use_runner_v2'
-            ,'enable_stackdriver_agent_metrics'
-            ,'worker_log_level_debug'
-            ,'shuffle_mode=service' 
+            'use_runner_v2',
+            'enable_stackdriver_agent_metrics',
+            # 'worker_log_level_debug',  # Disabled: can cause excessive logging
+            'shuffle_mode=service',
             #  shuffle_mode : +$0.048/GB shuffled (~1.6 bath/GB)
-            # Reduced disk I/O on worker , Better Scale , Reduced issue disk space exhaustion
-            ,'worker_heap_size_mb=15000' 
-            , 'no_use_multiple_sdk_containers'
-            # 'min_cpu_platform=Intel Skylake'  # ← ใส่ตรงนี้ถ้าอยากใช้
-            ],
+            # Reduced disk I/O on worker, Better Scale, Reduced issue disk space exhaustion
+            'worker_heap_size_mb=15000',
+            # REMOVED 'no_use_multiple_sdk_containers' - this experiment can cause
+            # "SDK harnesses are not healthy" errors with runner_v2 when the single
+            # container fails to start. Let Dataflow manage SDK containers automatically.
+            # 'min_cpu_platform=Intel Skylake',  # Optional: for specific CPU requirements
+        ],
         # Control log levels
         # 'defaultWorkerLogLevel': 'INFO',    # Worker logs
         # 'sdkHarnessLogLevel': 'WARNING',    # SDK logs
