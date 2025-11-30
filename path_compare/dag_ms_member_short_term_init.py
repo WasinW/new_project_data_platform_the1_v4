@@ -204,12 +204,16 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'subnetwork': '{{ var.value.dataflow_subnetwork }}',
         
         # Worker configuration
-        # 'worker_machine_type': 'n1-standard-2',
-        'worker_machine_type': 'n1-standard-8',
+        # IMPORTANT: N1 machines have known issues with SDK harness disconnection
+        # See: https://github.com/apache/beam/issues/25273
+        # Recommendation: Use N2 machines instead of N1 for better stability
+        'worker_machine_type': 'n2-standard-4',  # Changed from n1-standard-8 to n2-standard-4
         'max_num_workers': 8,
         'num_workers': 2,
         'disk_size_gb': 100,
-        'number_of_worker_harness_threads': 4,
+        # REMOVED: 'number_of_worker_harness_threads': 4
+        # This setting can cause "Waiting for X of X SDK Harnesses to register" issues
+        # Let Dataflow manage harness threads automatically based on machine type
         # IMPORTANT: save_main_session should be True when using custom packages
         # This ensures global context (imports, functions) are serialized to workers
         # Setting to False can cause "SDK harnesses are not healthy" if workers

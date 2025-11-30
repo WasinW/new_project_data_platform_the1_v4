@@ -32,9 +32,24 @@
 # WORKDIR /
 
 # --------------------------------- VERSION FIX ---------------------------------
-# TESTED COMPATIBLE SET - All versions must match across driver and worker!
-FROM apache/beam_python3.11_sdk:2.69.0
-# FROM --platform=linux/amd64 apache/beam_python3.11_sdk:2.59.0
+# CRITICAL: Python version MUST match Composer environment!
+# Cloud Composer 2 typically uses Python 3.10 or 3.11
+# Check your Composer environment's Python version and match it here!
+#
+# To check Composer Python version, run in Composer:
+#   python --version
+#
+# Available base images:
+#   - apache/beam_python3.9_sdk:2.69.0
+#   - apache/beam_python3.10_sdk:2.69.0  <- Recommended for Composer 2
+#   - apache/beam_python3.11_sdk:2.69.0
+#
+# IMPORTANT: If Python version mismatch between driver and worker,
+# SDK harnesses will fail to register!
+
+FROM apache/beam_python3.10_sdk:2.69.0
+# Alternative: Use Python 3.11 if your Composer uses Python 3.11
+# FROM apache/beam_python3.11_sdk:2.69.0
 
 ENV RUN_PYTHON_SDK_IN_DEFAULT_ENVIRONMENT=1
 
@@ -60,9 +75,16 @@ COPY dist/dataflow_common-1.0.0-py3-none-any.whl /tmp/
 RUN pip install --no-cache-dir --no-deps /tmp/dataflow_common-1.0.0-py3-none-any.whl && \
     rm /tmp/dataflow_common-1.0.0-py3-none-any.whl
 
+# Verify no dependency conflicts (CRITICAL for SDK harness to work)
+RUN pip check && echo "✅ No dependency conflicts found"
+
 # Comprehensive verification - all these imports must succeed for SDK harness to register
 # If any import fails, worker will crash with "SDK harnesses are not healthy" error
 RUN python -c "\
+import sys; \
+import apache_beam; \
+print(f'Python version: {sys.version}'); \
+print(f'Apache Beam version: {apache_beam.__version__}'); \
 from dataflow_common.config import load_config; \
 from dataflow_common.orchestrator import Orchestrator; \
 from dataflow_common.registry import STEP_REGISTRY; \
