@@ -47,9 +47,9 @@
 # IMPORTANT: If Python version mismatch between driver and worker,
 # SDK harnesses will fail to register!
 
-FROM apache/beam_python3.10_sdk:2.69.0
-# Alternative: Use Python 3.11 if your Composer uses Python 3.11
-# FROM apache/beam_python3.11_sdk:2.69.0
+# CRITICAL: Must match Composer's Python version!
+# Your Composer uses Python 3.11, so we MUST use Python 3.11 here
+FROM apache/beam_python3.11_sdk:2.69.0
 
 ENV RUN_PYTHON_SDK_IN_DEFAULT_ENVIRONMENT=1
 
