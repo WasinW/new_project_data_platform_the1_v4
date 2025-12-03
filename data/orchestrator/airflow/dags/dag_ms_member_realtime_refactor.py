@@ -46,6 +46,212 @@ GCP_CONN_ID = "google_cloud_default"
 REGION = "asia-southeast1"
 JOB_NAME = 'ms-member-realtime-refactor'
 
+def check_job_launch_status(**context):
+    """
+    Verify that the streaming job launched successfully.
+    
+    This function searches for the job by name instead of relying on xcom,
+    which is more reliable for BeamRunPythonPipelineOperator with wait_until_finished=False.
+    """
+    logger.info(f"Checking for Dataflow job: {JOB_NAME}")
+    
+    # Method 1: Try to get job ID from xcom (may or may not work)
+    job_id = None
+    try:
+        job_info = context['task_instance'].xcom_pull(task_ids='run_dataflow_pipeline')
+        logger.info(f"XCom pull result: {job_info} (type: {type(job_info)})")
+        
+        if job_info:
+            if isinstance(job_info, dict):
+                # Try different possible keys
+                job_id = job_info.get('id') or job_info.get('dataflow_job_id') or job_info.get('job_id')
+            elif isinstance(job_info, str):
+                job_id = job_info
+    except Exception as e:
+        logger.warning(f"Failed to get job ID from xcom: {e}")
+    
+    # Method 2: If xcom didn't work, search by job name
+    if not job_id:
+        logger.info(f"XCom job_id not found, searching by job name pattern: {JOB_NAME}*")
+        
+        # Wait a bit for job to appear in listing
+        time.sleep(10)
+        
+        # List recent jobs matching the name pattern
+        result = subprocess.run([
+            'gcloud', 'dataflow', 'jobs', 'list',
+            f'--region={REGION}',
+            '--status=active',
+            f'--filter=name~{JOB_NAME}',
+            '--format=json',
+            '--limit=5'
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0 and result.stdout:
+            try:
+                jobs = json.loads(result.stdout)
+                if jobs:
+                    # Get the most recent job (first in list)
+                    job_id = jobs[0].get('id')
+                    logger.info(f"Found job by name search: {job_id}")
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse job list: {result.stdout}")
+    
+    if not job_id:
+        raise Exception(f"Could not find Dataflow job matching name: {JOB_NAME}")
+    
+    logger.info(f"Checking status for job: {job_id}")
+    
+    # Wait for job to initialize
+    time.sleep(30)
+    
+    # Check job status
+    result = subprocess.run([
+        'gcloud', 'dataflow', 'jobs', 'describe',
+        job_id,
+        f'--region={REGION}',
+        '--format=json'
+    ], capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        raise Exception(f"Failed to get job status: {result.stderr}")
+    
+    job_details = json.loads(result.stdout)
+    state = job_details.get('currentState', job_details.get('state', 'UNKNOWN'))
+    
+    logger.info(f"Job ID: {job_id}")
+    logger.info(f"Job State: {state}")
+    logger.info(f"Create Time: {job_details.get('createTime')}")
+    
+    # Check if job started successfully
+    valid_states = [
+        'JOB_STATE_PENDING',
+        'JOB_STATE_RUNNING', 
+        'JOB_STATE_QUEUED',
+        'JOB_STATE_DRAINING',  # Still considered "running"
+    ]
+    
+    if state in valid_states:
+        logger.info(f"✅ Job launched successfully! State: {state}")
+        
+        # Push job_id to xcom for downstream tasks
+        context['task_instance'].xcom_push(key='dataflow_job_id', value=job_id)
+        
+        return {
+            'job_id': job_id,
+            'state': state,
+            'status': 'success'
+        }
+    else:
+        raise Exception(f"Job failed to launch. State: {state}")
+
+
+def periodic_health_check(**context):
+    """
+    Periodic health check for streaming job.
+    Uses xcom from verify_job_launch or searches by name.
+    """
+    # Try to get job ID from verify_job_launch task first
+    job_id = context['task_instance'].xcom_pull(
+        task_ids='verify_job_launch', 
+        key='dataflow_job_id'
+    )
+    
+    # Fallback: try from run_dataflow_pipeline
+    if not job_id:
+        job_info = context['task_instance'].xcom_pull(task_ids='run_dataflow_pipeline')
+        if job_info:
+            if isinstance(job_info, dict):
+                job_id = job_info.get('id') or job_info.get('dataflow_job_id')
+            elif isinstance(job_info, str):
+                job_id = job_info
+    
+    # Fallback: search by name
+    if not job_id:
+        result = subprocess.run([
+            'gcloud', 'dataflow', 'jobs', 'list',
+            f'--region={REGION}',
+            '--status=active',
+            f'--filter=name~{JOB_NAME}',
+            '--format=json',
+            '--limit=1'
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0 and result.stdout:
+            try:
+                jobs = json.loads(result.stdout)
+                if jobs:
+                    job_id = jobs[0].get('id')
+            except:
+                pass
+    
+    if not job_id:
+        logger.warning("No job ID found")
+        raise AirflowSkipException("No job to monitor")
+    
+    # Check job health
+    result = subprocess.run([
+        'gcloud', 'dataflow', 'jobs', 'describe',
+        job_id,
+        f'--region={REGION}',
+        '--format=json'
+    ], capture_output=True, text=True)
+    
+    if result.returncode == 0:
+        job_details = json.loads(result.stdout)
+        state = job_details.get('currentState', job_details.get('state', 'UNKNOWN'))
+        
+        logger.info(f"Job {job_id} health check:")
+        logger.info(f"  State: {state}")
+        logger.info(f"  Create Time: {job_details.get('createTime')}")
+        logger.info(f"  Current State Time: {job_details.get('currentStateTime')}")
+        
+        # Check for warnings
+        if state == 'JOB_STATE_RUNNING':
+            logger.info("✅ Job is healthy and running")
+        elif state in ['JOB_STATE_PENDING', 'JOB_STATE_QUEUED']:
+            logger.warning(f"⚠️ Job is still starting: {state}")
+        else:
+            logger.error(f"❌ Job not in expected state: {state}")
+        
+        return {'job_id': job_id, 'state': state, 'healthy': state == 'JOB_STATE_RUNNING'}
+    else:
+        logger.error(f"Failed to check job health: {result.stderr}")
+        return {'job_id': job_id, 'healthy': False, 'error': result.stderr}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # ============================================
 # CUSTOM SENSOR FOR STREAMING JOBS
@@ -185,7 +391,11 @@ def get_secret_value(secret_id, project_id):
     name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
     try:
         response = client.access_secret_version(request={"name": name})
-        return response.payload.data.decode("UTF-8")
+        # for stg/prod
+        return json.loads(response.payload.data.decode("UTF-8"))
+        # for dev (single value)
+        # return response.payload.data.decode("UTF-8")
+
     except Exception as e:
         logger.error(f"Failed to get secret {secret_id}: {e}")
         raise
@@ -193,8 +403,12 @@ def get_secret_value(secret_id, project_id):
 
 def get_aws_credentials(**context):
     """Get AWS credentials and push to XCom"""
-    access_key = get_secret_value('data-pipeline-aws-access-key', PROJECT_ID)
-    secret_key = get_secret_value('data-pipeline-aws-secret-key', PROJECT_ID)
+    # fot stg/prod
+    access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-access-key']
+    secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-secret-key']
+    # fot dev 
+    # access_key = get_secret_value('data-pipeline-aws-access-key', PROJECT_ID)
+    # secret_key = get_secret_value('data-pipeline-aws-secret-key', PROJECT_ID)
 
     # Push to XCom for next tasks
     context['ti'].xcom_push(key='aws_access_key', value=access_key)
@@ -203,86 +417,86 @@ def get_aws_credentials(**context):
     return {'status': 'credentials retrieved'}
 
 
-def check_job_launch_status(**context):
-    """
-    Verify that the streaming job launched successfully
-    This runs once after job submission
-    """
-    # Get job ID from previous task
-    job_info = context['task_instance'].xcom_pull(task_ids='run_dataflow_pipeline')
+# def check_job_launch_status(**context):
+#     """
+#     Verify that the streaming job launched successfully
+#     This runs once after job submission
+#     """
+#     # Get job ID from previous task
+#     job_info = context['task_instance'].xcom_pull(task_ids='run_dataflow_pipeline')
 
-    if not job_info or 'id' not in job_info:
-        raise Exception("Failed to get job ID from launch task")
+#     if not job_info or 'id' not in job_info:
+#         raise Exception("Failed to get job ID from launch task")
 
-    job_id = job_info['id']
-    logger.info(f"Checking launch status for job: {job_id}")
+#     job_id = job_info['id']
+#     logger.info(f"Checking launch status for job: {job_id}")
 
-    # Wait a bit for job to initialize
-    time.sleep(30)
+#     # Wait a bit for job to initialize
+#     time.sleep(30)
 
-    # Check job status using gcloud
-    result = subprocess.run([
-        'gcloud', 'dataflow', 'jobs', 'describe',
-        job_id,
-        f'--region={REGION}',
-        '--format=json'
-    ], capture_output=True, text=True)
+#     # Check job status using gcloud
+#     result = subprocess.run([
+#         'gcloud', 'dataflow', 'jobs', 'describe',
+#         job_id,
+#         f'--region={REGION}',
+#         '--format=json'
+#     ], capture_output=True, text=True)
 
-    if result.returncode != 0:
-        raise Exception(f"Failed to get job status: {result.stderr}")
+#     if result.returncode != 0:
+#         raise Exception(f"Failed to get job status: {result.stderr}")
 
-    job_details = json.loads(result.stdout)
-    state = job_details.get('state', 'UNKNOWN')
+#     job_details = json.loads(result.stdout)
+#     state = job_details.get('state', 'UNKNOWN')
 
-    logger.info(f"Job state: {state}")
+#     logger.info(f"Job state: {state}")
 
-    # Check if job started successfully
-    if state in ['JOB_STATE_PENDING', 'JOB_STATE_RUNNING', 'JOB_STATE_QUEUED']:
-        logger.info("Job launched successfully")
-        return job_id
-    else:
-        raise Exception(f"Job failed to launch. State: {state}")
+#     # Check if job started successfully
+#     if state in ['JOB_STATE_PENDING', 'JOB_STATE_RUNNING', 'JOB_STATE_QUEUED']:
+#         logger.info("Job launched successfully")
+#         return job_id
+#     else:
+#         raise Exception(f"Job failed to launch. State: {state}")
 
 
-def periodic_health_check(**context):
-    """
-    Periodic health check for streaming job
-    This can be scheduled to run periodically
-    """
-    # Get job ID
-    job_info = context['task_instance'].xcom_pull(task_ids='run_dataflow_pipeline')
-    job_id = job_info['id'] if job_info else None
+# def periodic_health_check(**context):
+#     """
+#     Periodic health check for streaming job
+#     This can be scheduled to run periodically
+#     """
+#     # Get job ID
+#     job_info = context['task_instance'].xcom_pull(task_ids='run_dataflow_pipeline')
+#     job_id = job_info['id'] if job_info else None
 
-    if not job_id:
-        logger.warning("No job ID found")
-        raise AirflowSkipException("No job to monitor")
+#     if not job_id:
+#         logger.warning("No job ID found")
+#         raise AirflowSkipException("No job to monitor")
 
-    # Check job health
-    result = subprocess.run([
-        'gcloud', 'dataflow', 'jobs', 'describe',
-        job_id,
-        f'--region={REGION}',
-        '--format=json'
-    ], capture_output=True, text=True)
+#     # Check job health
+#     result = subprocess.run([
+#         'gcloud', 'dataflow', 'jobs', 'describe',
+#         job_id,
+#         f'--region={REGION}',
+#         '--format=json'
+#     ], capture_output=True, text=True)
 
-    if result.returncode == 0:
-        job_details = json.loads(result.stdout)
-        state = job_details.get('state', 'UNKNOWN')
+#     if result.returncode == 0:
+#         job_details = json.loads(result.stdout)
+#         state = job_details.get('state', 'UNKNOWN')
 
-        # Log metrics
-        logger.info(f"Job {job_id} health check:")
-        logger.info(f"  State: {state}")
-        logger.info(f"  Create Time: {job_details.get('createTime')}")
-        logger.info(f"  Current State Time: {job_details.get('currentStateTime')}")
+#         # Log metrics
+#         logger.info(f"Job {job_id} health check:")
+#         logger.info(f"  State: {state}")
+#         logger.info(f"  Create Time: {job_details.get('createTime')}")
+#         logger.info(f"  Current State Time: {job_details.get('currentStateTime')}")
 
-        # Check for warnings
-        if state not in ['JOB_STATE_RUNNING']:
-            logger.warning(f"Job not in RUNNING state: {state}")
+#         # Check for warnings
+#         if state not in ['JOB_STATE_RUNNING']:
+#             logger.warning(f"Job not in RUNNING state: {state}")
 
-        return {'job_id': job_id, 'state': state, 'healthy': True}
-    else:
-        logger.error(f"Failed to check job health: {result.stderr}")
-        return {'job_id': job_id, 'healthy': False}
+#         return {'job_id': job_id, 'state': state, 'healthy': True}
+#     else:
+#         logger.error(f"Failed to check job health: {result.stderr}")
+#         return {'job_id': job_id, 'healthy': False}
 
 
 # ============================================
@@ -344,7 +558,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
     task_id='run_dataflow_pipeline',
     runner='DataflowRunner',
     # Use refactored pipeline script (path matches GitLab CI upload location)
-    py_file='{{ var.value.bucket_dataflow }}/scripts/ms_member_realtime_pipeline_refactor.py',
+    py_file='{{ var.value.bucket_composer }}/dataflow/scripts/ms_member_realtime_pipeline_refactor.py',
 
     # Dataflow pipeline options
     # ----------------------------
@@ -366,12 +580,14 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'max_num_workers': 8,
         'num_workers': 4,
         'disk_size_gb': 100,
-        'save_main_session': True,
         'number_of_worker_harness_threads': 8,
+        'save_main_session': True,
         'worker_disk_type': 'compute.googleapis.com/projects//zones//diskTypes/pd-ssd',
 
         # Streaming mode
-        'mode': 'streaming',
+        # 'project_id': PROJECT_ID,
+        # 'mode': 'streaming',
+        'streaming': True,
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
@@ -391,7 +607,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
 
         # Pipeline parameters - use refactored config (path matches GitLab CI upload location)
         'max_num_workers': 10,
-        'config_path': '{{ var.value.bucket_config }}/ms_member_realtime_refactor.yaml',
+        'config_path': '{{ var.value.bucket_composer }}/config/ms_member_realtime_refactor.yaml',
 
         # AWS S3 credentials
         's3_region_name': 'ap-southeast-1',
@@ -414,6 +630,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'google-cloud-bigquery==3.25.0',
         'fastavro>=1.9.0',
         'pyarrow==14.0.2',
+        'numpy<2',  # CRITICAL: pyarrow requires numpy 1.x
         'pandas>=1.5.0',
         # S3 dependencies - versions MUST be compatible!
         's3fs==2024.6.1',

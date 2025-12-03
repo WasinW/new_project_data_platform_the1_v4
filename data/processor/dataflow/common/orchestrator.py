@@ -140,7 +140,7 @@ class Orchestrator:
                         cfg.schema.bq.table = _format_value(cfg.schema.bq.table, cfg)
                     if cfg.schema.bq.query:
                         cfg.schema.bq.query = _format_value(cfg.schema.bq.query, cfg)
-                    LOGGER.debug("Schema fields formatted successfully")
+                    LOGGER.info("Schema fields formatted successfully")
             except Exception as e:
                 LOGGER.error(f"Error formatting schema fields: {e}")
                 raise
@@ -157,7 +157,7 @@ class Orchestrator:
                     # Use recursive formatting to handle nested params dicts
                     for key, val in list(spec.items()):
                         spec[key] = _format_spec_recursive(val, cfg)
-                    LOGGER.debug(f"Step {idx} spec formatted successfully")
+                    LOGGER.info(f"Step {idx} spec formatted successfully")
                 except Exception as e:
                     LOGGER.error(f"Error formatting step {idx} spec: {e}")
                     LOGGER.error(f"Step spec: {spec}")

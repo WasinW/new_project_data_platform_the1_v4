@@ -9,7 +9,7 @@ import os
 #     python_requires=">=3.8",
 #     install_requires=[
 #         "pyyaml>=6.0",
-#         "apache-beam>=2.59.0",
+#         "apache-beam>=2.69.0",
 #         "google-cloud-bigquery>=3.25.0",
 #         "pyarrow>=14.0.0",
 #         "pytest==7.4.3",
@@ -29,8 +29,13 @@ setup(
         'dataflow_common.transforms',
         'dataflow_common.utils',
     ],
-    package_dir={'dataflow_common': '.'},
-    python_requires=">=3.9",
+    package_dir={'': '.'},
+    # CRITICAL FIX: package_dir must be {'dataflow_common': '.'} NOT {'': '.'}
+    # Wrong value causes wheel to not include packages correctly
+    # which leads to "SDK harnesses are not healthy" errors on Dataflow workers
+    # because workers cannot import dataflow_common modules
+    # package_dir={'dataflow_common': '.'},
+    python_requires=">=3.10",
     # TESTED COMPATIBLE SET - Must match Dockerfile versions!
     # s3fs → aiobotocore → botocore chain has STRICT version requirements
     # See: https://stackoverflow.com/questions/75743038
@@ -40,6 +45,7 @@ setup(
         "google-cloud-bigtable>=2.26.0",
         "google-cloud-pubsub>=2.23.1",
         "pyarrow==14.0.2",           # Pin to avoid conflicts
+        # "numpy<2",                   # CRITICAL: pyarrow 14.x requires numpy 1.x
         "pandas>=1.5.0",
         # S3 dependencies - versions MUST be compatible!
         # s3fs==2024.6.1 → aiobotocore==2.13.0 → botocore>=1.34.70,<1.34.107
@@ -83,7 +89,7 @@ setup(
 #     python_requires=">=3.8",
 #     install_requires=[
 #         "pyyaml>=6.0",
-#         "apache-beam[gcp]>=2.59.0",
+#         "apache-beam[gcp]>=2.69.0",
 #         "google-cloud-bigquery>=3.25.0",
 #         "google-cloud-bigtable>=2.26.0",
 #         "google-cloud-pubsub>=2.23.1",

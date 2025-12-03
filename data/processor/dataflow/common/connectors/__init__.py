@@ -67,7 +67,7 @@ class BigQueryConnector:
                 LOGGER.warning("No project specified in BigQuery config, using default")
             
             LOGGER.info(f"[{label}] Reading BigQuery query from project: {project}")
-            LOGGER.debug(f"[{label}] Query (first 500 chars): {query[:500]}")
+            LOGGER.info(f"[{label}] Query (first 500 chars): {query[:500]}")
             
             # LOGGER.info("Reading BigQuery query: %s", query)
             result = pipeline | label >> ReadFromBigQuery(

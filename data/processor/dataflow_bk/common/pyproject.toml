@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dataflow_common"
+version = "1.0.0"
+requires-python = ">=3.8"
+dependencies = [
+    "pyyaml>=6.0",
+    "apache-beam[gcp]>=2.69.0",
+    "google-cloud-bigquery>=3.25.0",
+    "google-cloud-bigtable>=2.26.0",
+    "google-cloud-pubsub>=2.23.1",
+    "pyarrow>=14.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4.0",
+]
+
+[tool.setuptools]
+packages = ["dataflow_common"]
+
+[tool.setuptools.package-dir]
+dataflow_common = "."
+"dataflow_common.connectors" = "connectors"
+"dataflow_common.steps" = "steps"
+"dataflow_common.transforms" = "transforms"
+"dataflow_common.utils" = "utils"

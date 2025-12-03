@@ -59,20 +59,20 @@ def get_secret_value(secret_id, project_id):
     name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
     try:
         response = client.access_secret_version(request={"name": name})
-        return response.payload.data.decode("UTF-8")
+        return json.loads(response.payload.data.decode("UTF-8"))
     except Exception as e:
         logger.error(f"Failed to get secret {secret_id}: {e}")
         raise
 
 def get_aws_credentials(**context):
     """Get AWS credentials and push to XCom"""
-    access_key = get_secret_value('data-pipeline-aws-access-key', PROJECT_ID)
-    secret_key = get_secret_value('data-pipeline-aws-secret-key', PROJECT_ID)
-
+    access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-access-key']
+    secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-secret-key']
+    
     # Push to XCom for next tasks
     context['ti'].xcom_push(key='aws_access_key', value=access_key)
     context['ti'].xcom_push(key='aws_secret_key', value=secret_key)
-
+    
     return {'status': 'credentials retrieved'}
 
 # ============================================
@@ -194,7 +194,7 @@ get_credentials = PythonOperator(
 dataflow_job = BeamRunPythonPipelineOperator(
     task_id='run_dataflow_pipeline',
     runner='DataflowRunner',
-    py_file='{{ var.value.bucket_composer }}/dataflow/jobs/ms_member_short_pipeline.py',
+    py_file='{{ var.value.bucket_composer }}/dataflow/scripts/ms_member_short_pipeline.py',
 
     # Dataflow pipeline options
     # ----------------------------
@@ -233,7 +233,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         # Pipeline parameters
         'project_id': PROJECT_ID,
         'mode': 'batch',
-        'config_path': '{{ var.value.bucket_composer }}/config/ms_member/batch/ms_member_short.yaml',
+        'config_path': '{{ var.value.bucket_composer }}/config/ms_member_short.yaml',
         
         # AWS S3 credentials
         's3_region_name': 'ap-southeast-1',
@@ -253,7 +253,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
     # ----------------------------
     # Python dependencies
     py_requirements=[
-        'apache-beam[gcp]==2.59.0',
+        'apache-beam[gcp]==2.69.0',
         'google-cloud-bigquery==3.25.0',
         'pyarrow>=12.0.0',
         'pyyaml>=6.0',

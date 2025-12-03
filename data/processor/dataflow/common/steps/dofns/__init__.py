@@ -12,8 +12,8 @@ from __future__ import annotations
 # =============================================================================
 from dataflow_common.steps.dofns.stream import (
     SyncToIcebergDoFn,
-    AddWindowInfoFn,
-    WriteParquetByWindowFn,
+    # AddWindowInfoFn,
+    # WriteParquetByWindowFn,
     MappingRefreshDoFn,
     ExtractPersonasDoFn,
     FetchFromBigtableDoFn,
@@ -22,7 +22,9 @@ from dataflow_common.steps.dofns.stream import (
     FullfillSchemasDoFn,
     WriteToBigLakeDoFn,
     MapToCdcTableRow,
-    AddCDCMetadataDoFn,
+    # AddCDCMetadataDoFn,
+    # AddWindowPathDoFn,
+    # WriteParquetWithBeamFSDoFn,
 )
 
 # =============================================================================
@@ -36,8 +38,8 @@ from dataflow_common.steps.dofns.stream import (
 __all__ = [
     # Stream DoFns
     'SyncToIcebergDoFn',
-    'AddWindowInfoFn',
-    'WriteParquetByWindowFn',
+    # 'AddWindowInfoFn',
+    # 'WriteParquetByWindowFn',
     'MappingRefreshDoFn',
     'ExtractPersonasDoFn',
     'FetchFromBigtableDoFn',
@@ -46,7 +48,8 @@ __all__ = [
     'FullfillSchemasDoFn',
     'WriteToBigLakeDoFn',
     'MapToCdcTableRow',
-    'AddCDCMetadataDoFn',
-
+    # 'AddCDCMetadataDoFn',
+    # 'AddWindowPathDoFn',
+    # 'WriteParquetWithBeamFSDoFn',
     # Common DoFns (add here as they are created)
 ]

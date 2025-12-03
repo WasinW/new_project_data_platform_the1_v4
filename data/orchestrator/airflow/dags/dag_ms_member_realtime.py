@@ -43,7 +43,6 @@ GCP_CONN_ID = "google_cloud_default"
 REGION = "asia-southeast1"
 JOB_NAME = 'ms-member-realtime'
 
-
 # ============================================
 # CUSTOM SENSOR FOR STREAMING JOBS
 # ============================================
@@ -181,22 +180,20 @@ def get_secret_value(secret_id, project_id):
     name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
     try:
         response = client.access_secret_version(request={"name": name})
-        return response.payload.data.decode("UTF-8")
+        return json.loads(response.payload.data.decode("UTF-8"))
     except Exception as e:
         logger.error(f"Failed to get secret {secret_id}: {e}")
         raise
 
 def get_aws_credentials(**context):
     """Get AWS credentials and push to XCom"""
-    # access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_access_key']
-    # secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws_secret_key']
-    access_key = get_secret_value('data-pipeline-aws-access-key', PROJECT_ID)
-    secret_key = get_secret_value('data-pipeline-aws-secret-key', PROJECT_ID)
+    access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-access-key']
+    secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-secret-key']
     
     # Push to XCom for next tasks
     context['ti'].xcom_push(key='aws_access_key', value=access_key)
     context['ti'].xcom_push(key='aws_secret_key', value=secret_key)
-
+    
     return {'status': 'credentials retrieved'}
 
 
@@ -343,7 +340,7 @@ pre_check = PythonOperator(
 dataflow_job = BeamRunPythonPipelineOperator(
     task_id='run_dataflow_pipeline',
     runner='DataflowRunner',
-    py_file='{{ var.value.bucket_dataflow  }}/jobs/ms_member_realtime_pipeline.py',
+    py_file='{{ var.value.bucket_composer }}/dataflow/scripts/ms_member_realtime_pipeline.py',
 
     # Dataflow pipeline options
     # ----------------------------
@@ -377,11 +374,12 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'worker_disk_type': 'compute.googleapis.com/projects//zones//diskTypes/pd-ssd',
         # cost: ~$0.17/GB/month ($0.00024/GB/hour)
 
-        'mode': 'streaming',
+        'mode': 'streaming', 
         'enable_streaming_engine': True,
         'autoscaling_algorithm': 'THROUGHPUT_BASED',
 
-        'sdk_container_image': 'asia-southeast1-docker.pkg.dev/the1-insight-dev/dataflow-images/dataflow-common:v5.07',
+        # 'sdk_container_image': 'gcr.io/dataflow-templates-base/python311-template-launcher-base:latest',
+        'sdk_container_image': '{{ var.value.dataflow_common_image }}',
         'sdk_location': 'container',
         # ------------------------------------------------------------------------------------
 
@@ -402,8 +400,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         # Pipeline parameters
         # 'project_id': PROJECT_ID,
         'max_num_workers': 10,  # เพิ่ม workers สำหรับ streaming
-        # t1-airflow-composer-bucket/dags/composer/config/ms_member/streaming
-        'config_path': '{{ var.value.bucket_config }}/dags/composer/config/ms_member/streaming/ms_member_realtime.yaml',
+        # 'config_path': '{{ var.value.bucket_config }}/dags/composer/config/ms_member/batch/ms_member_short_init.yaml',
 
         # AWS S3 credentials
         's3_region_name': 'ap-southeast-1',
@@ -411,7 +408,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         's3_secret_access_key': "{{ ti.xcom_pull(task_ids='get_aws_credentials', key='aws_secret_key') }}",
 
         'labels': {
-            'environment': 'dev',  # หรือ dev/staging
+            'environment': '{WORKSPACE_ENV}',
             'pipeline': 'ms-member-realtime',
             'team': 'data-team',
             'cost-center': 'data-engineering',
@@ -423,22 +420,22 @@ dataflow_job = BeamRunPythonPipelineOperator(
     # ----------------------------
     # 1) ฝั่ง Composer (driver)
     # ----------------------------
+    # py_requirements_file='/home/airflow/gcs/dags/composer/requirements/beam-composer-reqs.txt',
     py_requirements=[
-        'apache-beam[gcp]==2.69.0',
+        # 'apache-beam[gcp]==2.59.0',
+        # 'google-cloud-bigquery==3.25.0',
+        'apache-beam[gcp]==2.69.0',  # Update from 2.59.0 to 2.69.0
         'google-cloud-bigquery==3.25.0',
         'fastavro',
         # FIXED: กลับไปใช้ versions เดิมที่ทำงานได้
         'pyarrow>=12.0.0',      # ใช้ >= แทน == เพื่อให้ pip หา version ที่ compatible
         'pandas>=1.5.0',         # ใช้ >= แทน == fixed version
-        # 's3fs>=2023.1.0',        # ใช้ >= แทน == fixed version  
-        # 's3fs>=2024.6.0,<2025',  # Use stable 2024.x version, avoid yanked 2025.3.1
+        's3fs>=2023.1.0',        # ใช้ >= แทน == fixed version  
         'fsspec>=2023.1.0',      # ใช้ >= แทน == fixed version
         'pyyaml>=6.0',
         'boto3>=1.28.0',
         # REMOVED: 'numpy<2.0.0' - ให้ pip เลือก version ที่ compatible เอง
         # REMOVED: 'aiobotocore==2.12.1' - ให้ s3fs เลือก version ที่ compatible เอง
-                # ✅ dataflow_common wheel for Composer/Airflow driver
-        '/home/airflow/gcs/dags/packages/dataflow_common-1.0.0-py3-none-any.whl',
     ],
     py_system_site_packages=False,
     dataflow_config=DataflowConfiguration(

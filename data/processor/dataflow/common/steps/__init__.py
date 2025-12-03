@@ -43,6 +43,8 @@ from dataflow_common.steps.streaming_step import (
     WriteToBigQueryStreamingStep,
     WriteToS3ParquetStep,
     WriteToBigQueryCDCStep,
+    MergeToIcebergStreamingStep,
+    
 )
 
 
@@ -74,4 +76,5 @@ __all__ = [
     "WriteToBigQueryStreamingStep",
     "WriteToS3ParquetStep",
     "WriteToBigQueryCDCStep",
+    "MergeToIcebergStreamingStep",
 ]

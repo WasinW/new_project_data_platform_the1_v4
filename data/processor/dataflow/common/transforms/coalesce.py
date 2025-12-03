@@ -113,7 +113,7 @@ def coalesce_by_mapping(
         except Exception as e:
             LOGGER.error(f"Error setting primary key '{pk_field}': {e}")
         
-        LOGGER.debug(f"Coalesced {column_count} columns for key {key}")
+        LOGGER.info(f"Coalesced {column_count} columns for key {key}")
         return out
         
     except Exception as e:

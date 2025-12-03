@@ -56,7 +56,7 @@ def normalize_path(path: str) -> List[str]:
         # Split by dots and filter out empty strings
         result = [p.strip() for p in cleaned.split('.') if p.strip()]
 
-        LOGGER.debug(f"Normalized path '{path}' to {result}")
+        LOGGER.info(f"Normalized path '{path}' to {result}")
         return result
 
     except Exception as e:
@@ -80,7 +80,7 @@ def extract_by_path(record: Dict[str, Any], path: List[str]) -> Any:
             if isinstance(cur, str) and i < len(path):
                 try:
                     cur = json.loads(cur)
-                    LOGGER.debug(f"Parsed JSON string at path element '{part}'")
+                    LOGGER.info(f"Parsed JSON string at path element '{part}'")
                 except (json.JSONDecodeError, TypeError):
                     LOGGER.debug(f"Could not parse as JSON at path element '{part}'")
                     return None
@@ -189,7 +189,7 @@ def map_record(
                 LOGGER.warning(f"Error mapping column '{dest_col}': {e}")
                 continue
         
-        LOGGER.debug(f"Mapped {mapped_count} fields in mode '{mode}'")
+        LOGGER.info(f"Mapped {mapped_count} fields in mode '{mode}'")
         return out
         
     except Exception as e:

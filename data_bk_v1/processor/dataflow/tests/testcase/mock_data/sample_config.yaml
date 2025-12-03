@@ -1,0 +1,30 @@
+defaults_file: null
+
+pipeline:
+  name: test_pipeline
+  mode: batch
+  term: short
+
+params:
+  pk: member_number
+  run_dt: 2025-01-01
+
+io:
+  bq:
+    project: test-project
+    dataset: test_dataset
+    temp_gcs: gs://temp-bucket/temp
+  s3:
+    refined_prefix: s3://test-bucket/data
+    num_shards: 2
+
+formats:
+  date:
+  - "%Y-%m-%d"
+  timestamp:
+  - "%Y-%m-%d %H:%M:%S"
+
+plan:
+- step: ReadBQQuery
+  id: test_read
+  query: SELECT * FROM test_table

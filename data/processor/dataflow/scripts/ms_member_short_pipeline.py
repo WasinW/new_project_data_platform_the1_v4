@@ -18,8 +18,8 @@ import sys
 
 from apache_beam.options.pipeline_options import PipelineOptions, GoogleCloudOptions, SetupOptions
 
-from dataflow_common.config import load_config
-from dataflow_common.orchestrator import Orchestrator
+# from dataflow_common.config import load_config
+# from dataflow_common.orchestrator import Orchestrator
 
 # Setup logging for Dataflow (not Airflow)
 def setup_dataflow_logging(level_str="INFO"):
@@ -99,6 +99,8 @@ def parse_args():
 
 # def main() -> None:
 def main():
+    from dataflow_common.config import load_config
+    from dataflow_common.orchestrator import Orchestrator
     logging.basicConfig(level=logging.INFO)
     # args = parse_args()
     # Parse arguments แยกกัน
