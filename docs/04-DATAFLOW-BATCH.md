@@ -1,13 +1,14 @@
 # 04 - Dataflow Batch Pipeline Guide
 
-> Complete guide สำหรับ batch processing pipelines
+> Complete guide for batch processing pipelines
 
-## 📖 Table of Contents
+## Table of Contents
 
 - [Batch Pipeline Overview](#batch-pipeline-overview)
+- [Current Batch Pipelines](#current-batch-pipelines)
 - [ms_member_short Pipeline](#ms_member_short-pipeline)
-- [ms_member_daily Pipeline](#ms_member_daily-pipeline)
 - [Config-Driven Execution](#config-driven-execution)
+- [Step Classes (batch_step.py)](#step-classes-batch_steppy)
 - [Step-by-Step Flow](#step-by-step-flow)
 - [Performance Tuning](#performance-tuning)
 
@@ -18,36 +19,50 @@
 ### Architecture
 
 ```
-Config YAML → Orchestrator → Steps → Output
-     │              │          │        │
-     │              │          │        ├─ S3 Parquet
-     │              │          │        └─ BigQuery
-     │              │          │
-     │              │          ├─ ReadBQQuery
-     │              │          ├─ BuildMappingDict
-     │              │          ├─ TransformSchemas
-     │              │          ├─ NormalizeToSchema
-     │              │          ├─ WriteParquet
-     │              │          └─ WriteToBigQuery
-     │              │
-     │              └─ Load config
-     │                  Instantiate steps
-     │                  Manage state
-     │                  Execute sequentially
-     │
-     └─ Pipeline metadata
-         I/O configuration
-         Step definitions
-         Parameters
+┌──────────────┐     ┌──────────┐     ┌──────────┐
+│   TEMPLATE   │────▶│   DAGS   │────▶│  CONFIG  │
+│   PIPELINE   │     └──────────┘     └──────────┘
+└──────────────┘            │               │
+                            ▼               ▼
+                    ┌───────────────────────────────┐
+                    │      DATAFLOW SCRIPTS         │
+                    │  ms_member_short_pipeline.py  │
+                    └───────────────────────────────┘
+                            │
+                            ▼
+                    ┌───────────────────────┐
+                    │     ORCHESTRATOR      │ ◀── dataflow_common
+                    │  + BATCH STEPS        │
+                    └───────────────────────┘
+                            │
+                            ▼
+                    ┌───────────────────────┐
+                    │   S3 (Parquet)        │
+                    └───────────────────────┘
 ```
 
-###
+### Batch Processing Pattern
 
- Batch Processing Pattern
+**Input**: BigQuery table (personas, ms_member, mapping_reconcile)
+**Transform**: Schema mapping + coalescing + normalization
+**Output**: S3 Parquet (partitioned by run_dt)
 
-**Input**: BigQuery table (source data)
-**Transform**: Schema mapping + normalization
-**Output**: S3 Parquet + BigQuery table
+---
+
+## Current Batch Pipelines
+
+| Pipeline | Config File | Description |
+|----------|-------------|-------------|
+| `ms_member_short_term_init` | `ms_member_short_init.yaml` | Initial load - full data migration |
+| `ms_member_short_term` | `ms_member_short.yaml` | Incremental load - 2 hour window |
+
+### Key Differences
+
+| Aspect | Short Init | Short Term |
+|--------|------------|------------|
+| **Data Range** | All records | Last 2 hours |
+| **Schedule** | Manual | Every 2 hours |
+| **Use Case** | Initial migration | Incremental sync |
 
 ---
 
@@ -55,85 +70,166 @@ Config YAML → Orchestrator → Steps → Output
 
 ### Purpose
 
-**Incremental sync** สำหรับข้อมูลที่อัปเดตล่าสุด (2-3 ชั่วโมง)
+**Incremental sync** for recently updated data (2-hour window)
 
-### Configuration File
+### Configuration File (ms_member_short.yaml)
 
 ```yaml
-# configs/ms_member_short.yaml
+defaults_file: null
+
 pipeline:
   name: ms_member_short
   mode: batch
   term: short
 
 params:
-  run_dt: "2024-01-15"
   pk: member_number
+  run_dt: null
 
 io:
   bq:
-    project: the1-insight-stg
+    project: the1-insight-{WORKSPACE_ENV}
     dataset: insight
-    table: ms_personas
-    temp_gcs: gs://bucket/temp
+    temp_gcs: gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp
   s3:
-    bucket: s3://t1-analytics/refined/insights/ms_member_short
-    region: ap-southeast-1
+    refined_prefix: s3://t1-analytics/refined/insights
 
 schema:
   bq:
     project: "{io.bq.project}"
     dataset: "{io.bq.dataset}"
-    table: "mapping_reconcile"
-    query: |
-      SELECT * FROM `{io.bq.project}.{io.bq.dataset}.mapping_reconcile`
-      WHERE table_name = 'ms_member'
+    table: ms_member
+
+formats:
+  date:
+  - "%Y-%m-%d"
+  - "%d/%m/%Y"
+  timestamp:
+  - "%Y-%m-%d %H:%M:%S.%f"
+  - "%Y-%m-%d %H:%M:%S"
+  - "%Y-%m-%dT%H:%M:%S.%f"
+  - "%Y-%m-%dT%H:%M:%S"
 
 plan:
-  - step: ReadBQQuery
-    id: raw_data
-    query: |
-      SELECT *
-      FROM `{io.bq.project}.{io.bq.dataset}.{io.bq.table}`
-      WHERE updated_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 HOUR)
-    out: raw_data
+# 1. Get mapping configuration
+- step: ReadBQQuery
+  id: mapping_rows
+  out: mapping_rows
+  query: |
+    SELECT RECONCILE_COLUMN_NAME,
+           PERSONAS_MAPPING_COLUMN_NAME,
+           RECONCILE_RETRIEVED,
+           RECONCILE_CONFIRMED,
+           UPDATED_DATE
+    FROM `{io.bq.project}.{io.bq.dataset}.mapping_reconcile`
+    WHERE COALESCE(UPDATED_DATE, '1999-12-31') = (
+        SELECT COALESCE(MAX(UPDATED_DATE), '1999-12-31')
+        FROM `{io.bq.project}.{io.bq.dataset}.mapping_reconcile`
+    )
 
-  - step: BuildMappingDict
-    id: mapping_dict
-    in: raw_data
-    mapping_query: "{schema.bq.query}"
-    mapping_fields:
-      key_field: reconcile_column_name
-      value_field: mapping_column_name
-      target_field: target
-    out: mapping_dict
+# 2. Build mapping dictionary
+- step: BuildMappingDict
+  in: mapping_rows
+  out: mapping_dict
+  mapping_fields:
+    src_field: PERSONAS_MAPPING_COLUMN_NAME
+    dest_field: RECONCILE_COLUMN_NAME
+    retrieved_flag_field: RECONCILE_RETRIEVED
+    confirmed_flag_field: RECONCILE_CONFIRMED
 
-  - step: TransformSchemas
-    id: transformed
-    in: raw_data
-    mapping_dict: mapping_dict
-    target: aws
-    table_name: ms_member
-    out: transformed
+# 3. Get latest personas (2 hour window)
+- step: ReadBQQuery
+  id: personas_rows
+  out: personas_rows_raw
+  query: |
+    SELECT * EXCEPT(RN_PK)
+    FROM (
+      SELECT
+        personaId, profiles, status, timestamp,
+        ROW_NUMBER() OVER(
+          PARTITION BY JSON_VALUE(profiles, '$.memberId')
+          ORDER BY TIMESTAMP DESC
+        ) AS RN_PK
+      FROM `{io.bq.project}.{io.bq.dataset}.personas`
+      WHERE TIMESTAMP BETWEEN
+        TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)
+        AND CURRENT_TIMESTAMP()
+    ) WHERE RN_PK = 1
 
-  - step: WriteParquet
-    id: write_s3
-    in: transformed
-    path: "{io.s3.bucket}/run_dt={params.run_dt}"
-    partition_cols:
-      - run_dt
+# 4. Parse JSON
+- step: ParseJson
+  in: personas_rows_raw
+  out: personas_rows
+  json_fields: [ "profiles" ]
 
-  - step: WriteToBigQuery
-    id: write_bq
-    in: transformed
-    table: "{io.bq.project}.{io.bq.dataset}.ms_member_output"
-    write_disposition: WRITE_APPEND
+# 5. Get member data
+- step: ReadBQQuery
+  id: ms_member_rows
+  out: ms_member_rows
+  query: |
+    SELECT DISTINCT origin.*
+    FROM (
+      SELECT *,
+        ROW_NUMBER() OVER(PARTITION BY MEMBER_NUMBER ORDER BY UPDATED_DATE DESC) AS RN
+      FROM `{io.bq.project}.{io.bq.dataset}.ms_member`
+    ) origin
+    INNER JOIN (
+      SELECT JSON_VALUE(profiles, '$.memberId') as member_id
+      FROM `{io.bq.project}.{io.bq.dataset}.personas`
+      WHERE TIMESTAMP BETWEEN
+        TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)
+        AND CURRENT_TIMESTAMP()
+      GROUP BY JSON_VALUE(profiles, '$.memberId')
+    ) new_members
+    ON origin.MEMBER_NUMBER = new_members.member_id
+    WHERE origin.RN = 1
+
+# 6-10. Map, Join, and Coalesce
+- step: MapRecord
+  in: personas_rows
+  side: mapping_dict
+  out: mapped_new
+  mode: reconcile
+
+- step: KVPairs
+  in: ms_member_rows
+  out: kv_old
+  key_field: "{params.pk}"
+
+- step: KVPairs
+  in: mapped_new
+  out: kv_new
+  key_field: "{params.pk}"
+
+- step: CoGroupByKey
+  id: grouped
+  out: grouped
+  as:
+    old: kv_old
+    new: kv_new
+
+- step: CoalesceByMapping
+  in: grouped
+  side: mapping_rows
+  out: ms_personas_rows
+  flag_field: RECONCILE_RETRIEVED
+  dest_field: RECONCILE_COLUMN_NAME
+
+# 11-12. Normalize and Write
+- step: NormalizeToSchema
+  in: ms_personas_rows
+  out: ms_personas_casted
+
+- step: WriteParquet
+  in: ms_personas_casted
+  prefix: "{io.s3.refined_prefix}/ms_personas/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"
 ```
 
 ### Execution
 
 ```bash
 # Run locally
+cd data/processor/dataflow
 python scripts/ms_member_short_pipeline.py \
   --config_path=configs/ms_member_short.yaml \
   --runner=DirectRunner
@@ -150,53 +246,12 @@ python scripts/ms_member_short_pipeline.py \
 
 ---
 
-## ms_member_daily Pipeline
-
-### Purpose
-
-**Full refresh** สำหรับข้อมูลทั้งหมด (daily batch)
-
-### Key Differences from Short
-
-| Aspect | Short Pipeline | Daily Pipeline |
-|--------|----------------|----------------|
-| **Data Range** | Last 2-3 hours | All records |
-| **Schedule** | Every 2 hours | Daily at 2 AM |
-| **Workers** | 5-10 | 20-50 |
-| **Duration** | 15-30 min | 2-3 hours |
-| **Write Mode** | APPEND | WRITE_TRUNCATE |
-
-### Configuration Highlights
-
-```yaml
-# configs/ms_member_daily.yaml
-plan:
-  - step: ReadBQQuery
-    query: |
-      SELECT *
-      FROM `{io.bq.project}.{io.bq.dataset}.{io.bq.table}`
-      # No time filter - read ALL records
-
-  - step: WriteParquet
-    path: "{io.s3.bucket}/year={year}/month={month}/day={day}"
-    partition_cols:
-      - year
-      - month
-      - day
-
-  - step: WriteToBigQuery
-    table: "{io.bq.project}.{io.bq.dataset}.ms_member_daily"
-    write_disposition: WRITE_TRUNCATE  # Replace entire table
-```
-
----
-
 ## Config-Driven Execution
 
 ### Step 1: Load Config
 
 ```python
-from dataflow_common.config import load_config
+from common.config import load_config
 
 config = load_config("configs/ms_member_short.yaml")
 
@@ -205,12 +260,14 @@ config = load_config("configs/ms_member_short.yaml")
 # - config.params (runtime params)
 # - config.io (I/O specs)
 # - config.plan (step definitions)
+# - config.schema (schema specs)
+# - config.formats (date/timestamp formats)
 ```
 
 ### Step 2: Create Orchestrator
 
 ```python
-from dataflow_common.orchestrator import Orchestrator
+from common.orchestrator import Orchestrator
 
 orchestrator = Orchestrator(config)
 ```
@@ -231,161 +288,126 @@ orchestrator.run(pipeline_options)
 
 ---
 
-## Step-by-Step Flow
+## Step Classes (batch_step.py)
 
-### Step 1: ReadBQQuery
+### Available Batch Steps
 
-**Purpose**: Read source data from BigQuery
+| Step Class | Description |
+|------------|-------------|
+| `ReadBQQueryStep` | Read from BigQuery using SQL query |
+| `BuildMappingDictStep` | Build mapping dictionary from mapping table |
+| `ParseJsonStep` | Parse JSON string fields in records |
+| `MapRecordStep` | Apply field mapping to records |
+| `KVPairsStep` | Convert records to (key, value) pairs |
+| `CoGroupByKeyStep` | Group by key for joining datasets |
+| `CoalesceByMappingStep` | Coalesce new and old records |
+| `NormalizeToSchemaStep` | Normalize to target schema |
+| `WriteParquetStep` | Write to S3 as Parquet files |
+| `WriteToBigQueryStep` | Write to BigQuery table |
+| `WriteGCSStep` | Write to GCS bucket |
+
+### Step Implementation Pattern
 
 ```python
 class ReadBQQueryStep(BaseStep):
-    def execute(self, pipeline):
+    """Read data from BigQuery using SQL query."""
+
+    def execute(self, pipeline: beam.Pipeline):
         query = self.spec.get("query")
-        # Format placeholders: {io.bq.project} → actual value
+        step_id = self.spec.get("id", "read_bq")
+
+        # Format placeholders
+        formatted_query = self._format_placeholders(query)
+
         result = (
             pipeline
-            | f"{self.step_id}_ReadBQ" >> beam.io.ReadFromBigQuery(
-                query=query,
-                use_standard_sql=True
+            | f"{step_id}_ReadBQ" >> beam.io.ReadFromBigQuery(
+                query=formatted_query,
+                use_standard_sql=True,
+                gcs_location=self.config.io.get("bq", {}).get("temp_gcs")
             )
         )
         return result
 ```
 
-**Output**: PCollection of dicts
+---
 
+## Step-by-Step Flow
+
+### 1. ReadBQQuery (mapping_rows)
+
+Read mapping configuration from BigQuery.
+
+**Output**: PCollection of mapping records
 ```python
 [
-    {'member_id': '123', 'name': 'John', 'email': 'john@example.com'},
-    {'member_id': '456', 'name': 'Jane', 'email': 'jane@example.com'},
+    {'RECONCILE_COLUMN_NAME': 'member_id', 'PERSONAS_MAPPING_COLUMN_NAME': 'profiles.memberId', ...},
+    {'RECONCILE_COLUMN_NAME': 'name', 'PERSONAS_MAPPING_COLUMN_NAME': 'profiles.name', ...},
     ...
 ]
 ```
 
-### Step 2: BuildMappingDict
+### 2. BuildMappingDict
 
-**Purpose**: Create schema mapping dictionary
+Build mapping dictionary from mapping records.
 
-```python
-class BuildMappingDictStep(BaseStep):
-    def execute(self, pipeline):
-        # Read mapping table
-        mapping_pcoll = self._read_mapping_table()
-
-        # Build dictionary
-        mapping_dict = (
-            mapping_pcoll
-            | beam.combiners.ToList()
-            | beam.Map(self._create_mapping_dict)
-        )
-        return mapping_dict
-```
-
-**Output**: Singleton PCollection with mapping
-
+**Output**: Singleton with mapping dict
 ```python
 {
     'mapping_dict': {
-        'ms_member': {
-            'aws': {
-                'member_id': 'memberId',
-                'name': 'memberName',
-                'email': 'emailAddress'
-            }
-        }
+        'profiles.memberId': 'member_id',
+        'profiles.name': 'name',
+        ...
     },
-    'schemas_dict': ['memberId', 'memberName', 'emailAddress', ...]
+    'schemas_dict': ['member_id', 'name', ...]
 }
 ```
 
-### Step 3: TransformSchemas
+### 3. ReadBQQuery (personas_rows_raw)
 
-**Purpose**: Transform data to target schema
+Read latest personas with 2-hour window, deduplicated by member ID.
 
-```python
-class TransformSchemasStep(BaseStep):
-    def execute(self, pipeline):
-        input_pcoll = self.state[self.spec.get("in")]
-        mapping = self.state[self.spec.get("mapping_dict")]
+### 4. ParseJson
 
-        result = (
-            input_pcoll
-            | beam.ParDo(
-                TransformSchemasFn(),
-                mapping_info=beam.pvalue.AsSingleton(mapping),
-                target=self.spec.get("target"),
-                table_name=self.spec.get("table_name")
-            )
-        )
-        return result
+Parse JSON string fields (`profiles`) into nested dictionaries.
+
+**Before**: `{'profiles': '{"memberId": "123", "name": "John"}'}`
+**After**: `{'profiles': {'memberId': '123', 'name': 'John'}}`
+
+### 5. ReadBQQuery (ms_member_rows)
+
+Read corresponding ms_member records for the updated personas.
+
+### 6. MapRecord
+
+Apply mapping to transform profiles fields to reconcile column names.
+
+### 7-8. KVPairs
+
+Convert records to (key, value) pairs for joining:
+- `kv_old`: (member_number, ms_member_row)
+- `kv_new`: (member_number, mapped_personas_row)
+
+### 9. CoGroupByKey
+
+Group records by member_number to join old and new data.
+
+### 10. CoalesceByMapping
+
+Coalesce fields: use new value if available and RECONCILE_RETRIEVED=1, else keep old value.
+
+### 11. NormalizeToSchema
+
+Cast fields to correct types based on schema.
+
+### 12. WriteParquet
+
+Write to S3 with partition path:
 ```
-
-**Output**: Transformed records
-
-```python
-# Before
-{'member_id': '123', 'name': 'John', 'email': 'john@example.com'}
-
-# After (AWS schema)
-{'memberId': '123', 'memberName': 'John', 'emailAddress': 'john@example.com'}
+s3://t1-analytics/refined/insights/ms_personas/
+  par_month=01/par_day=15/par_hour=14/run_dt=20250115 14/
+    ms-personas.parquet
 ```
-
-### Step 4: WriteParquet
-
-**Purpose**: Write to S3 as Parquet
-
-```python
-class WriteParquetStep(BaseStep):
-    def execute(self, pipeline):
-        input_pcoll = self.state[self.spec.get("in")]
-        path = self.spec.get("path")
-
-        result = (
-            input_pcoll
-            | beam.io.WriteToParquet(
-                file_path_prefix=path,
-                schema=self._get_schema(),
-                file_name_suffix=".parquet",
-                num_shards=5
-            )
-        )
-        return result
-```
-
-**Output**: Parquet files in S3
-
-```
-s3://bucket/run_dt=2024-01-15/
-  ├── part-00000.parquet
-  ├── part-00001.parquet
-  ├── part-00002.parquet
-  ├── part-00003.parquet
-  └── part-00004.parquet
-```
-
-### Step 5: WriteToBigQuery
-
-**Purpose**: Write to BigQuery table
-
-```python
-class WriteToBigQueryStep(BaseStep):
-    def execute(self, pipeline):
-        input_pcoll = self.state[self.spec.get("in")]
-        table = self.spec.get("table")
-        write_disposition = self.spec.get("write_disposition", "WRITE_APPEND")
-
-        result = (
-            input_pcoll
-            | beam.io.WriteToBigQuery(
-                table=table,
-                write_disposition=write_disposition,
-                create_disposition="CREATE_IF_NEEDED"
-            )
-        )
-        return result
-```
-
-**Output**: BigQuery table updated
 
 ---
 
@@ -394,7 +416,6 @@ class WriteToBigQueryStep(BaseStep):
 ### 1. Worker Autoscaling
 
 ```bash
-# Set min/max workers
 --num_workers=5 \
 --max_num_workers=50 \
 --autoscaling_algorithm=THROUGHPUT_BASED
@@ -403,35 +424,29 @@ class WriteToBigQueryStep(BaseStep):
 ### 2. BigQuery Optimization
 
 ```sql
--- Use partitioning
-SELECT *
-FROM `project.dataset.table`
-WHERE _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+-- Use time partitioning
+WHERE TIMESTAMP BETWEEN
+  TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)
+  AND CURRENT_TIMESTAMP()
 
--- Use clustering
-ORDER BY member_id, updated_at
+-- Use ROW_NUMBER for deduplication
+ROW_NUMBER() OVER(PARTITION BY member_id ORDER BY timestamp DESC) AS RN
 ```
 
 ### 3. Parquet Optimization
 
 ```python
-# Compression
-compression='snappy'  # Fast compression/decompression
+# Compression (default snappy)
+compression='snappy'
 
-# Sharding
-num_shards=10  # More shards = faster writes
-
-# Row group size
-row_group_size=100000  # Optimize for analytics
+# Schema from BigQuery
+schema = get_bq_schema(project, dataset, table)
 ```
 
 ### 4. Memory Management
 
 ```bash
-# Worker machine type
 --worker_machine_type=n1-standard-4
-
-# Disk size
 --disk_size_gb=100
 ```
 
@@ -457,8 +472,7 @@ https://console.cloud.google.com/dataflow/jobs/<job-id>
 # View logs
 gcloud logging read \
   "resource.type=dataflow_step AND resource.labels.job_id=<job-id>" \
-  --limit=100 \
-  --format=json
+  --limit=100
 
 # Filter by severity
 gcloud logging read \
@@ -470,13 +484,13 @@ gcloud logging read \
 
 ## Next Steps
 
-📖 Continue reading:
+Continue reading:
 - [05-DATAFLOW-STREAMING](./05-DATAFLOW-STREAMING.md) - Streaming pipeline guide
 - [06-CONFIG-SYSTEM](./06-CONFIG-SYSTEM.md) - Config system details
 - [08-TESTING](./08-TESTING.md) - Testing guide
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2024-01-15
+**Document Version**: 2.0
+**Last Updated**: 2025-12-04
 **Author**: Data Engineering Team

@@ -2,29 +2,70 @@
 
 > Detailed architecture documentation for The1 Data Platform
 
-## 📖 Table of Contents
+## Table of Contents
 
-- [Architecture Overview](#architecture-overview)
-- [Layer Design](#layer-design)
+- [Template Pipeline Architecture](#template-pipeline-architecture)
+- [System Layers](#system-layers)
+- [Component Architecture](#component-architecture)
+- [Module Structure](#module-structure)
 - [Config-Driven Pattern](#config-driven-pattern)
-- [Component Details](#component-details)
-- [Data Models](#data-models)
 - [Design Patterns](#design-patterns)
+- [Data Flow Models](#data-flow-models)
 
 ---
 
-## Architecture Overview
+## Template Pipeline Architecture
 
-### System Layers
+The core architecture follows a **Template Pipeline** pattern where configuration drives execution:
+
+```
+┌──────────────┐     ┌──────────┐     ┌──────────┐
+│   TEMPLATE   │────▶│   DAGS   │────▶│  CONFIG  │
+│   PIPELINE   │     └──────────┘     └──────────┘
+└──────────────┘            │               │
+                            ▼               ▼
+                    ┌───────────────────────────────┐
+                    │      DATAFLOW SCRIPTS         │◀─────┐
+                    └───────────────────────────────┘      │
+                            │                       ┌──────────────┐
+                            ▼                       │   DATAFLOW   │
+                    ┌───────────────────────┐      │    COMMON    │
+                    │  Gen pipeline with    │      └──────────────┘
+                    │  orchestrate and step │
+                    │  from config          │
+                    └───────────────────────┘
+                            │
+                            ▼
+                    ┌───────────────────────┐
+                    │    BUILD DATAFLOW     │
+                    └───────────────────────┘
+                            │
+                            ▼
+                    ┌───────────────────────┐
+                    │         Run           │
+                    └───────────────────────┘
+```
+
+### Flow Description
+
+1. **DAGS** (Airflow): Triggers pipeline execution with scheduling and parameters
+2. **CONFIG** (YAML): Defines pipeline steps, I/O configuration, and parameters
+3. **DATAFLOW SCRIPTS**: Entry points that load config and initialize pipelines
+4. **DATAFLOW COMMON**: Reusable components (Orchestrator, Steps, DoFns, Connectors)
+5. **BUILD & RUN**: Execute on Google Cloud Dataflow
+
+---
+
+## System Layers
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │  Layer 1: Orchestration (Apache Airflow)                      │
 ├───────────────────────────────────────────────────────────────┤
-│  • DAG Scheduling                                              │
+│  • DAG Scheduling (daily, realtime)                           │
 │  • Environment-based execution (STG/UAT/PROD)                 │
 │  • Parameter passing & templating                             │
-│  • Monitoring & alerting                                      │
+│  • BeamRunPythonPipelineOperator                             │
 └────────────────────────────┬──────────────────────────────────┘
                              │
                              ▼
@@ -32,417 +73,265 @@
 │  Layer 2: Pipeline Definition (YAML Configs)                  │
 ├───────────────────────────────────────────────────────────────┤
 │  • Pipeline configuration (ms_member_*.yaml)                  │
-│  • Step definitions & parameters                              │
-│  • I/O specifications                                         │
-│  • Schema mappings                                            │
+│  • Step definitions with params and outputs                   │
+│  • I/O specifications (BigQuery, Bigtable, S3, Pub/Sub)      │
+│  • Placeholder resolution ({io.bq.project})                   │
 └────────────────────────────┬──────────────────────────────────┘
                              │
                              ▼
 ┌───────────────────────────────────────────────────────────────┐
-│  Layer 3: Execution Engine (Orchestrator + Steps)             │
+│  Layer 3: Execution Engine (Orchestrator + Registry)          │
 ├───────────────────────────────────────────────────────────────┤
-│  • Config loading & validation                                │
-│  • Step instantiation from registry                           │
+│  • Config loading & validation (config.py)                    │
+│  • Step instantiation from registry (registry.py)             │
 │  • State management (PCollections)                            │
-│  • Sequential/parallel execution                              │
+│  • Multiple outputs & side input handling                     │
 └────────────────────────────┬──────────────────────────────────┘
                              │
                              ▼
 ┌───────────────────────────────────────────────────────────────┐
-│  Layer 4: Processing Framework (Apache Beam)                  │
+│  Layer 4: Step Classes (batch_step.py, streaming_step.py)     │
 ├───────────────────────────────────────────────────────────────┤
-│  • PCollection operations                                     │
-│  • Transforms (ParDo, Map, Filter, etc.)                     │
-│  • Windowing & triggering (streaming)                        │
-│  • I/O connectors (BigQuery, Pub/Sub, S3)                    │
+│  • BaseStep subclasses                                        │
+│  • Execute method returns PCollection(s)                      │
+│  • Delegates to DoFns for processing                          │
 └────────────────────────────┬──────────────────────────────────┘
                              │
                              ▼
 ┌───────────────────────────────────────────────────────────────┐
-│  Layer 5: Runtime (Google Dataflow)                           │
+│  Layer 5: DoFn Classes (dofns/stream.py, dofns/common.py)     │
+├───────────────────────────────────────────────────────────────┤
+│  • Core processing logic                                      │
+│  • Apache Beam DoFn implementations                           │
+│  • Side input access                                          │
+│  • Tagged outputs (aws, gcp)                                  │
+└────────────────────────────┬──────────────────────────────────┘
+                             │
+                             ▼
+┌───────────────────────────────────────────────────────────────┐
+│  Layer 6: Runtime (Google Dataflow)                           │
 ├───────────────────────────────────────────────────────────────┤
 │  • Auto-scaling workers                                       │
-│  • Resource management                                        │
+│  • Streaming Engine                                           │
 │  • Monitoring & logging                                       │
-│  • Error handling & retries                                   │
 └───────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Layer Design
+## Component Architecture
 
-### Layer 1: Orchestration (Airflow)
+### Core Components
 
-**Purpose**: Schedule และ orchestrate pipeline execution
-
-**Components**:
-```python
-# dags/ms_member_short_dag.py
-DAG(
-    dag_id='ms_member_short_dag',
-    schedule_interval='0 2 * * *',  # Daily at 2 AM
-    default_args={
-        'env': 'STG',
-        'runner': 'DataflowRunner'
-    }
-)
+```
+data/processor/dataflow/common/
+├── __init__.py
+├── config.py           # PipelineConfig dataclass, load_config()
+├── orchestrator.py     # Orchestrator class - executes steps
+├── registry.py         # STEP_REGISTRY mapping
+├── core.py             # BaseStep abstract class
+│
+├── steps/              # Step classes (interface layer)
+│   ├── __init__.py     # Re-exports all steps
+│   ├── batch_step.py   # 11 batch step classes
+│   └── streaming_step.py # 10 streaming step classes
+│
+├── dofns/              # DoFn classes (processing logic)
+│   ├── __init__.py
+│   ├── stream.py       # 12 streaming DoFns
+│   └── common.py       # Shared DoFns
+│
+├── connectors/         # I/O connectors
+│   ├── __init__.py
+│   ├── bigquery.py
+│   ├── bigtable.py
+│   └── pubsub.py
+│
+├── transforms/         # Data transformation utilities
+│   ├── __init__.py
+│   ├── mapping.py      # Schema mapping functions
+│   ├── schema.py       # Schema loading
+│   ├── coalesce.py     # Data coalescing
+│   └── cdc.py          # CDC transformations
+│
+└── utils/              # Utility functions
+    ├── __init__.py
+    └── logging.py
 ```
 
-**Responsibilities**:
-- ✅ Schedule pipelines (daily, realtime)
-- ✅ Pass environment parameters (STG/UAT/PROD)
-- ✅ Handle retries & failure notifications
-- ✅ Coordinate with other DAGs
+### Component Relationships
 
-### Layer 2: Pipeline Definition (YAML)
-
-**Purpose**: Declarative pipeline configuration
-
-**Structure**:
-```yaml
-# configs/ms_member_short.yaml
-pipeline:
-  name: ms_member_short
-  mode: batch
-  term: short
-
-params:
-  run_dt: "2024-01-15"
-  pk: member_number
-
-io:
-  bq:
-    project: the1-insight-stg
-    dataset: insight
-    table: ms_personas
-
-plan:
-  - step: ReadBQQuery
-    query: "SELECT * FROM table"
-    out: raw_data
-
-  - step: TransformSchemas
-    in: raw_data
-    mapping_table: mapping_reconcile
-    out: transformed
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        ORCHESTRATOR                          │
+│   - Loads config                                            │
+│   - Iterates plan steps                                     │
+│   - Manages state (PCollections)                            │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      STEP REGISTRY                           │
+│   STEP_REGISTRY = {                                         │
+│       "ReadBQQuery": ReadBQQueryStep,                       │
+│       "RefreshMappingTable": RefreshMappingTableStep,       │
+│       "WriteToBigQueryCDC": WriteToBigQueryCDCStep,         │
+│       ...                                                   │
+│   }                                                         │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                       STEP CLASSES                           │
+│   ┌─────────────────┐      ┌─────────────────────────┐     │
+│   │  batch_step.py  │      │   streaming_step.py     │     │
+│   │  - ReadBQQuery  │      │   - RefreshMappingTable │     │
+│   │  - BuildMapping │      │   - ReadFromPubSub      │     │
+│   │  - WriteParquet │      │   - FetchFromBigtable   │     │
+│   │  - ...          │      │   - WriteToBigQueryCDC  │     │
+│   └─────────────────┘      │   - WriteToS3Parquet    │     │
+│                            │   - MergeToIceberg      │     │
+│                            └─────────────────────────┘     │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        DoFn CLASSES                          │
+│   ┌───────────────────────────────────────────────────────┐ │
+│   │                  dofns/stream.py                       │ │
+│   │  - MappingRefreshDoFn                                  │ │
+│   │  - ExtractPersonasDoFn                                 │ │
+│   │  - FetchFromBigtableDoFn                               │ │
+│   │  - TransformSchemasDoFn (tagged outputs: aws, gcp)    │ │
+│   │  - FullfillSchemasDoFn                                 │ │
+│   │  - MapToCdcTableRowDoFn                                │ │
+│   │  - SyncToIcebergDoFn                                   │ │
+│   │  - ExtractWindowPathDoFn                               │ │
+│   │  - WritePartitionToParquetDoFn                         │ │
+│   └───────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**Benefits**:
-- 🔄 No code changes for pipeline modifications
-- 📝 Version-controlled configurations
-- 🧪 Easy to test different configurations
-- 🔍 Clear pipeline structure
+---
 
-### Layer 3: Execution Engine
+## Module Structure
 
-**Purpose**: Execute config-driven pipelines
+### batch_step.py - Batch Pipeline Steps
 
-**Core Components**:
+| Step Class | Description |
+|------------|-------------|
+| `ReadBQQueryStep` | Read from BigQuery using SQL query |
+| `BuildMappingDictStep` | Build mapping dictionary from BigQuery |
+| `ParseJsonStep` | Parse JSON string fields in records |
+| `MapRecordStep` | Apply field mapping to records |
+| `KVPairsStep` | Convert records to (key, value) pairs |
+| `CoGroupByKeyStep` | Group by key for joining datasets |
+| `CoalesceByMappingStep` | Coalesce new and old records |
+| `NormalizeToSchemaStep` | Normalize to target schema |
+| `WriteParquetStep` | Write to S3 as Parquet files |
+| `WriteToBigQueryStep` | Write to BigQuery table |
+| `WriteGCSStep` | Write to GCS bucket |
 
-#### 1. Orchestrator (`orchestrator.py`)
+### streaming_step.py - Streaming Pipeline Steps
 
-```python
-class Orchestrator:
-    def __init__(self, config: PipelineConfig):
-        self.config = config
-        self.state = {}  # Stores PCollections
+| Step Class | Description |
+|------------|-------------|
+| `RefreshMappingTableStep` | Periodically refresh mapping (side input) |
+| `ReadFromPubSubStep` | Read from Pub/Sub subscription |
+| `ExtractPersonasStep` | Extract persona IDs from messages |
+| `FetchFromBigtableStep` | Fetch data from Bigtable by ID |
+| `FilterEmptyMemberIdStep` | Filter records without member ID |
+| `TransformSchemasStep` | Transform to AWS and GCP schemas (branching) |
+| `FullfillSchemasStep` | Fill all schema fields with defaults |
+| `WriteToBigQueryStreamingStep` | Write to BigQuery (append mode) |
+| `WriteToS3ParquetStep` | Write to S3 with windowing |
+| `WriteToBigQueryCDCStep` | Write to BigQuery with CDC UPSERT |
+| `MergeToIcebergStreamingStep` | Merge CDC data to Iceberg table |
 
-    def run(self, pipeline_options):
-        # 1. Format config placeholders
-        # 2. Create Beam pipeline
-        # 3. Execute steps sequentially
-        # 4. Handle state management
-        with beam.Pipeline(options=pipeline_options) as p:
-            for spec in self.config.plan:
-                step = self._instantiate_step(spec)
-                output = step.execute(p)
-                self._store_output(output, spec)
-```
+### dofns/stream.py - Streaming DoFn Classes
 
-#### 2. Step Registry (`registry.py`)
-
-```python
-STEP_REGISTRY = {
-    # Batch steps
-    "ReadBQQuery": ReadBQQueryStep,
-    "TransformSchemas": TransformSchemasStep,
-    "WriteParquet": WriteParquetStep,
-
-    # Streaming steps
-    "RefreshMappingTable": RefreshMappingTableStep,
-    "ReadFromPubSub": ReadFromPubSubStep,
-    "FetchFromBigtable": FetchFromBigtableStep,
-}
-```
-
-#### 3. Base Step (`core.py`)
-
-```python
-class BaseStep(ABC):
-    def __init__(self, spec, config, state):
-        self.spec = spec        # Step config from YAML
-        self.config = config    # Global pipeline config
-        self.state = state      # Shared state dict
-
-    @abstractmethod
-    def execute(self, pipeline) -> Any:
-        # Implement in subclass
-        pass
-```
-
-### Layer 4: Processing Framework (Apache Beam)
-
-**Purpose**: Data processing abstractions
-
-**Key Concepts**:
-
-#### PCollection (Parallel Collection)
-
-```python
-# Immutable distributed dataset
-messages = pipeline | beam.io.ReadFromPubSub(subscription)
-```
-
-#### Transforms
-
-```python
-# Map: 1-to-1 transformation
-transformed = pcoll | beam.Map(lambda x: transform(x))
-
-# ParDo: 1-to-N transformation
-expanded = pcoll | beam.ParDo(MyDoFn())
-
-# Filter: Keep matching elements
-filtered = pcoll | beam.Filter(lambda x: x['valid'])
-
-# GroupByKey: Aggregation
-grouped = pcoll | beam.GroupByKey()
-```
-
-#### Windowing (Streaming)
-
-```python
-# Fixed time windows
-windowed = pcoll | beam.WindowInto(
-    window.FixedWindows(300)  # 5-minute windows
-)
-```
+| DoFn Class | Description |
+|------------|-------------|
+| `MappingRefreshDoFn` | Query mapping table from BigQuery |
+| `ExtractPersonasDoFn` | Parse Pub/Sub message and extract ID |
+| `FetchFromBigtableDoFn` | Fetch row from Bigtable |
+| `FilterEmptyMemberIdDoFn` | Filter invalid records |
+| `TransformSchemasDoFn` | Transform using mapping (dual output: aws, gcp) |
+| `FullfillSchemasDoFn` | Fill all schema fields |
+| `MapToCdcTableRowDoFn` | Format for BigQuery CDC write |
+| `SyncToIcebergDoFn` | Execute MERGE query to Iceberg |
+| `ExtractWindowPathDoFn` | Extract partition path from window |
+| `WritePartitionToParquetDoFn` | Write partition to Parquet |
 
 ---
 
 ## Config-Driven Pattern
 
-### Before (Script-based)
+### Before (Script-based - 577 lines)
 
 ```python
-# ❌ Hardcoded pipeline logic (577 lines)
+# Hardcoded pipeline logic
 def create_pipeline(config, options):
     pipeline = beam.Pipeline(options=options)
 
     # Step 1: Read from Pub/Sub
-    messages = (
-        pipeline
-        | 'ReadPubSub' >> ReadFromPubSub(subscription=SUB)
-    )
+    messages = pipeline | 'ReadPubSub' >> ReadFromPubSub(subscription=SUB)
 
     # Step 2: Extract IDs
-    ids = (
-        messages
-        | 'Extract' >> ParDo(ExtractDoFn())
-    )
+    ids = messages | 'Extract' >> ParDo(ExtractDoFn())
 
-    # ... 20 more hardcoded steps
+    # ... 20+ more hardcoded steps
 
     return pipeline
 ```
 
 **Problems**:
-- ❌ Hard to modify pipeline structure
-- ❌ Code changes required for config updates
-- ❌ Difficult to test
-- ❌ Not reusable across pipelines
+- Hard to modify pipeline structure
+- Code changes required for config updates
+- Difficult to test individual steps
+- Not reusable across pipelines
 
-### After (Config-driven)
+### After (Config-driven - 106 lines)
 
 ```python
-# ✅ Orchestrator pattern (106 lines)
+# Orchestrator pattern
+config = load_config("configs/ms_member_realtime_refactor.yaml")
 orchestrator = Orchestrator(config)
 orchestrator.run(pipeline_options)
 ```
 
 ```yaml
-# ✅ Pipeline defined in YAML
+# Pipeline defined in YAML
 plan:
+  - step: RefreshMappingTable
+    id: mapping_refresh
+    params:
+      fire_interval: 60
+    outputs:
+      - mapping_refresh
+
   - step: ReadFromPubSub
+    id: message_rows
     params:
       subscription: "{io.pubsub.subscription}"
     outputs:
-      - messages
+      - message_rows
 
-  - step: ExtractPersonas
+  - step: TransformSchemas
+    id: transform_output
     params:
-      input: messages
+      mapping_info: mapping_refresh
+      input: bt_rows_filtered
     outputs:
-      - ids
+      - aws
+      - gcp
 ```
 
 **Benefits**:
-- ✅ **82% code reduction** (577 → 106 lines)
-- ✅ **Easy modifications** via YAML editing
-- ✅ **Reusable** steps across pipelines
-- ✅ **Testable** step-by-step
-
----
-
-## Component Details
-
-### Config System
-
-**File**: `common/config.py`
-
-```python
-@dataclass
-class PipelineConfig:
-    """Pipeline configuration model"""
-    pipeline: Dict[str, Any]     # Pipeline metadata
-    params: Dict[str, Any]       # Runtime parameters
-    io: Dict[str, Any]           # I/O configuration
-    schema: Optional[Dict]       # Schema specifications
-    plan: List[Dict[str, Any]]   # Step definitions
-    formats: Optional[Dict]      # Date/time formats
-    mapping: Optional[Dict]      # Mapping config
-    window: Optional[Dict]       # Window config (streaming)
-
-def load_config(path: str) -> PipelineConfig:
-    """Load and validate YAML config"""
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    return PipelineConfig(**data)
-```
-
-### Step Implementation
-
-**Pattern for creating new steps**:
-
-```python
-# Example: Custom filtering step
-class FilterValidRecordsStep(BaseStep):
-    """Filter records based on validation rules"""
-
-    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
-        # 1. Get input from state
-        input_key = self.spec.get("in")
-        pcoll = self.state[input_key]
-
-        # 2. Get parameters from spec
-        required_fields = self.spec.get("required_fields", [])
-
-        # 3. Apply transformation
-        result = (
-            pcoll
-            | f"{self.step_id}_Filter" >> beam.Filter(
-                lambda x: all(x.get(f) for f in required_fields)
-            )
-        )
-
-        # 4. Return output PCollection
-        return result
-```
-
-**Registration**:
-
-```python
-# registry.py
-STEP_REGISTRY["FilterValidRecords"] = FilterValidRecordsStep
-```
-
-### Connectors
-
-**BigQuery Connector** (`connectors/bigquery.py`):
-```python
-class BigQueryConnector:
-    @staticmethod
-    def read_query(pipeline, query, config, step_id):
-        return (
-            pipeline
-            | f"{step_id}_ReadBQ" >> beam.io.ReadFromBigQuery(
-                query=query,
-                use_standard_sql=True,
-                project=config.project_id
-            )
-        )
-```
-
-**S3 Connector** (`connectors/s3.py`):
-```python
-class S3Connector:
-    @staticmethod
-    def write_parquet(pcoll, bucket, schema):
-        return (
-            pcoll
-            | "WriteParquet" >> ParquetSink(
-                path=bucket,
-                schema=schema
-            )
-        )
-```
-
----
-
-## Data Models
-
-### Batch Processing Model
-
-```
-Input (BigQuery)
-      ↓
- ┌─────────────┐
- │  Raw Data   │  # Dict[str, Any]
- └──────┬──────┘
-        ↓
- ┌─────────────┐
- │  Mapping    │  # {'mapping_dict': {...}, 'schemas_dict': [...]}
- └──────┬──────┘
-        ↓
- ┌─────────────┐
- │ Transformed │  # Dict[str, Any] (AWS schema)
- └──────┬──────┘
-        ↓
- ┌─────────────┐
- │ Normalized  │  # Dict[str, Any] (final schema)
- └──────┬──────┘
-        ↓
-Output (S3 Parquet / BigQuery)
-```
-
-### Streaming Processing Model
-
-```
-Pub/Sub Messages (bytes)
-      ↓
- ┌─────────────┐
- │  JSON Dict  │  # {'personaId': '...', 'payload': {...}}
- └──────┬──────┘
-        ↓
- ┌─────────────┐
- │ Bigtable    │  # Enriched with profile data
- │   Enriched  │
- └──────┬──────┘
-        ↓
- ┌─────────────┐
- │ Filtered    │  # Remove invalid records
- └──────┬──────┘
-        ↓
-    ┌───┴───┐
-    ▼       ▼
-┌────────┐ ┌────────┐
-│  AWS   │ │  GCP   │  # Dual output
-│ Branch │ │ Branch │
-└────┬───┘ └───┬────┘
-     ▼         ▼
-  Parquet   BigQuery
-```
+- **82% code reduction** (577 -> 106 lines)
+- **Easy modifications** via YAML editing
+- **Reusable** steps across pipelines
+- **Testable** step-by-step
 
 ---
 
@@ -450,161 +339,189 @@ Pub/Sub Messages (bytes)
 
 ### 1. Registry Pattern
 
-**Purpose**: Dynamic step registration and instantiation
-
 ```python
-# Step registration
-STEP_REGISTRY["CustomStep"] = CustomStepClass
+# registry.py
+STEP_REGISTRY = {
+    "ReadBQQuery": ReadBQQueryStep,
+    "RefreshMappingTable": RefreshMappingTableStep,
+    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,
+    # ...
+}
 
-# Step instantiation
+# orchestrator.py
 step_class = STEP_REGISTRY.get(step_name)
 step = step_class(spec=spec, config=config, state=state)
+output = step.execute(pipeline)
 ```
 
 ### 2. State Pattern
 
-**Purpose**: Share PCollections between steps
-
 ```python
-# Store output
+# Store output in shared state
 self.state["raw_data"] = pcoll
 
-# Retrieve input
+# Retrieve input from state
 input_pcoll = self.state["raw_data"]
 ```
 
 ### 3. Template Method Pattern
 
-**Purpose**: Define algorithm structure in base class
-
 ```python
 class BaseStep(ABC):
-    # Template method
     def __init__(self, spec, config, state):
         self.spec = spec
         self.config = config
         self.state = state
         self.step_id = self._generate_id()
 
-    # Abstract method (must implement)
     @abstractmethod
     def execute(self, pipeline):
         pass
 ```
 
-### 4. Strategy Pattern
-
-**Purpose**: Different processing strategies for batch vs streaming
+### 4. Side Input Pattern
 
 ```python
-# Batch strategy
-class ReadBQQueryStep(BaseStep):
-    def execute(self, pipeline):
-        return BigQueryConnector.read_query(...)
+# Create side input from mapping refresh
+mapping_pcoll = self.state['mapping_refresh']
 
-# Streaming strategy
-class ReadFromPubSubStep(BaseStep):
-    def execute(self, pipeline):
-        return pipeline | ReadFromPubSub(...)
-```
-
-### 5. Side Input Pattern
-
-**Purpose**: Broadcast small datasets to all workers
-
-```python
-# Create side input
-mapping_pcoll = ...  # Small PCollection
-mapping_side = pvalue.AsSingleton(mapping_pcoll)
-
-# Use in ParDo
+# Use as side input in ParDo
 pcoll | beam.ParDo(
-    TransformDoFn(),
-    mapping_info=mapping_side  # Side input
+    TransformSchemasDoFn(),
+    mapping_info=pvalue.AsSingleton(mapping_pcoll)
 )
 
 # Access in DoFn
 def process(self, element, mapping_info):
-    mapping = mapping_info  # Full mapping dict available
+    mapping = mapping_info  # Full dict available
 ```
 
-### 6. Tagged Output Pattern
-
-**Purpose**: Multiple outputs from single transform
+### 5. Tagged Output Pattern
 
 ```python
-# Define outputs
-result = (
-    pcoll
-    | beam.ParDo(TransformDoFn())
-        .with_outputs('aws', 'gcp')
-)
+# DoFn with multiple outputs
+class TransformSchemasDoFn(DoFn):
+    def process(self, element, mapping_info):
+        aws_record = transform_for_aws(element, mapping_info)
+        gcp_record = transform_for_gcp(element, mapping_info)
 
-# Access outputs
-aws_data = result.aws
-gcp_data = result.gcp
+        yield TaggedOutput('aws', aws_record)
+        yield TaggedOutput('gcp', gcp_record)
+
+# Step captures tagged outputs
+result = pcoll | beam.ParDo(TransformSchemasDoFn()).with_outputs('aws', 'gcp')
 
 # Store in state
-self.state['aws'] = aws_data
-self.state['gcp'] = gcp_data
+self.state['aws'] = result.aws
+self.state['gcp'] = result.gcp
 ```
 
 ---
 
-## Performance Considerations
+## Data Flow Models
 
-### Batch Processing
+### Batch Processing Model
 
-**Optimization Strategies**:
-- ✅ **BigQuery partitioning**: Query only recent data
-- ✅ **Parquet compression**: Snappy compression for fast writes
-- ✅ **Worker autoscaling**: 1-50 workers based on load
-- ✅ **Batch size tuning**: 1000 records per batch
-
-### Streaming Processing
-
-**Optimization Strategies**:
-- ✅ **Windowing**: 5-minute fixed windows for S3 writes
-- ✅ **Bigtable batching**: Batch reads for efficiency
-- ✅ **Side input caching**: Refresh mapping every 60 seconds
-- ✅ **Parallel branches**: AWS and GCP writes in parallel
-
----
-
-## Scalability
-
-### Horizontal Scaling
-
-**Dataflow Autoscaling**:
-```yaml
-# Pipeline options
---max_num_workers=50
---autoscaling_algorithm=THROUGHPUT_BASED
+```
+BigQuery (Source)
+      ↓
+ ┌─────────────┐
+ │ ReadBQQuery │
+ └──────┬──────┘
+        ↓
+ ┌─────────────────┐
+ │ BuildMappingDict│ ←── BigQuery (mapping_reconcile)
+ └──────┬──────────┘
+        ↓
+ ┌─────────────────┐
+ │  ParseJson      │
+ └──────┬──────────┘
+        ↓
+ ┌─────────────────┐     ┌──────────────┐
+ │   MapRecord     │ ←── │ mapping_dict │
+ └──────┬──────────┘     └──────────────┘
+        ↓
+ ┌─────────────────┐
+ │ CoGroupByKey    │ ←── ms_member_rows
+ └──────┬──────────┘
+        ↓
+ ┌─────────────────┐
+ │CoalesceByMapping│
+ └──────┬──────────┘
+        ↓
+ ┌─────────────────┐
+ │NormalizeToSchema│
+ └──────┬──────────┘
+        ↓
+ ┌─────────────────┐
+ │  WriteParquet   │ ──▶ S3 Parquet
+ └─────────────────┘
 ```
 
-**Expected Throughput**:
-- **Batch**: 1M records/hour per worker
-- **Streaming**: 10K messages/second
+### Streaming Processing Model
 
-### Data Volume Estimates
-
-| Environment | Daily Records | Peak QPS | Storage/Day |
-|-------------|---------------|----------|-------------|
-| **STG** | 1M | 100 | 10 GB |
-| **UAT** | 5M | 500 | 50 GB |
-| **PROD** | 50M | 5000 | 500 GB |
+```
+Pub/Sub (Source)
+      ↓
+ ┌───────────────────┐
+ │  ReadFromPubSub   │
+ └────────┬──────────┘
+          │
+          ▼
+ ┌───────────────────┐
+ │ ExtractPersonas   │
+ └────────┬──────────┘
+          │
+          ▼
+ ┌───────────────────┐
+ │FetchFromBigtable  │ ←── Bigtable (profiles)
+ └────────┬──────────┘
+          │
+          ▼
+ ┌───────────────────┐
+ │FilterEmptyMemberId│
+ └────────┬──────────┘
+          │
+          ▼
+ ┌───────────────────┐     ┌──────────────────┐
+ │ TransformSchemas  │ ←── │ RefreshMapping   │ (side input)
+ └────────┬──────────┘     │ (PeriodicImpulse)│
+          │                └──────────────────┘
+          │
+    ┌─────┴─────┐
+    ▼           ▼
+┌────────┐  ┌────────┐
+│  aws   │  │  gcp   │
+└───┬────┘  └───┬────┘
+    │           │
+    ▼           ▼
+┌──────────┐ ┌────────────────┐
+│Fullfill  │ │WriteToBigQuery │ ──▶ BigQuery CDC
+│Schemas   │ │     CDC        │
+└────┬─────┘ └────────────────┘
+     │                │
+     ▼                ▼
+┌──────────────┐ ┌────────────────┐
+│WriteToS3     │ │MergeToIceberg  │ ──▶ Iceberg Table
+│Parquet       │ │Streaming       │
+└──────────────┘ └────────────────┘
+     │
+     ▼
+S3 Parquet (partitioned)
+```
 
 ---
 
 ## Next Steps
 
-📖 Continue reading:
+Continue reading:
 - [02-SETUP](./02-SETUP.md) - Environment setup
-- [06-CONFIG-SYSTEM](./06-CONFIG-SYSTEM.md) - Config details
-- [07-DEVELOPMENT](./07-DEVELOPMENT.md) - Development guide
+- [04-DATAFLOW-BATCH](./04-DATAFLOW-BATCH.md) - Batch pipeline details
+- [05-DATAFLOW-STREAMING](./05-DATAFLOW-STREAMING.md) - Streaming pipeline details
+- [06-CONFIG-SYSTEM](./06-CONFIG-SYSTEM.md) - Config system details
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2024-01-15
+**Document Version**: 2.0
+**Last Updated**: 2025-12-04
 **Author**: Data Engineering Team

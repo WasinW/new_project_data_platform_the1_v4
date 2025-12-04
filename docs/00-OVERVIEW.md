@@ -1,35 +1,86 @@
 # 00 - Project Overview
 
-> ภาพรวมโปรเจ็ค The1 Data Platform - Member Data Pipeline
+> The1 Data Platform - Member Data Pipeline
 
-## 📖 Table of Contents
+## Table of Contents
 
 - [Introduction](#introduction)
+- [Template Pipeline Architecture](#template-pipeline-architecture)
 - [Business Context](#business-context)
 - [Project Goals](#project-goals)
 - [Data Flow Overview](#data-flow-overview)
 - [Technology Stack](#technology-stack)
-- [Team & Responsibilities](#team--responsibilities)
+- [Quick Reference](#quick-reference)
 
 ---
 
 ## Introduction
 
-**The1 Data Platform** เป็นระบบ data platform สำหรับจัดการข้อมูลสมาชิก (Member Data) ของ The1 โดยทำหน้าที่:
+**The1 Data Platform** is a config-driven data platform for managing The1 member data:
 
-1. **Synchronize member data** จาก source systems (Bigtable, BigQuery) ไปยัง target systems (S3, BigQuery)
-2. **Transform และ map schemas** ให้ตรงกับ requirements ของ AWS และ GCP
-3. **Support both batch และ streaming** processing patterns
+1. **Synchronize member data** from source systems (Bigtable, BigQuery, Pub/Sub) to target systems (S3, BigQuery)
+2. **Transform and map schemas** for AWS and GCP requirements
+3. **Support both batch and streaming** processing patterns
 4. **Multi-environment deployment** (STG, UAT, PROD)
+
+### Current Pipeline Structure
+
+| Pipeline | Type | Description |
+|----------|------|-------------|
+| `ms_member_short_term_init` | Batch | Initial load - full data migration |
+| `ms_member_short_term` | Batch | Incremental load - 2 hour window |
+| `ms_member_realtime` | Streaming | Real-time CDC from Pub/Sub |
 
 ### Project Timeline
 
-- **Phase 1-2**: Refactoring และ cleaning (Completed)
+- **Phase 1-2**: Refactoring and cleaning (Completed)
 - **Phase 3**: Unit tests implementation (Completed)
 - **Phase 4**: Integration tests (Completed)
 - **Phase 5**: CI/CD integration (Completed)
-- **Phase 6**: Config-driven streaming architecture (Completed) ⭐
+- **Phase 6**: Config-driven streaming architecture (Completed)
 - **Phase 7**: Production deployment (In Progress)
+
+---
+
+## Template Pipeline Architecture
+
+The core architecture follows a **Template Pipeline** pattern where configuration drives execution:
+
+```
+┌──────────────┐     ┌──────────┐     ┌──────────┐
+│   TEMPLATE   │────▶│   DAGS   │────▶│  CONFIG  │
+│   PIPELINE   │     └──────────┘     └──────────┘
+└──────────────┘            │               │
+                            ▼               ▼
+                    ┌───────────────────────────────┐
+                    │      DATAFLOW SCRIPTS         │◀─────┐
+                    └───────────────────────────────┘      │
+                            │                       ┌──────────────┐
+                            ▼                       │   DATAFLOW   │
+                    ┌───────────────────────┐      │    COMMON    │
+                    │  Gen pipeline with    │      └──────────────┘
+                    │  orchestrate and step │
+                    │  from config          │
+                    └───────────────────────┘
+                            │
+                            ▼
+                    ┌───────────────────────┐
+                    │    BUILD DATAFLOW     │
+                    └───────────────────────┘
+                            │
+                            ▼
+                    ┌───────────────────────┐
+                    │         Run           │
+                    └───────────────────────┘
+```
+
+### Components
+
+1. **DAGs** (Airflow): Orchestrate pipeline execution with scheduling
+2. **Config** (YAML): Define pipeline steps, I/O, and parameters
+3. **Dataflow Scripts**: Entry points that load config and create pipelines
+4. **Dataflow Common**: Shared components (Orchestrator, Steps, DoFns, Connectors)
+5. **Build & Run**: Execute on Google Cloud Dataflow
 
 ---
 
@@ -37,12 +88,12 @@
 
 ### The1 Ecosystem
 
-The1 เป็นโปรแกรมสะสมคะแนนของกลุ่มบริษัทเซ็นทรัล ซึ่งมีสมาชิกหลายล้านคน การจัดการข้อมูลสมาชิกจึงเป็นสิ่งสำคัญสำหรับ:
+The1 is the loyalty program of Central Group with millions of members. Member data management is critical for:
 
-- **Analytics & Reporting**: วิเคราะห์พฤติกรรมลูกค้า
-- **Personalization**: ปรับแต่ง experience ตามสมาชิกแต่ละคน
-- **Marketing**: ส่ง campaigns ที่เหมาะสม
-- **Compliance**: ตรวจสอบ consent และ privacy
+- **Analytics & Reporting**: Customer behavior analysis
+- **Personalization**: Customized experience per member
+- **Marketing**: Targeted campaigns
+- **Compliance**: Consent and privacy validation
 
 ### Data Sources
 
@@ -50,15 +101,14 @@ The1 เป็นโปรแกรมสะสมคะแนนของกล
 ┌─────────────────────────────────────────────┐
 │           Source Systems                     │
 ├─────────────────────────────────────────────┤
-│                                              │
 │  ┌─────────────┐       ┌─────────────────┐ │
 │  │  Bigtable   │       │   BigQuery      │ │
 │  │  (Personas) │       │   (Mapping)     │ │
 │  └─────────────┘       └─────────────────┘ │
-│                                              │
-│  • Member profiles     • Schema mappings    │
-│  • Real-time updates   • Reconciliation     │
-│  • NoSQL storage       • Metadata           │
+│  ┌─────────────┐                           │
+│  │  Pub/Sub    │                           │
+│  │  (Events)   │                           │
+│  └─────────────┘                           │
 └─────────────────────────────────────────────┘
 ```
 
@@ -68,15 +118,14 @@ The1 เป็นโปรแกรมสะสมคะแนนของกล
 ┌─────────────────────────────────────────────┐
 │           Target Systems                     │
 ├─────────────────────────────────────────────┤
-│                                              │
 │  ┌─────────────┐       ┌─────────────────┐ │
 │  │     S3      │       │   BigQuery      │ │
 │  │   (AWS)     │       │   (GCP)         │ │
 │  └─────────────┘       └─────────────────┘ │
-│                                              │
-│  • Parquet files       • BigLake Iceberg    │
-│  • Partitioned data    • CDC/Upsert         │
-│  • Analytics ready     • Real-time query    │
+│                                             │
+│  • Parquet files       • CDC/Upsert        │
+│  • Partitioned data    • Iceberg Tables    │
+│  • Analytics ready     • Real-time query   │
 └─────────────────────────────────────────────┘
 ```
 
@@ -86,34 +135,32 @@ The1 เป็นโปรแกรมสะสมคะแนนของกล
 
 ### Primary Objectives
 
-1. **✅ Unified Data Pipeline**
-   - Single codebase สำหรับ batch และ streaming
+1. **Unified Data Pipeline**
+   - Single codebase for batch and streaming
    - Reusable components across environments
    - Consistent data quality
 
-2. **✅ Config-Driven Architecture**
+2. **Config-Driven Architecture**
    - YAML-based pipeline definitions
    - No code changes for pipeline modifications
    - Easy to maintain and extend
 
-3. **✅ Multi-Cloud Support**
+3. **Multi-Cloud Support**
    - AWS (S3, Parquet)
    - GCP (BigQuery, Bigtable, Pub/Sub, Dataflow)
    - Unified schema mapping
 
-4. **✅ Production-Ready**
+4. **Production-Ready**
    - Comprehensive testing (unit + integration)
    - CI/CD automation
    - Monitoring and alerting
-   - Error handling and DLQ
 
 ### Success Metrics
 
-- **Batch Processing**: Process daily data within 3 hours SLA
+- **Batch Processing**: Process data within SLA
 - **Streaming**: < 5 minute latency from Pub/Sub to targets
-- **Data Quality**: 99.9% accuracy in schema transformations
-- **Reliability**: 99.5% uptime for streaming pipelines
-- **Test Coverage**: > 80% code coverage
+- **Data Quality**: Accurate schema transformations
+- **Reliability**: High uptime for streaming pipelines
 
 ---
 
@@ -125,13 +172,14 @@ The1 เป็นโปรแกรมสะสมคะแนนของกล
 ┌──────────────────────────────────────────────────────────────┐
 │                    ORCHESTRATION LAYER                        │
 │                      (Apache Airflow)                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
-│  │  Daily Batch │  │  Short Batch │  │  Real-time       │   │
-│  │  (Full Sync) │  │ (Incremental)│  │  (Streaming)     │   │
-│  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘   │
-└─────────┼──────────────────┼────────────────────┼─────────────┘
-          │                  │                    │
-          ▼                  ▼                    ▼
+│  ┌──────────────────┐  ┌──────────────┐  ┌────────────────┐ │
+│  │ ms_member_short  │  │ ms_member    │  │ ms_member      │ │
+│  │    _term_init    │  │  _short_term │  │  _realtime     │ │
+│  │    (Batch)       │  │  (Batch)     │  │  (Streaming)   │ │
+│  └────────┬─────────┘  └──────┬───────┘  └───────┬────────┘ │
+└───────────┼────────────────────┼────────────────────┼─────────┘
+            │                    │                    │
+            ▼                    ▼                    ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                   PROCESSING LAYER                            │
 │                  (Apache Beam / Dataflow)                     │
@@ -140,93 +188,68 @@ The1 เป็นโปรแกรมสะสมคะแนนของกล
 │  │           Config-Driven Orchestrator                  │   │
 │  │  • Load YAML Config                                  │   │
 │  │  • Instantiate Steps from Registry                   │   │
-│  │  • Execute Pipeline (Sequential/Parallel)            │   │
-│  │  • Handle State & Outputs                            │   │
+│  │  • Execute Pipeline (Sequential)                     │   │
+│  │  • Handle State & Multiple Outputs                   │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                               │
-│  Pipeline Steps:                                             │
-│  1. Read from Source (BQ/Pub/Sub/Bigtable)                  │
-│  2. Transform & Map Schemas                                  │
-│  3. Validate Data Quality                                    │
-│  4. Write to Targets (S3/BigQuery)                          │
+│  Batch Steps:              Streaming Steps:                  │
+│  • ReadBQQuery            • RefreshMappingTable             │
+│  • BuildMappingDict       • ReadFromPubSub                  │
+│  • ParseJson              • ExtractPersonas                 │
+│  • MapRecord              • FetchFromBigtable               │
+│  • CoalesceByMapping      • TransformSchemas                │
+│  • WriteParquet           • WriteToBigQueryCDC              │
+│                           • WriteToS3Parquet                │
+│                           • MergeToIcebergStreaming         │
 └──────────────────────────────────────────────────────────────┘
-          │                  │                    │
-          ▼                  ▼                    ▼
+            │                    │                    │
+            ▼                    ▼                    ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                      STORAGE LAYER                            │
 │                                                               │
 │  AWS Side:              GCP Side:                            │
-│  • S3 (Parquet)        • BigQuery (BigLake)                 │
+│  • S3 (Parquet)        • BigQuery (CDC)                     │
 │  • Partitioned         • Iceberg Tables                      │
 │  • Analytics Ready     • CDC/Upsert Support                  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Batch Data Flow
-
-```
-BigQuery        Config File         Mapping Table
-   │                │                     │
-   │                ▼                     │
-   │         ┌─────────────┐             │
-   │         │ Orchestrator│◄────────────┘
-   │         └──────┬──────┘
-   ▼                ▼
-┌──────────┐  ┌─────────────┐
-│ReadBQQuery├─►│BuildMapping│
-└──────────┘  │    Dict     │
-              └──────┬──────┘
-                     ▼
-              ┌─────────────┐
-              │ Transform   │
-              │  Schemas    │
-              └──────┬──────┘
-                     │
-           ┌─────────┴─────────┐
-           ▼                   ▼
-      ┌─────────┐         ┌─────────┐
-      │Write S3 │         │Write BQ │
-      │(Parquet)│         │(BigLake)│
-      └─────────┘         └─────────┘
-```
-
 ### Streaming Data Flow
 
 ```
-Pub/Sub         PeriodicImpulse          Bigtable
-   │                  │                      │
-   │                  ▼                      │
-   │           ┌─────────────┐              │
-   │           │Refresh      │              │
-   │           │Mapping      │              │
-   │           └──────┬──────┘              │
-   │                  │ (Side Input)        │
-   ▼                  │                     ▼
-┌──────────┐         │              ┌─────────────┐
-│Read      │         │              │Fetch        │
-│Messages  ├─────────┼─────────────►│ByPersonaID  │
-└──────────┘         │              └──────┬──────┘
-                     │                     │
-                     ▼                     ▼
-              ┌─────────────┐      ┌─────────────┐
-              │Filter Empty │      │Transform    │
-              │  MemberID   │─────►│  Schemas    │◄─┐
-              └─────────────┘      └──────┬──────┘  │
-                                          │         │
-                                  ┌───────┴──────┐  │
-                                  │              │  │
-                                  ▼              ▼  │
-                            ┌─────────┐    ┌─────────┐
-                            │Fulfill  │    │Write BQ │
-                            │  AWS    │    │  (GCP)  │
-                            └────┬────┘    └─────────┘
-                                 │
-                                 ▼
-                          ┌─────────────┐
-                          │Window +     │
-                          │Write S3     │
-                          │(Parquet)    │
-                          └─────────────┘
+Pub/Sub (Source)
+      ↓
+ ┌───────────────────┐
+ │  ReadFromPubSub   │
+ └────────┬──────────┘
+          ↓
+ ┌───────────────────┐
+ │ ExtractPersonas   │
+ └────────┬──────────┘
+          ↓
+ ┌───────────────────┐
+ │FetchFromBigtable  │ ←── Bigtable (profiles)
+ └────────┬──────────┘
+          ↓
+ ┌───────────────────┐     ┌──────────────────┐
+ │ TransformSchemas  │ ←── │ RefreshMapping   │ (side input)
+ └────────┬──────────┘     └──────────────────┘
+          │
+    ┌─────┴─────┐
+    ▼           ▼
+┌────────┐  ┌────────┐
+│  aws   │  │  gcp   │
+└───┬────┘  └───┬────┘
+    ↓           ↓
+┌──────────┐ ┌────────────────┐
+│WriteToS3 │ │WriteToBigQuery │
+│Parquet   │ │     CDC        │
+└──────────┘ └────────┬───────┘
+                      ↓
+             ┌────────────────┐
+             │MergeToIceberg  │
+             │Streaming       │
+             └────────────────┘
 ```
 
 ---
@@ -238,7 +261,7 @@ Pub/Sub         PeriodicImpulse          Bigtable
 | Layer | Technology | Version | Purpose |
 |-------|-----------|---------|---------|
 | **Orchestration** | Apache Airflow | 2.7+ | DAG scheduling & workflow |
-| **Processing** | Apache Beam | 2.50+ | Unified batch/streaming |
+| **Processing** | Apache Beam | 2.69.0 | Unified batch/streaming |
 | **Runner** | Google Dataflow | Latest | Managed Beam execution |
 | **Language** | Python | 3.11+ | Primary development |
 
@@ -247,51 +270,18 @@ Pub/Sub         PeriodicImpulse          Bigtable
 | Type | Technology | Purpose |
 |------|-----------|---------|
 | **Source** | Google Bigtable | Member profiles (NoSQL) |
+| **Source** | Google Pub/Sub | Real-time events |
 | **Source** | Google BigQuery | Mapping tables, queries |
 | **Target** | AWS S3 | Parquet files (analytics) |
-| **Target** | BigQuery BigLake | Iceberg tables (CDC) |
+| **Target** | BigQuery | CDC tables, Iceberg tables |
 
 ### Supporting Tools
 
-- **Testing**: pytest, pytest-cov, moto (AWS mocking)
+- **Testing**: pytest, pytest-cov
 - **CI/CD**: GitLab CI
 - **Version Control**: Git
 - **Config**: YAML, dataclasses
 - **Monitoring**: Cloud Logging, Cloud Monitoring
-
----
-
-## Team & Responsibilities
-
-### Data Engineering Team
-
-**Core Team**:
-- **Data Engineers**: Pipeline development & maintenance
-- **DevOps**: CI/CD & infrastructure
-- **QA**: Testing & validation
-
-**Responsibilities**:
-1. **Development**:
-   - Implement new features
-   - Fix bugs
-   - Optimize performance
-
-2. **Operations**:
-   - Monitor pipelines
-   - Handle incidents
-   - Maintain documentation
-
-3. **Support**:
-   - Answer questions
-   - Onboard new team members
-   - Knowledge sharing
-
-### Communication Channels
-
-- **Documentation**: This repository (`docs/` folder)
-- **Issues**: GitLab Issues
-- **Meetings**: Weekly sync
-- **Chat**: Team Slack/Teams channel
 
 ---
 
@@ -300,24 +290,43 @@ Pub/Sub         PeriodicImpulse          Bigtable
 ### Key Directories
 
 ```bash
-data/processor/dags/          # Airflow DAGs
-data/processor/dataflow/      # Beam pipelines
-  ├── common/                 # Shared code
-  ├── configs/                # YAML configs
-  ├── scripts/                # Pipeline runners
-  └── tests/                  # Test suites
+data/
+├── orchestrator/
+│   └── airflow/
+│       └── dags/                  # Airflow DAGs
+│
+└── processor/
+    └── dataflow/
+        ├── common/                # Shared code (dataflow_common)
+        │   ├── steps/            # Step classes
+        │   │   ├── batch_step.py
+        │   │   └── streaming_step.py
+        │   ├── dofns/            # DoFn classes
+        │   │   └── stream.py
+        │   ├── config.py
+        │   ├── orchestrator.py
+        │   └── registry.py
+        ├── configs/               # YAML configs
+        ├── scripts/               # Pipeline runners
+        └── tests/                 # Test suites
 ```
 
 ### Key Commands
 
 ```bash
 # Run batch pipeline
+cd data/processor/dataflow
 python scripts/ms_member_short_pipeline.py \
-  --config_path=configs/ms_member_short.yaml
+  --config_path=configs/ms_member_short.yaml \
+  --runner=DirectRunner
 
 # Run streaming pipeline
-python scripts/ms_member_realtime_pipeline.py \
-  --config_path=configs/ms_member_realtime.yaml
+python scripts/ms_member_realtime_pipeline_refactor.py \
+  --runner=DataflowRunner \
+  --project=the1-insight-stg \
+  --region=asia-southeast1 \
+  --streaming \
+  --enable_streaming_engine
 
 # Run tests
 pytest tests/
@@ -325,21 +334,24 @@ pytest tests/
 
 ### Environment Access
 
-- **STG**: `the1-insight-stg` (Development & Testing)
-- **UAT**: `the1-insight-uat` (User Acceptance)
-- **PROD**: `the1-insight-prod` (Production)
+| Environment | Purpose | BigQuery Project |
+|-------------|---------|------------------|
+| **STG** | Development & Testing | the1-insight-stg |
+| **UAT** | User Acceptance | the1-insight-uat |
+| **PROD** | Production | the1-insight-prod |
 
 ---
 
 ## Next Steps
 
-📖 Continue reading:
+Continue reading:
 - [01-ARCHITECTURE](./01-ARCHITECTURE.md) - Detailed architecture
 - [02-SETUP](./02-SETUP.md) - Environment setup
-- [07-DEVELOPMENT](./07-DEVELOPMENT.md) - Development guide
+- [04-DATAFLOW-BATCH](./04-DATAFLOW-BATCH.md) - Batch pipeline guide
+- [05-DATAFLOW-STREAMING](./05-DATAFLOW-STREAMING.md) - Streaming pipeline guide
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2024-01-15
+**Document Version**: 2.0
+**Last Updated**: 2025-12-04
 **Author**: Data Engineering Team
