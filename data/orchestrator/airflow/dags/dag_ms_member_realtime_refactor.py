@@ -219,40 +219,6 @@ def periodic_health_check(**context):
         logger.error(f"Failed to check job health: {result.stderr}")
         return {'job_id': job_id, 'healthy': False, 'error': result.stderr}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ============================================
 # CUSTOM SENSOR FOR STREAMING JOBS
 # ============================================
@@ -401,20 +367,20 @@ def get_secret_value(secret_id, project_id):
         raise
 
 
-def get_aws_credentials(**context):
-    """Get AWS credentials and push to XCom"""
-    # fot stg/prod
-    access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-access-key']
-    secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-secret-key']
-    # fot dev 
-    # access_key = get_secret_value('data-pipeline-aws-access-key', PROJECT_ID)
-    # secret_key = get_secret_value('data-pipeline-aws-secret-key', PROJECT_ID)
+# def get_aws_credentials(**context):
+#     """Get AWS credentials and push to XCom"""
+#     # fot stg/prod
+#     access_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-access-key']
+#     secret_key = get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-secret-key']
+#     # fot dev 
+#     # access_key = get_secret_value('data-pipeline-aws-access-key', PROJECT_ID)
+#     # secret_key = get_secret_value('data-pipeline-aws-secret-key', PROJECT_ID)
 
-    # Push to XCom for next tasks
-    context['ti'].xcom_push(key='aws_access_key', value=access_key)
-    context['ti'].xcom_push(key='aws_secret_key', value=secret_key)
+#     # Push to XCom for next tasks
+#     context['ti'].xcom_push(key='aws_access_key', value=access_key)
+#     context['ti'].xcom_push(key='aws_secret_key', value=secret_key)
 
-    return {'status': 'credentials retrieved'}
+#     return {'status': 'credentials retrieved'}
 
 
 # def check_job_launch_status(**context):
@@ -547,11 +513,11 @@ pre_check = PythonOperator(
 )
 
 # Task 1: Get AWS credentials (ADDED - was missing in original)
-get_credentials = PythonOperator(
-    task_id='get_aws_credentials',
-    python_callable=get_aws_credentials,
-    dag=dag
-)
+# get_credentials = PythonOperator(
+#     task_id='get_aws_credentials',
+#     python_callable=get_aws_credentials,
+#     dag=dag
+# )
 
 # Task 2: BeamRunPythonPipelineOperator - Run refactored pipeline
 dataflow_job = BeamRunPythonPipelineOperator(
@@ -611,8 +577,11 @@ dataflow_job = BeamRunPythonPipelineOperator(
 
         # AWS S3 credentials
         's3_region_name': 'ap-southeast-1',
-        's3_access_key_id': "{{ ti.xcom_pull(task_ids='get_aws_credentials', key='aws_access_key') }}",
-        's3_secret_access_key': "{{ ti.xcom_pull(task_ids='get_aws_credentials', key='aws_secret_key') }}",
+        # 's3_access_key_id': "{{ ti.xcom_pull(task_ids='get_aws_credentials', key='aws_access_key') }}",
+        # 's3_secret_access_key': "{{ ti.xcom_pull(task_ids='get_aws_credentials', key='aws_secret_key') }}",
+        's3_access_key_id': get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-access-key'],
+        's3_secret_access_key': get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-secret-key'],
+
 
         'labels': {
             'environment': 'dev',
@@ -633,7 +602,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'numpy<2',  # CRITICAL: pyarrow requires numpy 1.x
         'pandas>=1.5.0',
         # S3 dependencies - versions MUST be compatible!
-        's3fs==2024.6.1',
+        # 's3fs==2024.6.1',
         'fsspec==2024.6.1',
         'aiobotocore==2.13.0',
         'boto3==1.34.106',
@@ -692,7 +661,8 @@ health_check = PythonOperator(
 # ============================================
 
 # Main DAG flow - FIXED: Added get_credentials before dataflow_job
-pre_check >> get_credentials >> dataflow_job >> verify_launch >> initial_health_check
+# pre_check >> get_credentials >> dataflow_job >> verify_launch >> initial_health_check
+pre_check >>  dataflow_job >> verify_launch >> initial_health_check
 
 # Monitoring DAG has single task
 # health_check runs independently on schedule

@@ -18,7 +18,7 @@ from apache_beam.io.gcp import bigquery
 from apache_beam.transforms import window, trigger
 
 from dataflow_common.core import BaseStep
-from dataflow_common.steps.dofns.stream import (
+from dataflow_common.dofns.stream import (
     MappingRefreshDoFn,
     ExtractPersonasDoFn,
     FetchFromBigtableDoFn,
@@ -234,7 +234,7 @@ class TransformSchemasStep(BaseStep):
         input_key = params.get("input") or self.spec.get("input")
         mapping_info_key = params.get("mapping_info") or self.spec.get("mapping_info")
         table_name = params.get("table_name", "ms_member")
-        outputs = self.spec.get("outputs", ["aws", "gcp"])
+        outputs = self.spec.get("outputs", ['gcp'])
 
         LOGGER.info(f"[{self.step_id}] Transforming schemas for table={table_name}")
         LOGGER.info(f"[{self.step_id}] Using mapping from: {mapping_info_key}")
@@ -248,15 +248,19 @@ class TransformSchemasStep(BaseStep):
             | f"{self.step_id}_Transform" >> beam.ParDo(
                 TransformSchemasDoFn(),
                 mapping_info=pvalue.AsSingleton(mapping_pcoll),
-                table_name=table_name
+                table_name=table_name,
+                # outputs=outputs
             ).with_outputs('aws', 'gcp')
+            # ).with_outputs(outputs[0])
         )
+        LOGGER.info(f"[{self.step_id}] result: {result}")
 
         # Return dict with both outputs
         return {
             outputs[0]: result.aws,
             outputs[1]: result.gcp
         }
+        # return {outputs:result}
 
 
 class FullfillSchemasStep(BaseStep):

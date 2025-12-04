@@ -10,7 +10,7 @@ from __future__ import annotations
 # =============================================================================
 # STREAM DoFns
 # =============================================================================
-from dataflow_common.steps.dofns.stream import (
+from dataflow_common.dofns.stream import (
     SyncToIcebergDoFn,
     # AddWindowInfoFn,
     # WriteParquetByWindowFn,

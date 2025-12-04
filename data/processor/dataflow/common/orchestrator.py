@@ -130,20 +130,20 @@ class Orchestrator:
             LOGGER.info(f"Starting pipeline execution with {len(plan)} steps")
         
             # Format schema fields if they exist
-            try:
-                if cfg.schema and cfg.schema.bq:
-                    if cfg.schema.bq.project:
-                        cfg.schema.bq.project = _format_value(cfg.schema.bq.project, cfg)
-                    if cfg.schema.bq.dataset:
-                        cfg.schema.bq.dataset = _format_value(cfg.schema.bq.dataset, cfg)
-                    if cfg.schema.bq.table:
-                        cfg.schema.bq.table = _format_value(cfg.schema.bq.table, cfg)
-                    if cfg.schema.bq.query:
-                        cfg.schema.bq.query = _format_value(cfg.schema.bq.query, cfg)
-                    LOGGER.info("Schema fields formatted successfully")
-            except Exception as e:
-                LOGGER.error(f"Error formatting schema fields: {e}")
-                raise
+            # try:
+            #     if cfg.schema and cfg.schema.bq:
+            #         if cfg.schema.bq.project:
+            #             cfg.schema.bq.project = _format_value(cfg.schema.bq.project, cfg)
+            #         if cfg.schema.bq.dataset:
+            #             cfg.schema.bq.dataset = _format_value(cfg.schema.bq.dataset, cfg)
+            #         if cfg.schema.bq.table:
+            #             cfg.schema.bq.table = _format_value(cfg.schema.bq.table, cfg)
+            #         if cfg.schema.bq.query:
+            #             cfg.schema.bq.query = _format_value(cfg.schema.bq.query, cfg)
+            #         LOGGER.info("Schema fields formatted successfully")
+            # except Exception as e:
+            #     LOGGER.error(f"Error formatting schema fields: {e}")
+            #     raise
 
             # # Format string fields in the plan prior to execution
             # for idx, spec in enumerate(plan):

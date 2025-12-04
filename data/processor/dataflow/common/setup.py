@@ -25,7 +25,8 @@ setup(
         'dataflow_common',
         'dataflow_common.connectors',
         'dataflow_common.steps',
-        'dataflow_common.steps.dofns',  # Added: DoFn classes subpackage
+        'dataflow_common.dofns',
+        # 'dataflow_common.steps.dofns',  # Added: DoFn classes subpackage
         'dataflow_common.transforms',
         'dataflow_common.utils',
     ],
@@ -49,7 +50,7 @@ setup(
         "pandas>=1.5.0",
         # S3 dependencies - versions MUST be compatible!
         # s3fs==2024.6.1 → aiobotocore==2.13.0 → botocore>=1.34.70,<1.34.107
-        "s3fs==2024.6.1",
+        # "s3fs==2024.6.1",
         "fsspec==2024.6.1",
         "aiobotocore==2.13.0",
         "boto3==1.34.106",

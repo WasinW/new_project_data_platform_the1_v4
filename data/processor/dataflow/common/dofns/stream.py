@@ -98,6 +98,7 @@ class SyncToIcebergDoFn(DoFn):
             lookback_minutes=self.lookback_minutes
         )
 
+        LOGGER.info(f"[SyncToIcebergDoFn] Triggered: merge_query : {merge_query}")
         try:
             job = self._client.query(merge_query)
             job.result()  # Wait for completion
@@ -588,20 +589,23 @@ class TransformSchemasDoFn(DoFn):
 
         aws_output = self.transform_message(element, mapping_dict, target='aws', table_name=table_name)
         gcp_output = self.transform_message(element, mapping_dict, target='gcp', table_name=table_name)
-
+        # output = self.transform_message(element, mapping_dict, target=outputs[0], table_name=table_name)
+        
         LOGGER.info(f"[TransformSchemasDoFn] aws_output: {len(aws_output)} fields")
         LOGGER.info(f"[TransformSchemasDoFn] gcp_output: {len(gcp_output)} fields")
+        # LOGGER.info(f"[TransformSchemasDoFn] {outputs}_output: {len(output)} fields")
         
-        # Log sample fields for debugging
+        # # Log sample fields for debugging
         if aws_output:
             sample_keys = list(aws_output.keys())[:5]
-            LOGGER.info(f"[TransformSchemasDoFn] AWS sample keys: {aws_output}")
+            LOGGER.info(f"[TransformSchemasDoFn] AWS sample keys: {sample_keys}, output : {aws_output}")
         if gcp_output:
             sample_keys = list(gcp_output.keys())[:5]
-            LOGGER.info(f"[TransformSchemasDoFn] GCP sample keys: {gcp_output}")
+            LOGGER.info(f"[TransformSchemasDoFn] GCP sample keys: {sample_keys}, output : {gcp_output}")
 
         yield beam.pvalue.TaggedOutput('aws', aws_output)
         yield beam.pvalue.TaggedOutput('gcp', gcp_output)
+        # yield beam.pvalue.TaggedOutput(outputs[0], output)
 
 
 class FullfillSchemasDoFn(DoFn):
@@ -933,6 +937,7 @@ class WritePartitionToParquetDoFn(DoFn):
         shard_id = uuid.uuid4().hex[:8]
         
         # Build output path: base_prefix/partition_path/data-{shard}.snappy.parquet
+        # s3://t1-analytics/refined/insights/ms_personas_realtime_dev/par_month=xxxx12/par_day=03/par_hour=09/run_dt=2025120309/
         output_path = f"{self.base_prefix}/{partition_path}/data-{shard_id}.snappy.parquet"
         
         LOGGER.info(f"[WritePartitionToParquet] Writing {len(records_list)} records to: {output_path}")
@@ -1087,10 +1092,10 @@ class ExtractWindowPathDoFn(DoFn):
 
         # Build partition path components
         partition_path = (
-            f"par_month={window_end.strftime('%m')}/"
+            f"par_month={window_end.strftime('%Y%m')}/"
             f"par_day={window_end.strftime('%d')}/"
-            f"par_hour={window_end.strftime('%H')}/"
-            f"run_dt={window_end.strftime('%Y%m%d%H')}"
+            f"par_hour={window_end.strftime('%H')}"
+            # f"run_dt={window_end.strftime('%Y%m%d%H')}"
         )
         
         LOGGER.info(f"[ExtractWindowPath] Partition path: {partition_path}")
