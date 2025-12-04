@@ -22,11 +22,13 @@ io:
     table: personas
     family_columns:
     - profiles
+    - consents
+
   bq:
     project: the1-insight-{WORKSPACE_ENV}
     dataset: insight
-    table: ms_personas
-    iceberg_table: ms_personas_iceberg
+    # table: ms_personas
+    # iceberg_table: ms_personas_iceberg
     temp_gcs: gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp
   s3:
     bucket: s3://t1-analytics/refined/insights/ms_personas_realtime_dev
@@ -42,47 +44,12 @@ sync:
   lookback_minutes: 30
   # MERGE query template for Iceberg sync
   # Placeholders: {iceberg_table}, {native_table}, {lookback_minutes}
-  merge_query: |
-    MERGE `{io.bq.project}.{io.bq.dataset}.{io.bq.iceberg_table}` AS T
-    USING (
-        SELECT * EXCEPT(rn)
-        FROM (
-            SELECT *,
-                ROW_NUMBER() OVER (
-                    PARTITION BY memberId
-                    ORDER BY updated_date DESC
-                ) AS rn
-            FROM `{io.bq.project}.{io.bq.dataset}.{io.bq.table}`
-            WHERE COALESCE(updated_date, CURRENT_TIMESTAMP()) >=
-                  TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 MINUTE)
-        )
-        WHERE rn = 1
-    ) AS S
-    ON T.memberId = S.memberId
 
-    WHEN MATCHED AND S.updated_date > T.updated_date THEN
-        UPDATE SET
-            accountId = S.accountId,
-            dateOfBirth = S.dateOfBirth,
-            gender = S.gender,
-            hasEmail = S.hasEmail,
-            hasMobile = S.hasMobile,
-            languagePrefer = S.languagePrefer,
-            nationalityId = S.nationalityId,
-            profileId = S.profileId,
-            updated_date = S.updated_date
+  # Window configuration
+  # window:
+  #   size_sec: 300 # 5 minutes
 
-    WHEN NOT MATCHED THEN
-        INSERT (accountId, dateOfBirth, gender, hasEmail, hasMobile,
-                languagePrefer, memberId, nationalityId, profileId, updated_date)
-        VALUES (S.accountId, S.dateOfBirth, S.gender, S.hasEmail, S.hasMobile,
-                S.languagePrefer, S.memberId, S.nationalityId, S.profileId, S.updated_date)
-
-# Window configuration
-# window:
-#   size_sec: 300 # 5 minutes
-
-# Parquet output configuration
+  # Parquet output configuration
 parquet:
   output_filename: ms-member.parquet
 
@@ -94,7 +61,7 @@ schema:
   bq:
     project: "{io.bq.project}"
     dataset: "{io.bq.dataset}"
-    table: "{io.bq.table}"
+    # table: "ms_personas"
 
 formats:
   date:
@@ -197,7 +164,7 @@ plan:
 - step: WriteToBigQueryCDC
   id: write_bq_cdc
   params:
-    table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+    table: "{io.bq.project}.{io.bq.dataset}.ms_personas"
     input: gcp
     primary_key: [ "memberId" ]
     change_type: "UPSERT"
@@ -229,12 +196,12 @@ plan:
 - step: MergeToIcebergStreaming
   id: merge_to_iceberg
   params:
-    native_table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
-    iceberg_table: "{io.bq.project}.{io.bq.dataset}.{io.bq.iceberg_table}"
+    native_table: "{io.bq.project}.{io.bq.dataset}.ms_personas"
+    iceberg_table: "{io.bq.project}.{io.bq.dataset}.ms_personas_iceberg"
     lookback_minutes: 30
     merge_interval_sec: 300
     merge_query: |
-      MERGE `{iceberg_table}` AS T
+      MERGE `{io.bq.project}.{io.bq.dataset}.ms_personas_iceberg` AS T
       USING (
           SELECT * EXCEPT(rn)
           FROM (
@@ -243,9 +210,9 @@ plan:
                       PARTITION BY memberId
                       ORDER BY updated_date DESC
                   ) AS rn
-              FROM `{native_table}`
+              FROM `{io.bq.project}.{io.bq.dataset}.ms_personas`
               WHERE COALESCE(updated_date, CURRENT_TIMESTAMP()) >=
-                    TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+                    TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 MINUTE)
           )
           WHERE rn = 1
       ) AS S
