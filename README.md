@@ -3,54 +3,72 @@
 > Enterprise data platform for The1 member data processing and synchronization
 
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
-[![Apache Beam](https://img.shields.io/badge/apache%20beam-2.50+-orange.svg)](https://beam.apache.org/)
+[![Apache Beam](https://img.shields.io/badge/apache%20beam-2.69+-orange.svg)](https://beam.apache.org/)
 [![Airflow](https://img.shields.io/badge/airflow-2.7+-green.svg)](https://airflow.apache.org/)
+[![Status](https://img.shields.io/badge/status-production%20ready-brightgreen.svg)]()
 
 ## 📋 Overview
 
-The1 Data Platform is a modern, config-driven data processing system designed to handle member data synchronization across multiple environments (STG, UAT, PROD). The platform orchestrates complex data pipelines using Apache Airflow and Apache Beam, supporting both batch and streaming processing patterns.
+The1 Data Platform is a modern, **config-driven** data processing system designed to handle member data synchronization across multiple environments (STG, UAT, PROD). The platform orchestrates complex data pipelines using Apache Airflow and Apache Beam, supporting both batch and streaming processing patterns.
 
 ### Key Features
 
-- **🔄 Config-Driven Architecture**: All pipelines defined in YAML configurations
+- **🔄 Config-Driven Architecture**: All pipelines defined in YAML configurations - no code changes needed
 - **📊 Batch Processing**: Daily member data synchronization with schema mapping
-- **⚡ Real-time Streaming**: Continuous Pub/Sub to BigQuery/S3 data flow
+- **⚡ Real-time Streaming**: Continuous Pub/Sub → BigTable → BigQuery/S3 with CDC support
 - **🎯 Multi-Environment**: Support for STG, UAT, and PROD deployments
-- **🧪 Comprehensive Testing**: Unit and integration tests with 80%+ coverage
-- **📦 Modular Design**: Reusable components across batch and streaming pipelines
+- **🧪 Comprehensive Testing**: Unit and integration tests
+- **📦 Modular Design**: 24 reusable Step classes (11 batch + 13 streaming)
 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Airflow Orchestration                    │
-│  ┌─────────────────┐  ┌──────────────────┐  ┌─────────────┐ │
-│  │ ms_member_short │  │ ms_member_daily  │  │  realtime   │ │
-│  │     (Batch)     │  │     (Batch)      │  │ (Streaming) │ │
-│  └────────┬────────┘  └────────┬─────────┘  └──────┬──────┘ │
-└───────────┼────────────────────┼────────────────────┼────────┘
-            │                    │                    │
-            ▼                    ▼                    ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Apache Beam Dataflow Pipelines                  │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │          Config-Driven Orchestrator                   │   │
-│  │  • YAML → Steps → PCollections → Output             │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  Batch Steps:           Streaming Steps:                    │
-│  • ReadBQQuery         • RefreshMappingTable               │
-│  • BuildMappingDict    • ReadFromPubSub                    │
-│  • TransformSchemas    • FetchFromBigtable                 │
-│  • WriteParquet        • TransformSchemas                  │
-│  • WriteToBigQuery     • WriteToS3Parquet                  │
-└─────────────────────────────────────────────────────────────┘
-            │                    │                    │
-            ▼                    ▼                    ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐
-│   BigQuery   │  │     GCS      │  │  S3 + Bigtable      │
-│  (Analytics) │  │  (Parquet)   │  │  (Real-time Data)   │
-└──────────────┘  └──────────────┘  └──────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                     ORCHESTRATION LAYER (Airflow)                │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
+│  │  customer_short  │  │ customer_short   │  │   customer    │  │
+│  │   _term_init     │  │    _term         │  │   _realtime   │  │
+│  │    (Batch)       │  │   (Batch)        │  │  (Streaming)  │  │
+│  └────────┬─────────┘  └────────┬─────────┘  └───────┬───────┘  │
+└───────────┼─────────────────────┼────────────────────┼──────────┘
+            │                     │                    │
+            ▼                     ▼                    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   CONFIGURATION LAYER (YAML)                     │
+│  configs/customer_profile_*.yaml                                 │
+│  • Pipeline definition (name, mode, term)                       │
+│  • Step sequence (plan)                                          │
+│  • I/O specifications (bq, s3, pubsub, bigtable)               │
+│  • Schema & mapping references                                   │
+└─────────────────────────────────────────────────────────────────┘
+            │                     │                    │
+            ▼                     ▼                    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   EXECUTION LAYER (dataflow_common)              │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │              Config-Driven Orchestrator                    │  │
+│  │  config.py → orchestrator.py → registry.py → steps/       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  Batch Steps (11):              Streaming Steps (13):           │
+│  • ReadBQQuery                 • RefreshMappingTable            │
+│  • BuildMappingDict            • ReadFromPubSub                 │
+│  • ParseJson, MapRecord        • ExtractPersonas                │
+│  • KVPairs, CoGroupByKey       • FetchFromBigtable              │
+│  • CoalesceByMapping           • FilterEmptyPK/Family           │
+│  • NormalizeToSchema           • TransformSchemas (dual output) │
+│  • WriteParquet/BQ/GCS         • FullfillSchemas                │
+│                                • WriteToBQ/S3/CDC/Iceberg       │
+└─────────────────────────────────────────────────────────────────┘
+            │                     │                    │
+            ▼                     ▼                    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     OUTPUT TARGETS                               │
+│  ┌────────────────┐  ┌────────────────┐  ┌───────────────────┐  │
+│  │   BigQuery     │  │      S3        │  │  BigQuery CDC     │  │
+│  │   (Native)     │  │   (Parquet)    │  │  (BigLake Iceberg)│  │
+│  └────────────────┘  └────────────────┘  └───────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## 📁 Project Structure
@@ -58,41 +76,59 @@ The1 Data Platform is a modern, config-driven data processing system designed to
 ```
 new_project_data_platform_the1_v4/
 ├── data/
+│   ├── orchestrator/
+│   │   └── airflow/
+│   │       └── dags/                      # Airflow DAG definitions
+│   │           ├── dag_customer_profile_short_term.py      # Batch
+│   │           ├── dag_customer_profile_short_term_init.py # Batch Init
+│   │           └── dag_customer_profile_realtime.py        # Streaming
+│   │
 │   └── processor/
-│       ├── dags/                          # Airflow DAG definitions
-│       │   ├── ms_member_short_dag.py    # Batch: Short pipeline
-│       │   ├── ms_member_daily_dag.py    # Batch: Daily full sync
-│       │   └── ms_member_realtime_dag.py # Streaming: Realtime
-│       │
 │       └── dataflow/                      # Apache Beam pipelines
-│           ├── common/                    # Shared components
-│           │   ├── config.py             # Config loader & models
+│           ├── common/                    # Shared components (dataflow_common)
+│           │   ├── config.py             # Config loader & dataclasses
 │           │   ├── orchestrator.py       # Pipeline orchestrator
-│           │   ├── registry.py           # Step registry
-│           │   ├── core.py               # Base classes
+│           │   ├── registry.py           # STEP_REGISTRY
+│           │   ├── core.py               # BaseStep abstract class
+│           │   │
+│           │   ├── steps/                # Pipeline step implementations
+│           │   │   ├── __init__.py      # Index (imports from batch/streaming)
+│           │   │   ├── batch_step.py    # 11 batch Step classes
+│           │   │   └── streaming_step.py # 13 streaming Step classes
+│           │   │
+│           │   ├── dofns/               # DoFn classes
+│           │   │   ├── common.py        # Common utilities
+│           │   │   └── stream.py        # Streaming DoFn classes
+│           │   │
 │           │   ├── connectors/           # I/O connectors
-│           │   ├── steps/                # Pipeline steps
-│           │   │   ├── __init__.py      # Batch steps
-│           │   │   ├── realtime.py      # DoFn classes
-│           │   │   └── streaming.py     # Streaming steps
-│           │   └── transforms/           # Data transformations
+│           │   │   ├── __init__.py      # BigQuery, Parquet, GCS
+│           │   │   ├── bigtable.py      # BigTable connector
+│           │   │   └── pubsub.py        # Pub/Sub connector
+│           │   │
+│           │   ├── transforms/           # Data transformation utilities
+│           │   │   ├── mapping.py       # Field mapping
+│           │   │   ├── schema.py        # Schema transformation
+│           │   │   ├── coalesce.py      # Value coalescing
+│           │   │   └── cdc.py           # CDC utilities
+│           │   │
+│           │   └── tests/               # Unit tests
+│           │       └── testcase/
+│           │           ├── test_config.py
+│           │           ├── test_steps.py
+│           │           ├── test_transforms.py
+│           │           ├── test_connectors.py
+│           │           └── test_orchestrator.py
 │           │
 │           ├── configs/                   # Pipeline configurations
-│           │   ├── ms_member_short.yaml
-│           │   ├── ms_member_daily.yaml
-│           │   └── ms_member_realtime.yaml
+│           │   ├── customer_profile_short.yaml
+│           │   ├── customer_profile_short_init.yaml
+│           │   └── customer_profile_realtime.yaml
 │           │
 │           ├── scripts/                   # Pipeline entry points
-│           │   ├── ms_member_short_pipeline.py
-│           │   ├── ms_member_daily_pipeline.py
-│           │   └── ms_member_realtime_pipeline.py
+│           │   ├── customer_profile_short_pipeline.py
+│           │   └── customer_profile_realtime_pipeline.py
 │           │
-│           ├── tests/                     # Test suite
-│           │   ├── unit/                 # Unit tests
-│           │   └── integration/          # Integration tests
-│           │
-│           └── docs/                      # Documentation
-│               └── guides/               # Detailed guides
+│           └── schemas/                   # Schema definitions
 │
 ├── pipeline/                              # CI/CD configurations
 │   └── data/
@@ -109,7 +145,8 @@ new_project_data_platform_the1_v4/
 │   ├── 07-DEVELOPMENT.md
 │   ├── 08-TESTING.md
 │   ├── 09-DEPLOYMENT.md
-│   └── 10-TROUBLESHOOTING.md
+│   ├── 10-TROUBLESHOOTING.md
+│   └── INSTRUCTION_UPDATE_20251128.md     # Architecture reference
 │
 └── README.md                              # This file
 ```
@@ -120,8 +157,8 @@ new_project_data_platform_the1_v4/
 
 - Python 3.11+
 - Apache Airflow 2.7+
-- Apache Beam 2.50+
-- GCP Account with Dataflow, BigQuery, Bigtable access
+- Apache Beam 2.69+
+- GCP Account with Dataflow, BigQuery, Bigtable, Pub/Sub access
 - AWS Account (for S3 storage)
 
 ### Installation
@@ -132,7 +169,8 @@ git clone <repository-url>
 cd new_project_data_platform_the1_v4
 
 # Install dependencies
-pip install -r requirements.txt
+cd data/processor/dataflow/common
+pip install -e .
 
 # Set up environment variables
 export GOOGLE_CLOUD_PROJECT=your-project-id
@@ -143,19 +181,21 @@ export AIRFLOW_HOME=/path/to/airflow
 
 **Batch Pipeline (Local)**
 ```bash
-python data/processor/dataflow/scripts/ms_member_short_pipeline.py \
-  --config_path=data/processor/dataflow/configs/ms_member_short.yaml \
+python data/processor/dataflow/scripts/customer_profile_short_pipeline.py \
+  --config=data/processor/dataflow/configs/customer_profile_short.yaml \
   --runner=DirectRunner
 ```
 
 **Streaming Pipeline (Dataflow)**
 ```bash
-python data/processor/dataflow/scripts/ms_member_realtime_pipeline.py \
-  --config_path=data/processor/dataflow/configs/ms_member_realtime.yaml \
+python data/processor/dataflow/scripts/customer_profile_realtime_pipeline.py \
+  --config=data/processor/dataflow/configs/customer_profile_realtime.yaml \
   --runner=DataflowRunner \
-  --project=your-project \
+  --project=the1-insight-stg \
   --region=asia-southeast1 \
-  --temp_location=gs://your-bucket/temp
+  --streaming \
+  --staging_location=gs://the1-insight-stg-data-pipeline-data-staging/dataflow/staging \
+  --temp_location=gs://the1-insight-stg-data-pipeline-data-staging/dataflow/temp
 ```
 
 **Via Airflow**
@@ -164,7 +204,7 @@ python data/processor/dataflow/scripts/ms_member_realtime_pipeline.py \
 airflow scheduler
 
 # Trigger DAG
-airflow dags trigger ms_member_short_dag --conf '{"env": "STG"}'
+airflow dags trigger dag_customer_profile_short_term --conf '{"env": "STG"}'
 ```
 
 ## 📚 Documentation
@@ -189,13 +229,15 @@ Comprehensive documentation is available in the [`docs/`](./docs) directory:
 
 ```bash
 # Run unit tests
-pytest data/processor/dataflow/tests/unit/
+cd data/processor/dataflow/common
+python -m pytest tests/testcase/ -v
 
-# Run integration tests (requires STG environment)
-pytest data/processor/dataflow/tests/integration/
+# Run specific test module
+python -m pytest tests/testcase/test_steps.py -v
+python -m pytest tests/testcase/test_transforms.py -v
 
 # Run with coverage
-pytest --cov=data/processor/dataflow --cov-report=html
+python -m pytest tests/testcase/ --cov=dataflow_common --cov-report=html
 ```
 
 ## 🛠️ Key Components
@@ -205,24 +247,40 @@ pytest --cov=data/processor/dataflow --cov-report=html
 All pipelines are defined in YAML configurations:
 
 ```yaml
-# configs/ms_member_short.yaml
+# configs/customer_profile_short.yaml
 pipeline:
-  name: ms_member_short
+  name: customer_profile_short
   mode: batch
+  term: short
+
+params:
+  pk: member_number
+  run_dt: "${RUN_DATE}"
+
+io:
+  bq:
+    project: the1-insight-stg
+    dataset: insight
+  s3:
+    refined_prefix: s3://bucket/refined/
 
 plan:
   - step: ReadBQQuery
+    id: read_source
     query: "SELECT * FROM source_table"
     out: raw_data
 
-  - step: TransformSchemas
+  - step: BuildMappingDict
+    in: mapping_rows
+    out: mapping_dict
+
+  - step: MapRecord
     in: raw_data
-    mapping_table: mapping_reconcile
-    out: transformed
+    out: mapped_data
 
   - step: WriteParquet
-    in: transformed
-    path: gs://bucket/output/
+    in: mapped_data
+    path: "{io.s3.refined_prefix}/output/"
 ```
 
 ### 2. Orchestrator Pattern
@@ -364,6 +422,6 @@ Internal use only - The1 Corporation
 
 ---
 
-**Version**: 2.0.0
-**Last Updated**: 2024-01-15
+**Version**: 3.0.0
+**Last Updated**: 2025-12-06
 **Maintained by**: Data Engineering Team
