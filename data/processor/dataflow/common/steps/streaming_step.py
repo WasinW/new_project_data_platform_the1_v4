@@ -22,7 +22,8 @@ from dataflow_common.dofns.stream import (
     MappingRefreshDoFn,
     ExtractPersonasDoFn,
     FetchFromBigtableDoFn,
-    FilterEmptyMemberIdDoFn,
+    FilterEmptyPKDoFn,
+    FilterEmptyFamilyDoFn,
     TransformSchemasDoFn,
     FullfillSchemasDoFn,
     # AddWindowInfoFn,
@@ -186,7 +187,7 @@ class FetchFromBigtableStep(BaseStep):
         return result
 
 
-class FilterEmptyMemberIdStep(BaseStep):
+class FilterEmptyPKStep(BaseStep):
     """Filter out records with empty member IDs.
 
     Config params:
@@ -208,11 +209,33 @@ class FilterEmptyMemberIdStep(BaseStep):
 
         result = (
             pcoll
-            | f"{self.step_id}_FilterEmpty" >> beam.ParDo(FilterEmptyMemberIdDoFn())
+            | f"{self.step_id}_FilterEmptyPK" >> beam.ParDo(FilterEmptyPKDoFn())
         )
 
         return result
 
+class FilterEmptyFamilyStep(BaseStep):
+    """Filter out records with empty Family.
+    Config params:
+        Family Name: Family field (e.g., 'profiles' , 'consents')
+        input: Input PCollection name from state
+        outputs: List with single output name for filtered rows
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        # Support input in both params and top level
+        input_key = params.get("input") or self.spec.get("input")
+        family_name = params.get("family_name", "profiles")
+        LOGGER.info(f"[{self.step_id}] Filtering empty {family_name}")
+        pcoll = self.state[input_key]
+        result = (
+            pcoll
+            | f"{self.step_id}_FilterEmptyFamily" >> beam.ParDo(FilterEmptyFamilyDoFn(), family_name=family_name)
+        )
+
+        return result
 
 class TransformSchemasStep(BaseStep):
     """Transform data to target schemas (AWS and GCP).
@@ -744,6 +767,69 @@ class WriteToBigQueryCDCStep(BaseStep):
 
         LOGGER.info(f"[{self.step_id}] BigQuery CDC write configured with UPSERT support")
         return result
+    
+class WriteToBigLakeIcebergStreamingStep(BaseStep):
+    """
+    Write streaming data to BigLake Iceberg table with Storage Write API.
+    APPEND mode only (CDC not supported for BigLake).
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        params = self.spec.get("params", {})
+        input_key = params.get("input") or self.spec.get("input")
+        table = params.get("table")
+        triggering_frequency = params.get("triggering_frequency", 5)
+        num_storage_api_streams = params.get("num_storage_api_streams", 5)
+        schema_param = params.get("schema")
+
+        LOGGER.info(f"[{self.step_id}] Writing to BigLake Iceberg: {table}")
+        # Convert BigQuery SchemaField to record fields
+        # Note: DATE, TIME, DATETIME need to be STRING for CDC writes
+        unsupported_types = {'DATE', 'TIME', 'DATETIME'}
+
+        # Fetch schema if not provided
+        if not schema_param:
+            from google.cloud import bigquery as bq_client
+            client = bq_client.Client()
+            table_ref = client.get_table(table)
+            schema_param = {
+                'fields': [
+                    {
+                        'name': f.name
+                        , 'type': 'STRING' if f.field_type in unsupported_types else f.field_type
+                        , 'mode': f.mode or 'NULLABLE'
+                    }
+                    for f in table_ref.schema
+                ]
+            }
+
+        pcoll = self.state[input_key]
+
+        # Prepare data (convert dict to JSON for nested fields)
+        prepared = (
+            pcoll
+            | f"{self.step_id}_PrepareForBigLake" >> beam.ParDo(WriteToBigLakeDoFn(table_name=table))
+        )
+
+        # Write using Storage Write API (APPEND mode)
+        result = (
+            prepared
+            | f"{self.step_id}_WriteBigLakeIceberg" >> bigquery.WriteToBigQuery(
+                table=table,
+                schema=schema_param,
+                # ✅ Storage Write API for streaming
+                method=bigquery.WriteToBigQuery.Method.STORAGE_WRITE_API,
+                # Table must exist (BigLake Iceberg)
+                create_disposition=bigquery.BigQueryDisposition.CREATE_NEVER,
+                # APPEND only (CDC not supported for BigLake)
+                write_disposition=bigquery.BigQueryDisposition.WRITE_APPEND,
+                # Streaming parameters
+                triggering_frequency=triggering_frequency,
+                num_storage_api_streams=num_storage_api_streams,
+            )
+        )
+
+        return result
 
 class MergeToIcebergStreamingStep(BaseStep):
     """
@@ -855,11 +941,19 @@ __all__ = [
     'ReadFromPubSubStep',
     'ExtractPersonasStep',
     'FetchFromBigtableStep',
-    'FilterEmptyMemberIdStep',
+    'FilterEmptyPKStep',
+    'FilterEmptyFamilyStep',
     'TransformSchemasStep',
     'FullfillSchemasStep',
     'WriteToBigQueryStreamingStep', # append mode
     'WriteToS3ParquetStep', # write parquet to s3 with windowing
     'WriteToBigQueryCDCStep', # write to bigquery native with CDC support
+    'WriteToBigLakeIcebergStreamingStep', # write to biglake iceberg with append mode
     'MergeToIcebergStreamingStep', # merge from native CDC to iceberg table
 ]
+# NOTE -----------------
+# Step	                                Write Method	    Table Type	            CDC Support
+# WriteToBigQueryStreamingStep          Default (legacy?)	Native	                ❌ Append only
+# WriteToBigQueryCDCStep                Storage Write API	Native	                ✅ UPSERT
+# WriteToBigLakeIcebergStreamingStep    Storage Write API	BigLake Iceberg	        ❌ Append only
+# MergeToIcebergStreamingStep           MERGE SQL	        BigLake Iceberg	        ✅ via MERGE

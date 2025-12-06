@@ -251,9 +251,11 @@ class MappingRefreshDoFn(DoFn):
                     mapping_column_name,
                     reconcile_retrieved,
                     reconcile_confirmed,
+                    -- logical_column,
                     table_name,
                     ROW_NUMBER() OVER (
                         PARTITION BY reconcile_column_name
+                        -- ,mapping_column_name
                         ORDER BY updated_date DESC
                     ) AS row_num
                 FROM `{self.mapping_table}`
@@ -303,7 +305,31 @@ class MappingRefreshDoFn(DoFn):
                     mapping_dict[table_name]['gcp'][new_name] = row['mapping_column_name']
                     mapping_dict[table_name]['aws'][org_name] = row['mapping_column_name']
 
-                schemas_dict.append(org_name)
+                schemas_dict.append(row['reconcile_column_name'])
+                # # -----------------------------------------------------------------------------------
+                # # ------------------ AWS SCHEMAS LIST -----------------------
+                # # -----------------------------------------------------------------------------------
+                # if row['reconcile_column_name'] is not None and row['reconcile_column_name'].strip() != "":
+                #     schemas_dict.append(row['reconcile_column_name'])
+
+                # # -----------------------------------------------------------------------------------
+                # # ------------------ GCP/AWS SCHEMAS DICT -----------------------
+                # # -----------------------------------------------------------------------------------
+                # table_name = row['table_name']
+                # if table_name not in mapping_dict:
+                #     mapping_dict[table_name] = {'gcp': {}, 'aws': {}}
+
+                # # VALUES
+                # if row['mapping_column_name'] is None or row['mapping_column_name'].strip() == "":
+                #     value = rowgi['logical_column'] if row['logical_column'] is not None and row['logical_column'].strip() != "" else None
+                # else:
+                #     value = row['mapping_column_name'] 
+
+                # if row['reconcile_column_name'] is not None and row['reconcile_column_name'].strip() != "":
+                #     # org_name = row['reconcile_column_name'] 
+                #     mapping_dict[table_name]['aws'][row['reconcile_column_name']] = row['mapping_column_name']
+
+
 
             LOGGER.info(f"[MappingRefreshDoFn] Refreshed with {len(mapping_dict)} table mappings")
             LOGGER.info(f"[MappingRefreshDoFn] Refreshed mapping_dict : {mapping_dict}")
@@ -479,7 +505,7 @@ class FetchFromBigtableDoFn(DoFn):
             }
 
 
-class FilterEmptyMemberIdDoFn(DoFn):
+class FilterEmptyPKDoFn(DoFn):
     """Filter out records without memberId."""
 
     def process(self, element):
@@ -497,15 +523,38 @@ class FilterEmptyMemberIdDoFn(DoFn):
             member_id = profiles.get('memberId')
 
             if member_id and str(member_id).strip():
-                LOGGER.info(f"[FilterEmptyMemberIdDoFn] Valid: {member_id}")
+                LOGGER.info(f"[FilterEmptyPKDoFn] Valid: {member_id}")
                 yield element
             else:
                 personas_id = element.get('personas_id', 'unknown')
-                LOGGER.warning(f"[FilterEmptyMemberIdDoFn] Filtering out: {personas_id}")
+                LOGGER.warning(f"[FilterEmptyPKDoFn] Filtering out: {personas_id}")
 
         except Exception as e:
-            LOGGER.error(f"[FilterEmptyMemberIdDoFn] Error: {str(e)}")
+            LOGGER.error(f"[FilterEmptyPKDoFn] Error: {str(e)}")
 
+
+class FilterEmptyFamilyDoFn(DoFn):
+    """Filter out records without memberId."""
+
+    def process(self, element , family_name: str):
+        """
+        Check if element has valid memberId.
+        Args:
+            element: Record with profiles
+        Yields:
+            Element if memberId is valid
+        """
+        try:
+            family_dict = element.get(family_name, {})
+            if family_dict or (isinstance(family_dict, dict) and len(family_dict) > 0):
+                LOGGER.info(f"[FilterEmptyFamilyDoFn] Valid: {family_name} found")
+                yield element
+            else:
+                personas_id = element.get('personas_id', 'unknown')
+                LOGGER.warning(f"[FilterEmptyPKDoFn] Filtering out: {personas_id}")
+
+        except Exception as e:
+            LOGGER.error(f"[FilterEmptyPKDoFn] Error: {str(e)}")
 
 class TransformSchemasDoFn(DoFn):
     """Transform data according to mapping dictionary."""
@@ -669,59 +718,59 @@ class WriteToBigLakeDoFn(DoFn):
         yield output
 
 
-class MapToCdcTableRow(DoFn):
-    """
-    Format data for BigQuery CDC write using Storage Write API.
+# class MapToCdcTableRow(DoFn):
+#     """
+#     Format data for BigQuery CDC write using Storage Write API.
 
-    Required schema for CDC:
-    {
-        "row_mutation_info": {"mutation_type": "UPSERT" | "DELETE", "change_sequence_number": "..."},
-        "record": { actual data fields }
-    }
-    """
+#     Required schema for CDC:
+#     {
+#         "row_mutation_info": {"mutation_type": "UPSERT" | "DELETE", "change_sequence_number": "..."},
+#         "record": { actual data fields }
+#     }
+#     """
 
-    def process(self, element):
-        import time
+#     def process(self, element):
+#         import time
 
-        LOGGER.info(f"[MapToCdcTableRow] element: {element}")
-        cdc_type = element.get('cdc_type', 'UPSERT')
-        is_delete = element.get('is_delete', False)
+#         LOGGER.info(f"[MapToCdcTableRow] element: {element}")
+#         cdc_type = element.get('cdc_type', 'UPSERT')
+#         is_delete = element.get('is_delete', False)
 
-        mutation_type = 'DELETE' if is_delete or cdc_type == 'DELETE' else 'UPSERT'
+#         mutation_type = 'DELETE' if is_delete or cdc_type == 'DELETE' else 'UPSERT'
 
-        # Generate sequence number
-        if element.get('updated_date'):
-            if isinstance(element['updated_date'], datetime):
-                seq_num = str(int(element['updated_date'].timestamp() * 1000000))
-            else:
-                seq_num = str(int(time.time() * 1000000))
-        else:
-            seq_num = str(int(time.time() * 1000000))
+#         # Generate sequence number
+#         if element.get('updated_date'):
+#             if isinstance(element['updated_date'], datetime):
+#                 seq_num = str(int(element['updated_date'].timestamp() * 1000000))
+#             else:
+#                 seq_num = str(int(time.time() * 1000000))
+#         else:
+#             seq_num = str(int(time.time() * 1000000))
 
-        # Clean up internal fields
-        record = dict(element)
-        for field in ['cdc_type', 'is_delete', '_CHANGE_TYPE', '_CHANGE_SEQUENCE_NUMBER']:
-            record.pop(field, None)
+#         # Clean up internal fields
+#         record = dict(element)
+#         for field in ['cdc_type', 'is_delete', '_CHANGE_TYPE', '_CHANGE_SEQUENCE_NUMBER']:
+#             record.pop(field, None)
 
-        # Convert dateOfBirth
-        if record.get('dateOfBirth'):
-            try:
-                if isinstance(record['dateOfBirth'], str):
-                    dt = datetime.strptime(record['dateOfBirth'], '%Y-%m-%d').date()
-                    record['dateOfBirth'] = dt.isoformat()
-            except:
-                pass
+#         # Convert dateOfBirth
+#         if record.get('dateOfBirth'):
+#             try:
+#                 if isinstance(record['dateOfBirth'], str):
+#                     dt = datetime.strptime(record['dateOfBirth'], '%Y-%m-%d').date()
+#                     record['dateOfBirth'] = dt.isoformat()
+#             except:
+#                 pass
 
-        cdc_row = {
-            'row_mutation_info': {
-                'mutation_type': mutation_type,
-                'change_sequence_number': seq_num
-            },
-            'record': record
-        }
+#         cdc_row = {
+#             'row_mutation_info': {
+#                 'mutation_type': mutation_type,
+#                 'change_sequence_number': seq_num
+#             },
+#             'record': record
+#         }
 
-        LOGGER.info(f"[MapToCdcTableRow] Created CDC row: {cdc_row}")
-        yield cdc_row
+#         LOGGER.info(f"[MapToCdcTableRow] Created CDC row: {cdc_row}")
+#         yield cdc_row
 
 class MapToCdcTableRowDoFn(beam.DoFn):
     """
@@ -1174,11 +1223,12 @@ __all__ = [
     'MappingRefreshDoFn',
     'ExtractPersonasDoFn',
     'FetchFromBigtableDoFn',
-    'FilterEmptyMemberIdDoFn',
+    'FilterEmptyPKDoFn',
+    'FilterEmptyFamilyDoFn',
     'TransformSchemasDoFn',
     'FullfillSchemasDoFn',
     'WriteToBigLakeDoFn',
-    'MapToCdcTableRow',
+    # 'MapToCdcTableRow',
     # 'AddCDCMetadataDoFn',
     'MapToCdcTableRowDoFn',
     # 'AddWindowPathDoFn',

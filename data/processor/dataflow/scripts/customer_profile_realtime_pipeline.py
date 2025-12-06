@@ -2,7 +2,7 @@
 
 This pipeline uses the Orchestrator pattern to build streaming pipelines
 from YAML configuration files. All pipeline steps are defined in
-configs/ms_member_realtime_refactor.yaml and executed by the Orchestrator.
+configs/ms_member_realtime.yaml and executed by the Orchestrator.
 
 Key differences from original ms_member_realtime_pipeline.py:
 - Uses stream_step.py DoFns (extracted from tested full_scripts) instead of realtime.py
@@ -29,10 +29,10 @@ LOGGER = logging.getLogger(__name__)
 
 def parse_args():
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Run ms_member_realtime_refactor pipeline")
+    parser = argparse.ArgumentParser(description="Run ms_member_realtime pipeline")
     parser.add_argument(
         "--config_path",
-        default="configs/ms_member_realtime_refactor.yaml",
+        default="configs/ms_member_realtime.yaml",
         help="Path to the YAML configuration file"
     )
     parser.add_argument(
@@ -59,7 +59,7 @@ def main():
     )
 
     LOGGER.info("=" * 60)
-    LOGGER.info("MS Member Realtime Pipeline (Refactored - Config-Driven)")
+    LOGGER.info("MS Member Realtime Pipeline - Config-Driven Version")
     LOGGER.info(f"Config path: {args.config_path}")
     LOGGER.info(f"Log level: {args.log_level}")
     LOGGER.info("=" * 60)

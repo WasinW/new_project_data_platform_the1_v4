@@ -1,0 +1,28 @@
+{
+  "table_id": "events_consents",
+  "table_type": "iceberg",
+  "description": "Consent events historical table with Iceberg format",
+
+  "schema": [
+    {"name": "personasId", "type": "STRING", "mode": "REQUIRED", "description": "Primary key"},
+    {"name": "memberId", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "consent", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "processDate", "type": "DATE", "mode": "REQUIRED"}
+  ],
+
+  "clustering": ["processDate", "personasId", "memberId"],
+
+  "biglake_config": {
+    "connection_id": "insight_data_pipeline_biglake_connection",
+    "file_format": "PARQUET",
+    "table_format": "ICEBERG",
+    "storage_uri_suffix": "iceberg/events_consents/"
+  },
+
+  "labels": {
+    "service": "data-pipeline",
+    "table_type": "biglake-iceberg",
+    "purpose": "historical",
+    "managed_by": "table_deployer"
+  }
+}

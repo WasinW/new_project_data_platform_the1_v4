@@ -35,12 +35,14 @@ from dataflow_common.steps import (
     ReadFromPubSubStep,
     ExtractPersonasStep,
     FetchFromBigtableStep,
-    FilterEmptyMemberIdStep,
+    FilterEmptyPKStep,
+    FilterEmptyFamilyStep,
     TransformSchemasStep,
     FullfillSchemasStep,
     WriteToBigQueryStreamingStep,
     WriteToS3ParquetStep,
     WriteToBigQueryCDCStep,
+    WriteToBigLakeIcebergStreamingStep,
     MergeToIcebergStreamingStep,
 )
 
@@ -65,12 +67,14 @@ STEP_REGISTRY: Dict[str, Type] = {
     "ReadFromPubSub": ReadFromPubSubStep,
     "ExtractPersonas": ExtractPersonasStep,
     "FetchFromBigtable": FetchFromBigtableStep,
-    "FilterEmptyMemberId": FilterEmptyMemberIdStep,
+    "FilterEmptyPK": FilterEmptyPKStep,
+    "FilterEmptyFamily": FilterEmptyFamilyStep,
     "TransformSchemas": TransformSchemasStep,
     "FullfillSchemas": FullfillSchemasStep,
     "WriteToBigQueryStreaming": WriteToBigQueryStreamingStep,
     "WriteToS3Parquet": WriteToS3ParquetStep,
     "WriteToBigQueryCDC": WriteToBigQueryCDCStep,  # For BigLake CDC streaming writes
+    "WriteToBigLakeIcebergStreaming": WriteToBigLakeIcebergStreamingStep,
     "MergeToIcebergStreaming": MergeToIcebergStreamingStep,
 }
 

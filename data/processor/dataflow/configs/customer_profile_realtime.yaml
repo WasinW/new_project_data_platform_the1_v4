@@ -91,6 +91,7 @@ plan:
           table_name,
           ROW_NUMBER() OVER (
             PARTITION BY reconcile_column_name
+            -- ,reconcile_retrieved
             ORDER BY updated_date DESC
           ) AS row_num
         FROM `{io.bq.project}.{io.bq.dataset}.mapping_reconcile`
@@ -131,7 +132,7 @@ plan:
   - bt_rows
 
 # Step 5: Filter out records with empty member IDs
-- step: FilterEmptyMemberId
+- step: FilterEmptyPK
   id: bt_rows_filtered
   params:
     input: bt_rows
@@ -139,16 +140,43 @@ plan:
   outputs:
   - bt_rows_filtered
 
+- step: FilterEmptyFamily
+  id: bt_rows_filtered_profile_family
+  params:
+    input: bt_rows_filtered
+    family_name: profiles
+  outputs:
+  - bt_rows_filtered_profile_family
+
+- step: FilterEmptyFamily
+  id: bt_rows_filtered_consent_family
+  params:
+    input: bt_rows_filtered
+    family_name: consents
+  outputs:
+  - bt_rows_filtered_consent_family
+
 # Step 6: Transform to target schemas (AWS and GCP branches)
 - step: TransformSchemas
-  id: transform_output
+  id: transform_ms_member_output
   params:
     mapping_info: mapping_refresh
     table_name: ms_member
-    input: bt_rows_filtered
+    input: bt_rows_filtered_profile_family
   outputs:
-  - aws
-  - gcp
+  - aws_ms_personas
+  - gcp_ms_personas
+
+# Step 6: Transform to target schemas (AWS and GCP branches)
+- step: TransformSchemas
+  id: transform_ms_consent_output
+  params:
+    mapping_info: mapping_refresh
+    table_name: ms_consent
+    input: bt_rows_filtered_consent_family
+  outputs:
+  - aws_ms_consent
+  - gcp_ms_consent
 
 # Step 7: Fulfill AWS schema with all fields
 - step: FullfillSchemas
@@ -156,17 +184,28 @@ plan:
   params:
     table_name: ms_member
     mapping_info: mapping_refresh
-    input: aws
+    input: aws_ms_personas
   outputs:
-  - full_aws
+  - aws_ms_member
 
 # Step 8: Write GCP data to BigQuery CDC
 - step: WriteToBigQueryCDC
-  id: write_bq_cdc
+  id: write_ms_member_bq_cdc
   params:
     table: "{io.bq.project}.{io.bq.dataset}.ms_personas"
-    input: gcp
+    input: gcp_ms_personas
     primary_key: [ "memberId" ]
+    change_type: "UPSERT"
+    triggering_frequency: 5
+    num_storage_api_streams: 5
+
+# Step 8: Write GCP data to BigQuery CDC
+- step: WriteToBigLakeIcebergStreaming
+  id: write_ms_consent_bq_cdc
+  params:
+    table: "{io.bq.project}.{io.bq.dataset}.events_consents"
+    input: gcp_ms_consent
+    primary_key: [ "personaId", "processDate" ]
     change_type: "UPSERT"
     triggering_frequency: 5
     num_storage_api_streams: 5

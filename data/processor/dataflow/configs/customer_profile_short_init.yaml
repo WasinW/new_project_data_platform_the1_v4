@@ -21,8 +21,8 @@ io:
 
 schema:
   bq:
-    project: "{io.bq.project}"
-    dataset: "{io.bq.dataset}"
+    project: the1-insight-{WORKSPACE_ENV}
+    dataset: insight
     table: ms_member
 
 formats:

@@ -343,6 +343,9 @@ class WriteParquetStep(BaseStep):
             try:
                 prefix = prefix_template.format(**format_dict)
                 LOGGER.info(f"[{self.step_id}] Final Parquet path: {prefix}")
+                LOGGER.info(f"[{self.step_id}] config: {self.config}")
+                # LOGGER.info(f"[{self.step_id}] spec: {self.spec}")
+                
             except Exception as exc:
                 raise RuntimeError(f"Failed to format prefix '{prefix_template}': {exc}")
 

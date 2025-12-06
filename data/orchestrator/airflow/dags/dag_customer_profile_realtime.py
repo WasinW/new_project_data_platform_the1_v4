@@ -1,5 +1,5 @@
 """
-MS Member Realtime Pipeline - Refactored Version (Config-Driven)
+Customer Profile Realtime Pipeline - Refactored Version (Config-Driven)
 BigQuery Data Transfer -> Dataflow Processing -> S3 Parquet
 
 This DAG uses the refactored pipeline that follows the Orchestrator pattern
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ID = Variable.get("project_id")
 GCP_CONN_ID = "google_cloud_default"
 REGION = "asia-southeast1"
-JOB_NAME = 'ms-member-realtime-refactor'
+JOB_NAME = 'customer-profile-realtime-refactor'
 
 def check_job_launch_status(**context):
     """
@@ -481,24 +481,24 @@ default_args = {
 
 # Main DAG for launching streaming job
 dag = DAG(
-    'ms_member_realtime_refactor_test',
+    'customer_profile_realtime',
     default_args=default_args,
-    description='MS Member Pipeline - Realtime Run (Refactored Config-Driven)',
+    description='Customer Profile Pipeline - Realtime Run (Refactored Config-Driven)',
     schedule_interval=None,  # Manual trigger only
     catchup=False,
     max_active_runs=1,
-    tags=['ms-member', 'streaming', 'bigquery', 'dataflow', 's3', 'manual', 'refactor'],
+    tags=['customer-profile', 'streaming', 'bigquery', 'dataflow', 's3', 'manual', 'refactor'],
 )
 
 # Monitoring DAG that runs periodically
 monitoring_dag = DAG(
-    'ms_member_realtime_refactor_monitor',
+    'customer_profile_realtime_monitor',
     default_args=default_args,
-    description='Monitor MS Member Realtime Pipeline Health (Refactored)',
+    description='Monitor Customer Profile Realtime Pipeline Health (Refactored)',
     schedule_interval='*/30 * * * *',  # Every 30 minutes
     catchup=False,
     max_active_runs=1,
-    tags=['ms-member', 'monitoring', 'dataflow', 'refactor'],
+    tags=['customer-profile', 'monitoring', 'dataflow', 'refactor'],
 )
 
 # ============================================
@@ -524,7 +524,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
     task_id='run_dataflow_pipeline',
     runner='DataflowRunner',
     # Use refactored pipeline script (path matches GitLab CI upload location)
-    py_file='{{ var.value.bucket_composer }}/dataflow/scripts/ms_member_realtime_pipeline_refactor.py',
+    py_file='{{ var.value.bucket_composer }}/dataflow/scripts/customer_profile_realtime_pipeline.py',
 
     # Dataflow pipeline options
     # ----------------------------
@@ -573,7 +573,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
 
         # Pipeline parameters - use refactored config (path matches GitLab CI upload location)
         'max_num_workers': 10,
-        'config_path': '{{ var.value.bucket_composer }}/config/ms_member_realtime_refactor.yaml',
+        'config_path': '{{ var.value.bucket_composer }}/config/customer_profile_realtime.yaml',
 
         # AWS S3 credentials
         's3_region_name': 'ap-southeast-1',
@@ -585,7 +585,7 @@ dataflow_job = BeamRunPythonPipelineOperator(
 
         'labels': {
             'environment': 'dev',
-            'pipeline': 'ms-member-realtime-refactor',
+            'pipeline': 'customer-profile-realtime-refactor',
             'team': 'data-team',
             'cost-center': 'data-engineering',
             'run-type': 'realtime'
