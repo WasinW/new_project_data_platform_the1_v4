@@ -238,7 +238,7 @@ Pub/Sub         PeriodicImpulse          Bigtable
 | Layer | Technology | Version | Purpose |
 |-------|-----------|---------|---------|
 | **Orchestration** | Apache Airflow | 2.7+ | DAG scheduling & workflow |
-| **Processing** | Apache Beam | 2.50+ | Unified batch/streaming |
+| **Processing** | Apache Beam | 2.69+ | Unified batch/streaming |
 | **Runner** | Google Dataflow | Latest | Managed Beam execution |
 | **Language** | Python | 3.11+ | Primary development |
 
@@ -300,27 +300,38 @@ Pub/Sub         PeriodicImpulse          Bigtable
 ### Key Directories
 
 ```bash
-data/processor/dags/          # Airflow DAGs
-data/processor/dataflow/      # Beam pipelines
-  ├── common/                 # Shared code
-  ├── configs/                # YAML configs
-  ├── scripts/                # Pipeline runners
-  └── tests/                  # Test suites
+data/orchestrator/airflow/dags/     # Airflow DAGs
+data/processor/dataflow/            # Beam pipelines
+  ├── common/                       # Shared code (dataflow_common)
+  │   ├── config.py                # Config loader
+  │   ├── orchestrator.py          # Pipeline orchestrator
+  │   ├── registry.py              # STEP_REGISTRY
+  │   ├── steps/                   # Step implementations
+  │   │   ├── batch_step.py       # 11 batch steps
+  │   │   └── streaming_step.py   # 13 streaming steps
+  │   ├── dofns/                   # DoFn classes
+  │   ├── connectors/              # I/O connectors
+  │   └── transforms/              # Data transformations
+  ├── configs/                      # YAML configs
+  ├── scripts/                      # Pipeline runners
+  └── tests/                        # Test suites
 ```
 
 ### Key Commands
 
 ```bash
 # Run batch pipeline
-python scripts/ms_member_short_pipeline.py \
-  --config_path=configs/ms_member_short.yaml
+cd data/processor/dataflow
+python scripts/customer_profile_short_pipeline.py \
+  --config=configs/customer_profile_short.yaml
 
 # Run streaming pipeline
-python scripts/ms_member_realtime_pipeline.py \
-  --config_path=configs/ms_member_realtime.yaml
+python scripts/customer_profile_realtime_pipeline.py \
+  --config=configs/customer_profile_realtime.yaml
 
-# Run tests
-pytest tests/
+# Run unit tests
+cd common
+python -m pytest tests/testcase/ -v
 ```
 
 ### Environment Access
@@ -337,9 +348,10 @@ pytest tests/
 - [01-ARCHITECTURE](./01-ARCHITECTURE.md) - Detailed architecture
 - [02-SETUP](./02-SETUP.md) - Environment setup
 - [07-DEVELOPMENT](./07-DEVELOPMENT.md) - Development guide
+- [INSTRUCTION_UPDATE_20251128](./INSTRUCTION_UPDATE_20251128.md) - Architecture reference
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2024-01-15
+**Document Version**: 2.0
+**Last Updated**: 2025-12-06
 **Author**: Data Engineering Team

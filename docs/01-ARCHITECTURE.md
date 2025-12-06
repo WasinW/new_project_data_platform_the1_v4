@@ -164,15 +164,33 @@ class Orchestrator:
 
 ```python
 STEP_REGISTRY = {
-    # Batch steps
+    # Batch steps (11 total)
     "ReadBQQuery": ReadBQQueryStep,
-    "TransformSchemas": TransformSchemasStep,
+    "BuildMappingDict": BuildMappingDictStep,
+    "ParseJson": ParseJsonStep,
+    "MapRecord": MapRecordStep,
+    "KVPairs": KVPairsStep,
+    "CoGroupByKey": CoGroupByKeyStep,
+    "CoalesceByMapping": CoalesceByMappingStep,
+    "NormalizeToSchema": NormalizeToSchemaStep,
     "WriteParquet": WriteParquetStep,
+    "WriteToBigQuery": WriteToBigQueryStep,
+    "WriteGCS": WriteGCSStep,
 
-    # Streaming steps
+    # Streaming steps (13 total)
     "RefreshMappingTable": RefreshMappingTableStep,
     "ReadFromPubSub": ReadFromPubSubStep,
+    "ExtractPersonas": ExtractPersonasStep,
     "FetchFromBigtable": FetchFromBigtableStep,
+    "FilterEmptyPK": FilterEmptyPKStep,
+    "FilterEmptyFamily": FilterEmptyFamilyStep,
+    "TransformSchemas": TransformSchemasStep,
+    "FullfillSchemas": FullfillSchemasStep,
+    "WriteToBigQueryStreaming": WriteToBigQueryStreamingStep,
+    "WriteToS3Parquet": WriteToS3ParquetStep,
+    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,
+    "WriteToBigLakeIcebergStreaming": WriteToBigLakeIcebergStreamingStep,
+    "MergeToIcebergStreaming": MergeToIcebergStreamingStep,
 }
 ```
 
@@ -602,9 +620,10 @@ self.state['gcp'] = gcp_data
 - [02-SETUP](./02-SETUP.md) - Environment setup
 - [06-CONFIG-SYSTEM](./06-CONFIG-SYSTEM.md) - Config details
 - [07-DEVELOPMENT](./07-DEVELOPMENT.md) - Development guide
+- [INSTRUCTION_UPDATE_20251128](./INSTRUCTION_UPDATE_20251128.md) - Architecture reference
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2024-01-15
+**Document Version**: 2.0
+**Last Updated**: 2025-12-06
 **Author**: Data Engineering Team
