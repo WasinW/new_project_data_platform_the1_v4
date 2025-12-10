@@ -16,7 +16,6 @@ import traceback
 from typing import Any, Dict, Optional
 
 import apache_beam as beam
-from apache_beam.io.gcp.bigquery import WriteToBigQuery
 
 from dataflow_common.core import BaseStep
 from dataflow_common.connectors import BigQueryConnector, ParquetConnector, GCSFilesStorage
@@ -362,85 +361,6 @@ class WriteParquetStep(BaseStep):
             raise
 
 
-class WriteToBigQueryStep(BaseStep):
-    """Write to BigQuery table."""
-
-    def execute(self, pipeline: beam.Pipeline) -> None:
-        try:
-            input_key = self.spec.get("in")
-            table = self.spec.get("table")
-
-            LOGGER.info(f"[{self.step_id}] Writing to BigQuery - input: {input_key}, table: {table}")
-
-            if not input_key or input_key not in self.state:
-                raise KeyError(f"Step {self.step_id}: missing input '{input_key}'")
-            if not table:
-                raise ValueError(f"Step {self.step_id}: 'table' must be provided")
-
-            pcoll = self.state[input_key]
-
-            write_disposition = self.spec.get("write_disposition", "WRITE_APPEND")
-            create_disposition = self.spec.get("create_disposition", "CREATE_IF_NEEDED")
-            schema = self.spec.get("schema", "SCHEMA_AUTODETECT")
-
-            pcoll | f"{self.step_id}_WriteBQ" >> WriteToBigQuery(
-                table=table,
-                write_disposition=write_disposition,
-                create_disposition=create_disposition,
-                schema=schema
-            )
-
-            LOGGER.info(f"[{self.step_id}] BigQuery write initiated")
-            return None
-
-        except Exception as e:
-            LOGGER.error(f"[{self.step_id}] Failed in WriteToBigQueryStep: {str(e)}")
-            LOGGER.debug(f"[{self.step_id}] Stack trace: {traceback.format_exc()}")
-            raise
-
-
-class WriteGCSStep(BaseStep):
-    """Write data to Google Cloud Storage."""
-
-    def execute(self, pipeline: beam.Pipeline) -> None:
-        try:
-            input_key: Optional[str] = self.spec.get("in") or self.spec.get("id")
-            path = self.spec.get("path") or self.spec.get("gcs_path")
-            fmt = (self.spec.get("format") or "text").lower()
-
-            LOGGER.info(f"[{self.step_id}] Writing to GCS - input: {input_key}, path: {path}, format: {fmt}")
-
-            if not input_key:
-                raise ValueError(f"WriteGCS step '{self.step_id}' requires an 'in' parameter")
-            if not path:
-                raise ValueError(f"WriteGCS step '{self.step_id}' requires a 'path' parameter")
-            if fmt not in {"text", "json"}:
-                raise ValueError(f"Unsupported format '{fmt}' in WriteGCS step '{self.step_id}'")
-
-            if input_key not in self.state:
-                raise KeyError(f"WriteGCS step '{self.step_id}' could not find input key '{input_key}' in state")
-
-            pcoll = self.state[input_key]
-            if pcoll is None:
-                LOGGER.warning(f"[{self.step_id}] No data to write")
-                return None
-
-            if fmt == "json":
-                pcoll = pcoll | f"{self.step_id}_SerializeJson" >> beam.Map(json.dumps)
-            else:
-                pcoll = pcoll | f"{self.step_id}_ToString" >> beam.Map(lambda x: str(x))
-
-            pcoll | self.step_id >> beam.io.WriteToText(path, shard_name_template="")
-
-            LOGGER.info(f"[{self.step_id}] GCS write initiated")
-            return None
-
-        except Exception as e:
-            LOGGER.error(f"[{self.step_id}] Failed in WriteGCSStep: {str(e)}")
-            LOGGER.debug(f"[{self.step_id}] Stack trace: {traceback.format_exc()}")
-            raise
-
-
 __all__ = [
     "ReadBQQueryStep",
     "BuildMappingDictStep",
@@ -451,6 +371,4 @@ __all__ = [
     "CoalesceByMappingStep",
     "NormalizeToSchemaStep",
     "WriteParquetStep",
-    "WriteToBigQueryStep",
-    "WriteGCSStep",
 ]
