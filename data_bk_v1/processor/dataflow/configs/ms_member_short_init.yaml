@@ -1,0 +1,146 @@
+defaults_file: null
+
+pipeline:
+  name: ms_member_short
+  mode: batch
+  term: short
+
+params:
+  pk: member_number
+  run_dt: null
+  max_date: null
+
+io:
+  bq:
+    project: the1-insight-dev
+    dataset: insight_dev
+    temp_gcs: gs://t1-insight-audit-bucket/audit_log/dataflow/temp
+  s3:
+    refined_prefix: s3://t1-analytics/refined/insights
+    num_shards: 400
+
+schema:
+  bq:
+    project: "{io.bq.project}"
+    dataset: "{io.bq.dataset}"
+    table: stg_ms_member
+
+formats:
+  date:
+  - "%Y-%m-%d"
+  - "%d/%m/%Y"
+  timestamp:
+  - "%Y-%m-%d %H:%M:%S.%f"
+  - "%Y-%m-%d %H:%M:%S"
+  - "%Y-%m-%dT%H:%M:%S.%f"
+  - "%Y-%m-%dT%H:%M:%S"
+
+plan:
+
+# 1. Get mapping configuration
+- step: ReadBQQuery
+  id: mapping_rows
+  out: mapping_rows
+  query: |
+    SELECT RECONCILE_COLUMN_NAME,
+           MAPPING_COLUMN_NAME,
+           RECONCILE_RETRIEVED,
+           RECONCILE_CONFIRMED,
+           UPDATED_DATE
+    FROM `{io.bq.project}.{io.bq.dataset}.stg_mapping_reconcile`
+    WHERE COALESCE(UPDATED_DATE, '1999-12-31') = (
+        SELECT COALESCE(MAX(UPDATED_DATE), '1999-12-31')
+        FROM `{io.bq.project}.{io.bq.dataset}.stg_mapping_reconcile`
+    )
+# 2. Build mapping dictionary
+- step: BuildMappingDict
+  in: mapping_rows
+  out: mapping_dict
+  mapping_fields:
+    src_field: MAPPING_COLUMN_NAME
+    dest_field: RECONCILE_COLUMN_NAME
+    retrieved_flag_field: RECONCILE_RETRIEVED
+    confirmed_flag_field: RECONCILE_CONFIRMED
+# 3. Get latest personas (2 hour window)
+- step: ReadBQQuery
+  id: personas_rows
+  out: personas_rows_raw
+  query: |
+    SELECT * EXCEPT(RN_PK)
+    FROM (
+      SELECT 
+      personaId
+      , profiles
+      , status
+      , timestamp
+      , ROW_NUMBER() OVER(
+        PARTITION BY JSON_VALUE(profiles, '$.memberId')
+        ORDER BY TIMESTAMP DESC
+      ) AS RN_PK
+      FROM `the1-insight-stg.insight.personas`
+      WHERE TIMESTAMP <= TIMESTAMP('2025-10-27 00:00:00')
+      AND COALESCE(JSON_VALUE(profiles, '$.memberId'), '') <> ''
+    ) WHERE RN_PK = 1
+
+# 4. Parse JSON
+- step: ParseJson
+  in: personas_rows_raw
+  out: personas_rows
+  json_fields: [ "profiles" ]
+
+# 5. Get member data
+- step: ReadBQQuery
+  id: ms_member_rows
+  out: ms_member_rows
+  query: |
+    SELECT DISTINCT origin.*
+    FROM (
+      SELECT *
+      , ROW_NUMBER() OVER(PARTITION BY member_number ORDER BY updated_date DESC ) AS RN 
+      FROM `{io.bq.project}.{io.bq.dataset}.stg_ms_member`
+    ) origin
+    INNER JOIN (
+      SELECT JSON_VALUE(profiles, '$.memberId') as member_id
+      FROM `the1-insight-stg.insight.personas`
+      WHERE TIMESTAMP <= TIMESTAMP('2025-10-27 00:00:00')
+      AND COALESCE(JSON_VALUE(profiles, '$.memberId'), '') <> ''
+      GROUP BY JSON_VALUE(profiles, '$.memberId')
+    ) new_members
+    ON origin.member_number = new_members.member_id
+    WHERE origin.RN = 1 
+
+# 6-10. Map, Join, and Coalesce
+- step: MapRecord
+  in: personas_rows
+  side: mapping_dict
+  out: mapped_new
+  mode: reconcile
+- step: KVPairs
+  in: ms_member_rows
+  out: kv_old
+  key_field: "{params.pk}"
+- step: KVPairs
+  in: mapped_new
+  out: kv_new
+  key_field: "{params.pk}"
+- step: CoGroupByKey
+  id: grouped
+  out: grouped
+  as:
+    old: kv_old
+    new: kv_new
+- step: CoalesceByMapping
+  in: grouped
+  side: mapping_rows
+  out: ms_personas_rows
+  flag_field: RECONCILE_RETRIEVED
+  dest_field: RECONCILE_COLUMN_NAME
+
+# 11-12. Normalize and Write
+- step: NormalizeToSchema
+  in: ms_personas_rows
+  out: ms_personas_casted
+
+- step: WriteParquet
+  in: ms_personas_casted
+  prefix: "{io.s3.refined_prefix}/ms_personas_dev/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"

@@ -34,6 +34,7 @@ __all__ = [
     "orchestrator",
     "registry",
     "steps",
+    "dofns",
     "transforms",
 ]
 

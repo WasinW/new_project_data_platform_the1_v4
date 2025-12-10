@@ -1,0 +1,624 @@
+# pipeline/data-pipeline.gitlab-ci.yml
+
+stages:
+- build
+- deploy-stg
+- test-stg
+- deploy-prod
+- test-prod
+
+variables:
+  RUNNER_TAG_NONPROD: 'nonprod-docker-cicd-x86'
+  RUNNER_TAG_PROD: 'prod-docker-cicd-x86'
+  SERVICE_NAME: 'insight-data-pipeline'
+  SCRIPTS_PATH: 'data/'
+  RUN_PATH: 'data/processor/dataflow/common'
+  INFRASTRUCTURE_RUN_PATH: 'infrastructure/ms-personas/'
+  GAR_REPOSITORY_NAME: 'insight-datapipeline-dataflow-common'
+  GCP_STG_PROJECT_ID: 'the1-insight-stg'
+  GCP_PRD_PROJECT_ID: 'the1-insight-prod'
+  GAR_PROD_REPOSITORY_BASE_PATH: 'asia-southeast1-docker.pkg.dev'
+  GAR_STG_REPOSITORY_BASE_PATH: 'asia-southeast1-docker.pkg.dev'
+  PYTHON_IMAGE: 'python:3.9.24-slim'
+  CONTAINER_BUILD_IMAGE: 'gcr.io/kaniko-project/executor:v1.9.0-debug'
+
+# ============================================
+# RULES DEFINITIONS
+# ============================================
+
+# Rule for Terraform changes only
+.terraform_rules: &terraform_rules
+  rules:
+  - !reference [ .execute-pipeline-template, rules ]
+  # - changes:
+  #   - infrastructure/ms-personas/secrets.tf
+  #   when: never
+  - changes:
+    - infrastructure/ms-personas/*.tf
+    - infrastructure/ms-personas/terraform.tfvars
+    - pipeline/data/ms-personas.gitlab-ci.yml
+    - infrastructure/ms-personas/**/*
+    when: on_success
+  - when: never
+
+# Rule for dataflow_common changes (needs rebuild)
+.dataflow_common_rules: &dataflow_common_rules
+  rules:
+  - !reference [ .execute-pipeline-template, rules ]
+  - changes:
+    - data/processor/dataflow/common/**/*
+    - data/processor/dataflow/test/**/*
+    - pipeline/data/ms-personas.gitlab-ci.yml
+    when: on_success
+  - when: never
+
+# Rule for scripts/configs changes only (no rebuild needed)
+.scripts_config_rules: &scripts_config_rules
+  rules:
+  - !reference [ .execute-pipeline-template, rules ]
+  - changes:
+    - data/orchestrator/airflow/**/*
+    - data/processor/dataflow/scripts/**/*
+    - data/processor/dataflow/configs/**/*
+    - pipeline/data/ms-personas.gitlab-ci.yml
+    when: on_success
+  - when: never
+
+# ============================================
+# SHARED SCRIPTS (like ms-personas pattern)
+# ============================================
+
+.ms-personas-gcp-prepare:
+  script:
+  - |
+    if [ "$WORKSPACE_ENV" = "prod" ]; then
+      cat $T1_PIPELINE_SA | base64 -d > $GOOGLE_APPLICATION_CREDENTIALS_PATH
+    fi
+  - export GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS_PATH
+  - gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+
+.ms-personas-terraform-plan:
+  script:
+  - echo "terraform plan starting for data-pipeline"
+  - cd $INFRASTRUCTURE_RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select -or-create $WORKSPACE_ENV
+  - terraform plan
+.ms-personas-terraform-apply:
+  script:
+  - echo "terraform apply starting for data-pipeline"
+  - cd $INFRASTRUCTURE_RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select -or-create $WORKSPACE_ENV
+  # - terraform destroy -target=google_bigquery_table.ms_personas_native_table -auto-approve || echo "No ms_personas_native_table table to destroy"
+  # - terraform destroy -target=google_bigquery_table.ms_personas_iceberg -auto-approve || echo "No ms_personas_native_table table to destroy"
+  - bq rm -f -t the1-insight-stg:insight.mapping_reconcile
+  - bq rm -f -t the1-insight-stg:insight.ms_personas
+  - bq rm -f -t the1-insight-stg:insight.ms_personas_iceberg
+  - terraform apply -auto-approve
+
+# ============================================
+# PART 1: TERRAFORM PROVISION (Infrastructure)
+# ============================================
+
+ms-personas:terraform:plan:nonprod:
+  stage: deploy-stg
+  tags:
+  - $RUNNER_TAG_NONPROD
+  variables:
+    WORKSPACE_ENV: stg
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+  - !reference [ .ms-personas-terraform-plan, script ]
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  - sec:scan-secret:dataflow-common
+  - dataflow-common:build-wheel
+  <<: *terraform_rules
+
+ms-personas:terraform:apply:nonprod:
+  stage: deploy-stg
+  tags:
+  - $RUNNER_TAG_NONPROD
+  variables:
+    WORKSPACE_ENV: stg
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+    BIGQUERY_DATASET_ID: insight
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+  - !reference [ .ms-personas-terraform-apply, script ]
+  # - !reference [ .ms-personas-table-init, script ]
+  # - !reference [ .ms-personas-iceberg-init, script ]
+  - echo "!reference [ .ms-personas-gcp-prepare, script ]"
+  - echo "!reference [ .ms-personas-terraform-apply, script ]"
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  - ms-personas:terraform:plan:nonprod
+  when: manual
+  <<: *terraform_rules
+
+ms-personas:terraform:plan:prod:
+  stage: deploy-prod
+  tags:
+  - $RUNNER_TAG_PROD
+  variables:
+    WORKSPACE_ENV: prod
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+  - !reference [ .ms-personas-terraform-plan, script ]
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  - sec:scan-secret:dataflow-common
+  - dataflow-common:build-wheel
+  <<: *terraform_rules
+
+ms-personas:terraform:apply:prod:
+  stage: deploy-prod
+  tags:
+  - $RUNNER_TAG_PROD
+  variables:
+    WORKSPACE_ENV: prod
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+    BIGQUERY_DATASET_ID: insight
+  script:
+  # - !reference [ .ms-personas-gcp-prepare, script ]
+  # - !reference [ .ms-personas-terraform-apply, script ]
+  - echo "!reference [ .ms-personas-gcp-prepare, script ]"
+  - echo "!reference [ .ms-personas-terraform-apply, script ]"
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  - ms-personas:terraform:plan:prod
+  when: manual
+  <<: *terraform_rules
+
+# ============================================
+# PART 2A: DATAFLOW_COMMON CHANGES (Build & Deploy)
+# ============================================
+# Security scan (like triggers pattern)
+sec:scan-secret:dataflow-common:
+  stage: build
+  tags:
+  - $RUNNER_TAG_NONPROD
+  extends:
+  - sec:scan-secret
+  variables:
+    RUN_PATH: $RUN_PATH
+    SERVICE_NAME: $SERVICE_NAME
+  <<: *dataflow_common_rules
+
+dataflow-common:test:
+  stage: build
+  tags:
+  - $RUNNER_TAG_NONPROD
+  image: $PYTHON_IMAGE
+  script:
+  - cd $RUN_PATH
+  # - python -m pip install --upgrade pip
+  # - python -m pip install -e .
+  # - python -m pip install pytest
+  # - cd ../tests
+  # - python -m pytest -q . -v --tb=short
+  - pip install uv
+  # ใช้ uv แทน pip (ใช้ --system ใน CI environment ที่เป็น container)
+  - uv pip install --system --upgrade pip
+  - uv pip install --system -e .
+  - uv pip install --system pytest
+  - cd tests
+  # - python -m pytest -q . -v --tb=short
+  <<: *dataflow_common_rules
+
+# Build wheel
+dataflow-common:build-wheel:
+  stage: build
+  tags:
+  - $RUNNER_TAG_NONPROD
+  image: $PYTHON_IMAGE
+  variables:
+    DEPLOYMENT_TAG: $CI_COMMIT_SHORT_SHA
+  script:
+  - cd $RUN_PATH
+  - ls -la
+  - pip install --upgrade pip setuptools wheel build
+  - python -m build
+  - ls -la dist/
+  - pwd
+  artifacts:
+    when: on_success
+    expire_in: 1h
+    paths:
+    - $RUN_PATH/dist/*.whl
+  needs:
+  - sec:scan-secret:dataflow-common
+  - dataflow-common:test
+  <<: *dataflow_common_rules
+
+# Build Docker image (like triggers pattern)
+processor:create-image:dataflow-common:nonprod:
+  stage: deploy-stg
+  tags:
+  - cicd-nonprod
+  image: $CONTAINER_BUILD_IMAGE
+  variables:
+    DEPLOYMENT_TAG: $CI_COMMIT_SHORT_SHA
+    GOOGLE_APPLICATION_CREDENTIALS: '/kaniko/.docker/gcloud-key.json'
+  retry:
+    # เพิ่ม retry
+    max: 2
+    when:
+    - script_failure
+    - runner_system_failure
+    - stuck_or_timeout_failure
+  before_script:
+  - mkdir -p /kaniko/.docker/
+  script:
+  - cat $INSIGHT_PROD_SA_CREDENTIALS | base64 -d > /kaniko/.docker/gcloud-key.json
+  - echo "{\"credsStore\":\"ecr-login\"}" > /kaniko/.docker/config.json
+  # Build with version tag format v1.XX
+  - |
+    VERSION_TAG="v1.${CI_PIPELINE_IID:-$DEPLOYMENT_TAG}"
+    /kaniko/executor \
+      --context "$CI_PROJECT_DIR/$RUN_PATH" \
+      --dockerfile "$CI_PROJECT_DIR/$RUN_PATH/Dockerfile" \
+      --destination "$GAR_STG_REPOSITORY_BASE_PATH/$GCP_STG_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:$VERSION_TAG" \
+      --destination "$GAR_STG_REPOSITORY_BASE_PATH/$GCP_STG_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:$DEPLOYMENT_TAG" \
+      --destination "$GAR_STG_REPOSITORY_BASE_PATH/$GCP_STG_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:latest" \
+      --cache=true \
+      --cache-repo="$GAR_STG_REPOSITORY_BASE_PATH/$GCP_STG_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common/cache" \
+      --snapshotMode=redo
+  # - docker inspect <IMAGE_NAME> | grep "Architecture"
+  after_script:
+  - rm -f /kaniko/.docker/gcloud-key.json
+  needs:
+  - job: ms-personas:terraform:apply:nonprod
+    optional: true
+  - dataflow-common:build-wheel
+  <<: *dataflow_common_rules
+
+processor:create-image:dataflow-common:prod:
+  stage: deploy-prod
+  tags:
+  - cicd-prod
+  image: $CONTAINER_BUILD_IMAGE
+  variables:
+    DEPLOYMENT_TAG: $CI_COMMIT_SHORT_SHA
+    GOOGLE_APPLICATION_CREDENTIALS: '/kaniko/.docker/gcloud-key.json'
+  before_script:
+  - mkdir -p /kaniko/.docker/
+  script:
+  - cat $INSIGHT_PROD_SA_CREDENTIALS | base64 -d > /kaniko/.docker/gcloud-key.json
+  - echo "{\"credsStore\":\"ecr-login\"}" > /kaniko/.docker/config.json
+  # Build with version tag format v1.XX
+  - |
+    VERSION_TAG="v1.${CI_PIPELINE_IID:-$DEPLOYMENT_TAG}"
+    /kaniko/executor \
+      --context "$CI_PROJECT_DIR/$RUN_PATH" \
+      --dockerfile "$CI_PROJECT_DIR/$RUN_PATH/Dockerfile" \
+      --destination "$GAR_PROD_REPOSITORY_BASE_PATH/$GCP_PRD_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:$VERSION_TAG" \
+      --destination "$GAR_PROD_REPOSITORY_BASE_PATH/$GCP_PRD_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:$DEPLOYMENT_TAG" \
+      --cache=true
+  after_script:
+  - rm -f /kaniko/.docker/gcloud-key.json
+  needs:
+  - job: ms-personas:terraform:apply:prod
+    optional: true
+  - dataflow-common:build-wheel
+  <<: *dataflow_common_rules
+
+# Upload wheel to GCS
+dataflow-common:upload-wheel:nonprod:
+  stage: deploy-stg
+  tags:
+  - $RUNNER_TAG_NONPROD
+  # image: google/cloud-sdk:alpine
+  variables:
+    WORKSPACE_ENV: stg
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+    DEPLOYMENT_TAG: $CI_COMMIT_SHORT_SHA
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+  # Get bucket name from terraform
+  - cd $INFRASTRUCTURE_RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select $WORKSPACE_ENV
+  - export COMPOSER_BUCKET=$(terraform output -raw composer_bucket 2>/dev/null || echo "t1-airflow-composer-bucket")
+  - echo $COMPOSER_BUCKET
+  - cd $CI_PROJECT_DIR
+  # - ls -l /builds/The1central/The1/the1-api/insight-api/data/ms-personas/scripts/dataflow_common/*/*
+  - ls -l /builds/The1central/The1/the1-api/insight-api/data/processor/dataflow/common/dist/*
+  # Upload wheel
+  - gsutil cp $RUN_PATH/dist/*.whl gs://${COMPOSER_BUCKET}/dags/packages/
+  - gsutil cp $RUN_PATH/dist/*.whl gs://${COMPOSER_BUCKET}/dags/packages/dataflow_common-$DEPLOYMENT_TAG.whl
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  - dataflow-common:build-wheel
+  - processor:create-image:dataflow-common:nonprod
+  <<: *dataflow_common_rules
+
+dataflow-common:upload-wheel:prod:
+  stage: deploy-prod
+  tags:
+  - $RUNNER_TAG_PROD
+  # image: google/cloud-sdk:alpine
+  variables:
+    WORKSPACE_ENV: prod
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
+    DEPLOYMENT_TAG: $CI_COMMIT_SHORT_SHA
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+  # Get bucket name from terraform
+  - cd $INFRASTRUCTURE_RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select $WORKSPACE_ENV
+  - export COMPOSER_BUCKET=$(terraform output -raw composer_bucket 2>/dev/null || echo "t1-airflow-composer-bucket")
+  - cd $CI_PROJECT_DIR
+  # Upload wheel
+  - gsutil cp $RUN_PATH/dist/*.whl gs://${COMPOSER_BUCKET}/dags/packages/
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  - dataflow-common:build-wheel
+  - processor:create-image:dataflow-common:prod
+  - job: ms-personas:terraform:apply:prod
+    optional: true
+  when: manual
+  <<: *dataflow_common_rules
+
+# Tag stable (like triggers pattern)
+api:tag-stable:dataflow-common:
+  stage: deploy-prod
+  tags:
+  - cicd-prod
+  variables:
+    DEPLOYMENT_TAG: $CI_COMMIT_SHORT_SHA
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
+  script:
+  - cat $T1_PIPELINE_SA | base64 -d > $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  - export GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS_PATH
+  - gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+  - gcloud artifacts docker tags add \ $GAR_STG_REPOSITORY_BASE_PATH/$GCP_PRD_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:$DEPLOYMENT_TAG \ $GAR_STG_REPOSITORY_BASE_PATH/$GCP_PRD_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:stable
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  allow_failure: true
+  needs:
+  - processor:create-image:dataflow-common:nonprod
+  - processor:create-image:dataflow-common:prod
+  <<: *dataflow_common_rules
+
+# ============================================
+# PART 2B: SCRIPTS/CONFIG CHANGES ONLY (No rebuild)
+# ============================================
+
+# Upload DAGs and configs to GCS (like ms-personas dataflow step)
+ms-personas:upload-scripts:nonprod:
+  stage: deploy-stg
+  tags:
+  - $RUNNER_TAG_NONPROD
+  variables:
+    WORKSPACE_ENV: stg
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+
+  # Get bucket names from terraform
+  - cd $INFRASTRUCTURE_RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select $WORKSPACE_ENV
+  - export COMPOSER_BUCKET=$(terraform output -raw composer_bucket 2>/dev/null || echo "t1-airflow-composer-bucket-stg")
+  - cd $CI_PROJECT_DIR
+  - echo 'Copying scripts to GCS...'
+  # Upload DAGs from new structure
+  - |
+    # gsutil rm -r gs://${COMPOSER_BUCKET}/dags/ || echo "No existing dags to remove"
+    sed -i "s/{WORKSPACE_ENV}/${WORKSPACE_ENV}/g" data/orchestrator/airflow/dags/*.py
+    gsutil cp data/orchestrator/airflow/dags/*.py gs://${COMPOSER_BUCKET}/dags/
+  # Upload dataflow scripts
+  - |
+    # gsutil rm -r gs://${COMPOSER_BUCKET}/dataflow/ || echo "No existing dataflow to remove"
+    gsutil cp data/processor/dataflow/scripts/*.py gs://${COMPOSER_BUCKET}/dataflow/scripts/
+  # Upload configs if they exist
+  - |
+    if [ -d "data/processor/dataflow/configs" ] && [ "$(ls -A data/processor/dataflow/configs/*.yaml 2>/dev/null)" ]; then
+      sed -i "s/{WORKSPACE_ENV}/${WORKSPACE_ENV}/g" data/processor/dataflow/configs/*.yaml
+      gsutil cp data/processor/dataflow/configs/*.yaml gs://${COMPOSER_BUCKET}/config/
+    fi
+  # # Upload scripts
+  # - |
+  #   if [ -d "scripts" ]; then
+  #     gsutil -m cp scripts/*.py gs://${DATAFLOW_BUCKET}/scripts/
+  #   fi
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  # needs:
+  # - ms-personas:terraform:apply:prod
+  # - processor:create-image:dataflow-common:nonprod
+  when: manual
+  <<: *scripts_config_rules
+
+ms-personas:upload-scripts:prod:
+  stage: deploy-prod
+  tags:
+  - $RUNNER_TAG_PROD
+  variables:
+    WORKSPACE_ENV: prod
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+  # Same as nonprod but for prod
+  - cd $INFRASTRUCTURE_RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select $WORKSPACE_ENV
+  - export COMPOSER_BUCKET=$(terraform output -raw composer_bucket 2>/dev/null || echo "t1-airflow-composer-bucket-prod")
+  - cd $CI_PROJECT_DIR
+  - echo 'Copying scripts to GCS...'
+  # Upload DAGs from new structure
+  - |
+    gsutil rm -r gs://${COMPOSER_BUCKET}/dags/ || echo "No existing dags to remove"
+    sed -i "s/{WORKSPACE_ENV}/${WORKSPACE_ENV}/g" data/orchestrator/airflow/dags/*.py
+    gsutil cp data/orchestrator/airflow/dags/*.py gs://${COMPOSER_BUCKET}/dags/
+  # Upload dataflow scripts
+  - |
+    gsutil rm -r gs://${COMPOSER_BUCKET}/dataflow/ || echo "No existing dataflow to remove"
+    gsutil cp data/processor/dataflow/scripts/*.py gs://${COMPOSER_BUCKET}/dataflow/scripts/
+  # Upload configs if they exist
+  - |
+    if [ -d "data/processor/dataflow/configs" ] && [ "$(ls -A data/processor/dataflow/configs/*.yaml 2>/dev/null)" ]; then
+      sed -i "s/{WORKSPACE_ENV}/${WORKSPACE_ENV}/g" data/processor/dataflow/configs/*.yaml
+      gsutil cp data/processor/dataflow/configs/*.yaml gs://${COMPOSER_BUCKET}/config/
+    fi
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  # needs:
+  # - ms-personas:terraform:apply:prod
+  # - processor:create-image:dataflow-common:prod
+  # - ms-personas:upload-scripts:nonprod
+  when: manual
+  <<: *scripts_config_rules
+
+# ============================================
+# PART 3: SETUP COMPOSER VARIABLES (After Terraform)
+# ============================================
+ms-personas:setup-composer-variables:nonprod:
+  stage: deploy-stg
+  tags:
+  - $RUNNER_TAG_NONPROD
+  variables:
+    WORKSPACE_ENV: stg
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+    COMPOSER_LOCATION: asia-southeast1
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+
+  # Get terraform outputs
+  - cd $INFRASTRUCTURE_RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select $WORKSPACE_ENV
+  # Get all outputs
+  - export COMPOSER_ENV=$(terraform output -raw composer_env_name)
+  # - export MAPPING_TRANSFER_ID=$(terraform output -raw mapping_transfer_config_id)
+  # - export MEMBER_TRANSFER_ID=$(terraform output -raw member_transfer_config_id)
+  - export MAPPING_TRANSFER_ID=$(terraform output -raw mapping_transfer_config_id | sed 's|.*/||')
+  - export MEMBER_TRANSFER_ID=$(terraform output -raw member_transfer_config_id | sed 's|.*/||')
+  - export COMPOSER_BUCKET=$(terraform output -raw composer_bucket)
+  - export AUDIT_BUCKET=$(terraform output -raw audit_bucket)
+  - export ARTIFACT_REGISTRY_URL=$(terraform output -raw artifact_registry_url)
+  - cd $CI_PROJECT_DIR
+
+  # Set Airflow variables
+  - |
+    echo "Setting Composer Airflow Variables..."
+
+    # Check if Composer is ready
+    gcloud composer environments describe $COMPOSER_ENV \
+      --location $COMPOSER_LOCATION \
+      --project $GCP_STG_PROJECT_ID || exit 1
+
+    # Function to set variable
+    set_var() {
+      gcloud composer environments run $COMPOSER_ENV \
+        --location $COMPOSER_LOCATION \
+        --project $GCP_STG_PROJECT_ID \
+        variables set -- $1 "$2" || echo "Warning: Failed to set $1"
+    }
+
+    # Set all required variables
+    set_var "project_id" "$GCP_STG_PROJECT_ID"
+    set_var "environment" "$WORKSPACE_ENV"
+
+    # Buckets
+    set_var "bucket_composer" "gs://$COMPOSER_BUCKET"
+    set_var "bucket_audit" "gs://$AUDIT_BUCKET"
+
+    # DTS Config IDs - Important!
+    set_var "mapping_transfer_config_id" "$MAPPING_TRANSFER_ID"
+    set_var "member_transfer_config_id" "$MEMBER_TRANSFER_ID"
+
+    # Dataflow configuration
+    set_var "dataflow_sa_email" "t1-ins-$WORKSPACE_ENV-sa-data@the1-insight-$WORKSPACE_ENV.iam.gserviceaccount.com"
+    set_var "dataflow_subnetwork" "https://www.googleapis.com/compute/v1/projects/the1-network-$WORKSPACE_ENV/regions/asia-southeast1/subnetworks/the1-subnet-dataflow-$WORKSPACE_ENV"
+    set_var "dataflow_common_image" "$ARTIFACT_REGISTRY_URL/dataflow-common:latest"
+
+    echo "Composer variables setup completed!"
+
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  # - ms-personas:terraform:apply:nonprod
+  - processor:create-image:dataflow-common:nonprod
+  when: manual # Run manually after terraform
+  rules:
+  - !reference [ .execute-pipeline-template, rules ]
+  - if: $TRIGGER_SET_COMPOSER_VARIABLES == "1"
+    when: always
+  <<: *terraform_rules
+
+ms-personas:setup-composer-variables:prod:
+  stage: deploy-prod
+  tags:
+  - $RUNNER_TAG_PROD
+  # image: google/cloud-sdk:alpine
+  # before_script:
+  #   - apk add --no-cache terraform
+  variables:
+    WORKSPACE_ENV: prod
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
+    COMPOSER_LOCATION: asia-southeast1
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+
+  # Same as nonprod but for prod
+  - cd $INFRASTRUCTURE_RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select $WORKSPACE_ENV
+  # Get outputs
+  - export COMPOSER_ENV=$(terraform output -raw composer_env_name)
+  # - export MAPPING_TRANSFER_ID=$(terraform output -raw mapping_transfer_config_id)
+  # - export MEMBER_TRANSFER_ID=$(terraform output -raw member_transfer_config_id)
+  - export MAPPING_TRANSFER_ID=$(terraform output -raw mapping_transfer_config_id | sed 's|.*/||')
+  - export MEMBER_TRANSFER_ID=$(terraform output -raw member_transfer_config_id | sed 's|.*/||')
+  - export COMPOSER_BUCKET=$(terraform output -raw composer_bucket)
+  - export AUDIT_BUCKET=$(terraform output -raw audit_bucket)
+  - cd $CI_PROJECT_DIR
+  # Set variables (similar to nonprod)
+  - |
+    set_var() {
+      gcloud composer environments run $COMPOSER_ENV \
+        --location $COMPOSER_LOCATION \
+        --project $GCP_PRD_PROJECT_ID \
+        variables set -- $1 "$2" || echo "Warning: Failed to set $1"
+    }
+    set_var "project_id" "$GCP_PRD_PROJECT_ID"
+    set_var "mapping_transfer_config_id" "$MAPPING_TRANSFER_ID"
+    set_var "member_transfer_config_id" "$MEMBER_TRANSFER_ID"
+    set_var "bucket_composer" "gs://$COMPOSER_BUCKET"
+    set_var "bucket_audit" "gs://$AUDIT_BUCKET"
+    set_var "dataflow_common_image" "$ARTIFACT_REGISTRY_URL/dataflow-common:latest"
+    set_var "dataflow_sa_email" "t1-ins-$WORKSPACE_ENV-sa-data@the1-insight-$WORKSPACE_ENV.iam.gserviceaccount.com"
+    set_var "dataflow_subnetwork" "https://www.googleapis.com/compute/v1/projects/the1-network-$WORKSPACE_ENV/regions/asia-southeast1/subnetworks/the1-subnet-dataflow-$WORKSPACE_ENV"
+    # ... other variables ...
+
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  # - ms-personas:terraform:apply:prod
+  - processor:create-image:dataflow-common:prod
+  # - ms-personas:terraform:plan:prod
+
+  when: manual
+  <<: *terraform_rules

@@ -1,0 +1,164 @@
+defaults_file: null
+
+pipeline:
+  name: ms_member_realtime
+  mode: streaming
+  term: realtime
+
+params:
+  pk: member_number
+  run_dt: null
+
+io:
+  pubsub:
+    subscription: "projects/the1-insight-dev/subscriptions/ms-personas-datapipeline-dataflow-subscription"
+  bigtable:
+    project: 'the1-insight-stg'
+    instance: t1-insight-bt
+    table: personas
+    family_columns:
+    - profiles
+  bq:
+    project: the1-insight-dev
+    dataset: insight_dev
+    table: ms_personas
+    temp_gcs: gs://t1-insight-audit-bucket/audit_log/dataflow/temp
+  s3:
+    bucket: s3://t1-analytics/refined/insights/ms_personas_realtime_dev
+    region: ap-southeast-1
+
+# Mapping refresh configuration
+mapping:
+  table: "{io.bq.project}.{io.bq.dataset}.stg_mapping_reconcile"
+  refresh_interval_sec: 60
+
+# Window configuration
+window:
+  size_sec: 300 # 5 minutes
+
+# DLQ configuration (commented - not yet implemented)
+# dlq:
+#   topic: "projects/the1-insight-dev/topics/dlq-realtime"
+
+schema:
+  bq:
+    project: "{io.bq.project}"
+    dataset: "{io.bq.dataset}"
+    table: "{io.bq.table}"
+
+formats:
+  date:
+  - "%Y-%m-%d"
+  - "%d/%m/%Y"
+  timestamp:
+  - "%Y-%m-%d %H:%M:%S.%f"
+  - "%Y-%m-%d %H:%M:%S"
+  - "%Y-%m-%dT%H:%M:%S.%f"
+  - "%Y-%m-%dT%H:%M:%S"
+
+# Pipeline plan for streaming realtime (config-driven)
+plan:
+# Step 1: Periodically refresh mapping table from BigQuery
+- step: RefreshMappingTable
+  id: mapping_refresh
+  params:
+    fire_interval: 60 # Refresh every 60 seconds
+    mapping_table: "{mapping.table}"
+    query: |
+      SELECT * EXCEPT(row_num)
+      FROM (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (
+            PARTITION BY table_name, target, reconcile_column_name
+            ORDER BY last_update DESC
+          ) AS row_num
+        FROM `{mapping.table}`
+      )
+      WHERE row_num = 1
+  outputs:
+  - mapping_refresh
+
+# Step 2: Read messages from Pub/Sub
+- step: ReadFromPubSub
+  id: message_rows
+  params:
+    subscription: "{io.pubsub.subscription}"
+  outputs:
+  - message_rows
+
+# Step 3: Extract persona IDs from messages
+- step: ExtractPersonas
+  id: pk_value
+  params:
+    pk_col: personaId
+    input: message_rows
+  outputs:
+  - pk_value
+
+# Step 4: Fetch data from Bigtable using persona IDs
+- step: FetchFromBigtable
+  id: bt_rows
+  params:
+    project: "{io.bigtable.project}"
+    instance: "{io.bigtable.instance}"
+    table: "{io.bigtable.table}"
+    pk_col: personaId
+    parent_field:
+    - profiles
+    input: pk_value
+  outputs:
+  - bt_rows
+
+# Step 5: Filter out records with empty member IDs
+- step: FilterEmptyMemberId
+  id: bt_rows_filtered
+  params:
+    input: bt_rows
+    pk_col: profiles.memberId
+  outputs:
+  - bt_rows_filtered
+
+# Step 6: Transform to target schemas (AWS and GCP branches)
+- step: TransformSchemas
+  id: transform_output
+  params:
+    mapping_info: mapping_refresh # Side input reference
+    table_name: ms_member
+    input: bt_rows_filtered
+  outputs:
+  - aws
+  - gcp
+
+# Step 7: Fulfill AWS schema with all fields
+- step: FullfillSchemas
+  id: full_aws
+  params:
+    table_name: ms_member
+    mapping_info: mapping_refresh # Side input reference
+    input: aws
+  outputs:
+  - full_aws
+
+# Step 8: Write GCP data to BigQuery
+- step: WriteToBigQueryCDC # ⬅️ ใช้ตัวใหม่สำหรับ streaming CDC
+  id: write_bq_cdc
+  params:
+    table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+    input: "gcp"
+    primary_key: [ "memberId" ] # Optional
+    change_type: "UPSERT" # Optional
+
+# - step: WriteToBigQuery
+#   id: write_bq
+#   params:
+#     table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+#     input: gcp
+
+# Step 9: Write AWS data to S3 as Parquet
+- step: WriteToS3Parquet
+  id: write_s3
+  params:
+    bucket: "{io.s3.bucket}"
+    window_size: "{window.size_sec}"
+    input: full_aws
