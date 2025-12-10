@@ -170,7 +170,14 @@ OPTIONS(
 
             partitioning = definition.get("partitioning", {})
             if partitioning:
-                sql += f"\nPARTITION BY {partitioning.get('type', 'DAY')}({partitioning.get('field')})"
+                field = partitioning.get('field')
+                part_type = partitioning.get('type', 'DAY').upper()
+                # BigQuery uses DATE() for TIMESTAMP columns with daily partitioning
+                # or DATE_TRUNC for other granularities
+                if part_type == 'DAY':
+                    sql += f"\nPARTITION BY DATE({field})"
+                else:
+                    sql += f"\nPARTITION BY DATE_TRUNC({field}, {part_type})"
 
             clustering = definition.get("clustering", [])
             if clustering:
