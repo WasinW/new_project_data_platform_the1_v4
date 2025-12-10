@@ -238,6 +238,9 @@ OPTIONS(
         result = self.run_bq([
             "query", "--use_legacy_sql=false", sql
         ], check=False)
+        if result.returncode != 0:
+            print(f"  [SQL ERROR] stdout: {result.stdout}")
+            print(f"  [SQL ERROR] stderr: {result.stderr}")
         return result.returncode == 0
 
     def deploy_table(self, definition: Dict, force: bool = False) -> bool:
