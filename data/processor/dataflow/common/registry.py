@@ -28,8 +28,6 @@ from dataflow_common.steps import (
     CoalesceByMappingStep,
     NormalizeToSchemaStep,
     WriteParquetStep,
-    WriteToBigQueryStep,
-    WriteGCSStep,
     # Streaming steps (config-driven realtime pipeline) - from streaming_step.py
     RefreshMappingTableStep,
     ReadFromPubSubStep,
@@ -59,9 +57,6 @@ STEP_REGISTRY: Dict[str, Type] = {
     "CoalesceByMapping": CoalesceByMappingStep,
     "NormalizeToSchema": NormalizeToSchemaStep,
     "WriteParquet": WriteParquetStep,
-    # Optional batch steps (not currently used but may be useful)
-    "WriteToBigQuery": WriteToBigQueryStep,
-    "WriteGCS": WriteGCSStep,
     # Streaming steps (used in ms_member_realtime.yaml)
     "RefreshMappingTable": RefreshMappingTableStep,
     "ReadFromPubSub": ReadFromPubSubStep,
@@ -73,7 +68,7 @@ STEP_REGISTRY: Dict[str, Type] = {
     "FullfillSchemas": FullfillSchemasStep,
     "WriteToBigQueryStreaming": WriteToBigQueryStreamingStep,
     "WriteToS3Parquet": WriteToS3ParquetStep,
-    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,  # For BigLake CDC streaming writes
+    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,
     "WriteToBigLakeIcebergStreaming": WriteToBigLakeIcebergStreamingStep,
     "MergeToIcebergStreaming": MergeToIcebergStreamingStep,
 }

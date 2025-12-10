@@ -35,6 +35,107 @@ LOGGER = logging.getLogger(__name__)
 # Thai timezone constant
 TZ_BANGKOK = timezone(timedelta(hours=7))
 
+# SQL Function Mapping - Maps SQL functions to Python implementations
+# Returns string format for all types (BigQuery compatible)
+SQL_FUNCTION_MAPPING = {
+    'CURRENT_DATE()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+    'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+    'NOW()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+    'UUID()': lambda: str(uuid.uuid4()),
+}
+
+# Data Type Conversion Functions
+# All return values compatible with BigQuery types
+DATA_TYPE_CONVERTERS = {
+    'STRING': lambda v: str(v) if v is not None else None,
+    'INT64': lambda v: int(v) if v is not None else None,
+    'INTEGER': lambda v: int(v) if v is not None else None,
+    'FLOAT64': lambda v: float(v) if v is not None else None,
+    'FLOAT': lambda v: float(v) if v is not None else None,
+    'BOOLEAN': lambda v: bool(v) if v is not None else None,
+    'BOOL': lambda v: bool(v) if v is not None else None,
+    'DATE': lambda v: _convert_to_date_string(v) if v is not None else None,
+    'TIMESTAMP': lambda v: _convert_to_timestamp_string(v) if v is not None else None,
+    'DATETIME': lambda v: _convert_to_timestamp_string(v) if v is not None else None,
+}
+
+def _convert_to_date_string(value) -> str:
+    """Convert value to date string format '%Y-%m-%d'."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        # Already a string, try to parse and reformat
+        try:
+            from datetime import datetime as dt
+            # Try common formats
+            for fmt in ['%Y-%m-%d', '%d/%m/%Y', '%Y/%m/%d', '%d-%m-%Y']:
+                try:
+                    parsed = dt.strptime(value.strip(), fmt)
+                    return parsed.strftime('%Y-%m-%d')
+                except ValueError:
+                    continue
+            # If no format matches, return as-is
+            return value
+        except Exception:
+            return str(value)
+    if hasattr(value, 'strftime'):
+        return value.strftime('%Y-%m-%d')
+    return str(value)
+
+def _convert_to_timestamp_string(value) -> str:
+    """Convert value to timestamp string format '%Y-%m-%d %H:%M:%S'."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        # Already a string, try to parse and reformat
+        try:
+            from datetime import datetime as dt
+            # Try common formats
+            for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S.%f']:
+                try:
+                    parsed = dt.strptime(value.strip().replace('Z', ''), fmt)
+                    return parsed.strftime('%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    continue
+            # If no format matches, return as-is
+            return value
+        except Exception:
+            return str(value)
+    if hasattr(value, 'strftime'):
+        return value.strftime('%Y-%m-%d %H:%M:%S')
+    return str(value)
+
+def convert_value_to_type(value, data_type: str):
+    """
+    Convert a value to the specified data type.
+
+    Args:
+        value: The value to convert
+        data_type: Target data type (STRING, INT64, FLOAT64, DATE, TIMESTAMP, BOOLEAN, etc.)
+
+    Returns:
+        Converted value or raises ValueError if conversion fails
+    """
+    if value is None:
+        return None
+
+    if data_type is None:
+        return value
+
+    data_type_upper = data_type.upper().strip()
+    converter = DATA_TYPE_CONVERTERS.get(data_type_upper)
+
+    if converter:
+        try:
+            return converter(value)
+        except (ValueError, TypeError) as e:
+            LOGGER.error(f"[convert_value_to_type] Failed to convert '{value}' to {data_type}: {e}")
+            raise ValueError(f"Cannot convert value '{value}' to type {data_type}: {e}")
+    else:
+        # Unknown type, return as-is with warning
+        LOGGER.warning(f"[convert_value_to_type] Unknown data type '{data_type}', returning value as-is")
+        return value
+
 
 class SyncToIcebergDoFn(DoFn):
     """
@@ -129,101 +230,6 @@ class SyncToIcebergDoFn(DoFn):
             }
 
 
-# class AddWindowInfoFn(DoFn):
-#     """Add window path and timestamp to each element for partitioned writes."""
-
-#     def process(self, element, window=DoFn.WindowParam):
-#         """
-#         Add window information to element for dynamic partitioning.
-
-#         Args:
-#             element: Input record
-#             window: Beam window parameter
-
-#         Yields:
-#             Record with _window_path and _window_timestamp fields
-#         """
-#         window_end = datetime.fromtimestamp(
-#             window.end.micros / 10**6,
-#             tz=timezone.utc
-#         ).astimezone(TZ_BANGKOK)
-
-#         path = window_end.strftime('par_month=%m/par_day=%d/par_hour=%H/run_dt=%Y%m%d%H')
-#         LOGGER.info(f"[AddWindowInfoFn] Window path: {path}")
-
-#         yield {
-#             **element,
-#             '_window_path': path,
-#             '_window_timestamp': window_end
-#         }
-
-
-# class WriteParquetByWindowFn(DoFn):
-#     """Write Parquet files to S3 grouped by window."""
-
-#     def __init__(
-#         self,
-#         base_path: str,
-#         schema: pa.Schema,
-#         date_columns: Optional[List[str]] = None,
-#         output_filename: str = "ms-member.parquet"
-#     ):
-#         """
-#         Initialize Parquet writer.
-
-#         Args:
-#             base_path: S3 base path (e.g., s3://bucket/prefix)
-#             schema: PyArrow schema for Parquet
-#             date_columns: List of column names to convert to date type.
-#                           Should be provided from config. If None, no date conversion is done.
-#             output_filename: Name of the output Parquet file (default: ms-member.parquet)
-#         """
-#         self.base_path = base_path
-#         self.schema = schema
-#         self.date_columns = date_columns or []
-#         self.output_filename = output_filename
-
-#     def process(self, group):
-#         """
-#         Write grouped records to Parquet.
-
-#         Args:
-#             group: Tuple of (window_path, records)
-
-#         Yields:
-#             Success message
-#         """
-#         import s3fs
-
-#         LOGGER.info("[WriteParquetByWindowFn] Processing window group")
-#         window_path, records = group
-
-#         output_path = f"{self.base_path}/{window_path}/{self.output_filename}"
-#         LOGGER.info(f"[WriteParquetByWindowFn] Output path: {output_path}")
-
-#         df = pd.DataFrame(list(records))
-
-#         # Convert date columns (configurable)
-#         for col in self.date_columns:
-#             if col in df.columns:
-#                 df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
-
-#         df.drop(columns=['_window_path', '_window_timestamp'], inplace=True, errors='ignore')
-
-#         table = pa.Table.from_pandas(df, schema=self.schema)
-
-#         fs = s3fs.S3FileSystem()
-#         with fs.open(output_path, 'wb') as f:
-#             pq.write_table(
-#                 table,
-#                 f,
-#                 compression='snappy',
-#                 use_dictionary=True
-#             )
-
-#         yield f"Written {len(records)} records to {output_path}"
-
-
 class MappingRefreshDoFn(DoFn):
     """Refresh mapping table periodically from BigQuery."""
 
@@ -256,6 +262,59 @@ class MappingRefreshDoFn(DoFn):
             )
             WHERE row_num = 1
             """
+
+    def _build_mapping_value(self, row) -> Dict[str, Any]:
+        """
+        Build mapping value dict with type, value, and data_type.
+
+        Priority:
+        1. If mapping_column_name is not null/empty → type='path'
+        2. If mapping_logic is a SQL function → type='logic'
+        3. If mapping_logic is not null/empty but not SQL function → type='constant'
+        4. If both are null/empty → type='constant' with value=None
+
+        Args:
+            row: BigQuery row with mapping_column_name, mapping_logic, mapping_column_type
+
+        Returns:
+            Dict with 'type', 'value', and 'data_type' keys
+        """
+        mapping_column_name = row.get('mapping_column_name')
+        mapping_logic = row.get('mapping_logic')
+        data_type = row.get('mapping_column_type')
+
+        # Check if mapping_column_name has value → type='path'
+        if mapping_column_name is not None and str(mapping_column_name).strip() != "":
+            return {
+                'type': 'path',
+                'value': mapping_column_name,
+                'data_type': data_type
+            }
+
+        # Check if mapping_logic is a SQL function → type='logic'
+        if mapping_logic is not None and str(mapping_logic).strip() != "":
+            logic_upper = str(mapping_logic).upper().strip()
+            if logic_upper in SQL_FUNCTION_MAPPING:
+                return {
+                    'type': 'logic',
+                    'value': mapping_logic,
+                    'data_type': data_type
+                }
+            else:
+                # mapping_logic is a constant value → type='constant'
+                return {
+                    'type': 'constant',
+                    'value': mapping_logic,
+                    'data_type': data_type
+                }
+
+        # Both are null/empty → type='constant' with value=None
+        return {
+            'type': 'constant',
+            'value': None,
+            'data_type': data_type
+        }
+
     # def sql_function(self, logic: str) -> str:
     #     """
     #     Wrap mapping logic in SQL function format.
@@ -319,7 +378,11 @@ class MappingRefreshDoFn(DoFn):
 
                     if mapping_dict[table_name].get('gcp') is None:
                         mapping_dict[table_name]['gcp'] = {}
-                    mapping_dict[table_name]['gcp'][row['mapping_alias_name']] = row['mapping_column_name'] if row['mapping_column_name'] is not None else row['mapping_logic']
+
+                    # Build mapping value with type, value, and data_type
+                    gcp_mapping_value = self._build_mapping_value(row)
+                    mapping_dict[table_name]['gcp'][row['mapping_alias_name']] = gcp_mapping_value
+
                 # # -----------------------------------------------------------------------------------
                 # ---------------------------- AWS SCHEMAS DICT -------------------------
                 # # -----------------------------------------------------------------------------------
@@ -327,7 +390,10 @@ class MappingRefreshDoFn(DoFn):
                     LOGGER.info(f"[MappingRefreshDoFn] AWS COL {row['reconcile_retrieved']}")
                     if mapping_dict[table_name].get('aws') is None:
                         mapping_dict[table_name]['aws'] = {}
-                    mapping_dict[table_name]['aws'][row['reconcile_column_name']] = row['mapping_column_name'] if row['mapping_column_name'] is not None else row['mapping_logic']
+
+                    # Build mapping value with type, value, and data_type
+                    aws_mapping_value = self._build_mapping_value(row)
+                    mapping_dict[table_name]['aws'][row['reconcile_column_name']] = aws_mapping_value
 
                 # # -----------------------------------------------------------------------------------
                 # # ------------------ AWS SCHEMAS LIST -----------------------
@@ -601,77 +667,128 @@ class TransformSchemasDoFn(DoFn):
             return reduce(operator.getitem, path.split('.'), data)
         except (KeyError, TypeError):
             return None
-    def isSqlFunction(self, path: str) -> bool:
+
+    def isSqlFunction(self, logic: str) -> bool:
         """
-        Check if the path represents a SQL function.
+        Check if the logic represents a SQL function using SQL_FUNCTION_MAPPING.
 
         Args:
+            logic: Mapping logic string to check
+
+        Returns:
+            True if logic is a SQL function, False otherwise
         """
-        list_function = ['CURRENT_DATE()', 'CURRENT_TIMESTAMP()', 'NOW()', 'UUID()']
-        if path.upper().strip() in list_function:
-            return True
-        return False
+        if logic is None:
+            return False
+        return logic.upper().strip() in SQL_FUNCTION_MAPPING
 
     def sql_function(self, logic: str) -> str:
         """
-        Wrap mapping logic in SQL function format.
+        Execute SQL function and return result using SQL_FUNCTION_MAPPING.
 
         Args:
-            logic: Mapping logic string
+            logic: SQL function name (e.g., 'CURRENT_DATE()', 'UUID()')
+
+        Returns:
+            Result of the SQL function as string, or None if not found
         """
-        if logic.upper().strip() == 'CURRENT_DATE()':
-            # formatted_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S') + f'.{datetime.now(timezone.utc).microsecond // 1000:03d}'
-            formatted_time = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-            return formatted_time            
-        
+        if logic is None:
+            return None
+        func = SQL_FUNCTION_MAPPING.get(logic.upper().strip())
+        if func:
+            return func()
         return None
-    
+
     def transform_message(self, message_dict: dict, mapping_dict: dict,
                           target: str = 'gcp', table_name: str = 'ms_member') -> dict:
         """
-        Transform message according to mapping.
+        Transform message according to mapping with data type conversion.
+
+        NEW mapping structure:
+            mapping_info = {
+                'type': 'path' | 'logic' | 'constant',
+                'value': xxx,
+                'data_type': 'STRING' | 'INT64' | 'DATE' | etc.
+            }
 
         Args:
             message_dict: Source message
-            mapping_dict: Mapping configuration
+            mapping_dict: Mapping configuration with new structure
             target: Target platform ('gcp' or 'aws')
             table_name: Table name for mapping lookup
 
         Returns:
-            Transformed dictionary
+            Transformed dictionary with converted data types
         """
         result = {}
 
-        # FIXED: Add INFO logging for debugging
         LOGGER.info(f"[TransformSchemasDoFn] transform_message called with target={target}, table_name={table_name}")
         LOGGER.info(f"[TransformSchemasDoFn] Available tables in mapping: {list(mapping_dict.keys())}")
-        LOGGER.info(f"[TransformSchemasDoFn] Available tables in message_dict: {message_dict}")
+        LOGGER.debug(f"[TransformSchemasDoFn] message_dict: {message_dict}")
 
         specific_mapping = mapping_dict.get(table_name, {}).get(target, {})
-        
+
         if not specific_mapping:
-            LOGGER.warning(f"[TransformSchemasDoFn] ⚠️ No mapping found for table={table_name}, target={target}")
+            LOGGER.warning(f"[TransformSchemasDoFn] No mapping found for table={table_name}, target={target}")
             LOGGER.warning(f"[TransformSchemasDoFn] Available tables: {list(mapping_dict.keys())}")
             if table_name in mapping_dict:
                 LOGGER.warning(f"[TransformSchemasDoFn] Available targets for {table_name}: {list(mapping_dict[table_name].keys())}")
             return result
-        
-        LOGGER.info(f"[TransformSchemasDoFn] Found {len(specific_mapping)} fields in mapping : {specific_mapping}")
 
-        for new_key, path in specific_mapping.items():
+        LOGGER.info(f"[TransformSchemasDoFn] Found {len(specific_mapping)} fields in mapping")
 
-            if self.isSqlFunction(path):
-                LOGGER.info(f"[TransformSchemasDoFn] SQL_FUNCTION supported in this context for key={new_key}, path={path}")
-                value = self.sql_function(path)
-            else:
-                # value = self.get_nested_value(message_dict, path) if '.' in path else message_dict.get(path)
-                value = self.get_nested_value(message_dict, path)
-            
-            LOGGER.info(f"[TransformSchemasDoFn] new_key: {new_key} , value: {value} , path: {path}")
+        for new_key, mapping_info in specific_mapping.items():
+            try:
+                # Handle both old format (string) and new format (dict)
+                if isinstance(mapping_info, str):
+                    # OLD FORMAT: mapping_info is just the path/logic string (backward compatibility)
+                    if self.isSqlFunction(mapping_info):
+                        value = self.sql_function(mapping_info)
+                    else:
+                        value = self.get_nested_value(message_dict, mapping_info)
+                    result[new_key] = value
+                    LOGGER.debug(f"[TransformSchemasDoFn] (old format) {new_key}={value}")
+                else:
+                    # NEW FORMAT: mapping_info is dict with type, value, data_type
+                    mapping_type = mapping_info.get('type', 'path')
+                    mapping_value = mapping_info.get('value')
+                    data_type = mapping_info.get('data_type')
 
-            result[new_key] = value if value is not None else None
+                    # Get raw value based on type
+                    if mapping_type == 'logic':
+                        # SQL function
+                        raw_value = self.sql_function(mapping_value)
+                        LOGGER.debug(f"[TransformSchemasDoFn] {new_key}: logic '{mapping_value}' -> {raw_value}")
+                    elif mapping_type == 'path':
+                        # Extract from nested dict
+                        raw_value = self.get_nested_value(message_dict, mapping_value)
+                        LOGGER.debug(f"[TransformSchemasDoFn] {new_key}: path '{mapping_value}' -> {raw_value}")
+                    elif mapping_type == 'constant':
+                        # Fixed value
+                        raw_value = mapping_value
+                        LOGGER.debug(f"[TransformSchemasDoFn] {new_key}: constant -> {raw_value}")
+                    else:
+                        # Unknown type, treat as path
+                        raw_value = self.get_nested_value(message_dict, mapping_value) if mapping_value else None
+                        LOGGER.warning(f"[TransformSchemasDoFn] Unknown mapping type '{mapping_type}' for {new_key}")
 
-        LOGGER.info(f"[TransformSchemasDoFn] result : {result}")
+                    # Convert to target data type
+                    if raw_value is not None and data_type:
+                        try:
+                            converted_value = convert_value_to_type(raw_value, data_type)
+                            result[new_key] = converted_value
+                        except ValueError as e:
+                            LOGGER.error(f"[TransformSchemasDoFn] Type conversion failed for {new_key}: {e}")
+                            raise  # Re-raise error as user requested
+                    else:
+                        result[new_key] = raw_value
+
+            except Exception as e:
+                LOGGER.error(f"[TransformSchemasDoFn] Error processing field {new_key}: {e}")
+                raise  # Re-raise error as user requested
+
+        LOGGER.info(f"[TransformSchemasDoFn] Transformed {len(result)} fields")
+        LOGGER.debug(f"[TransformSchemasDoFn] result: {result}")
         return result
 
     def process(self, element, mapping_info, table_name: str = 'ms_member'):
@@ -780,60 +897,6 @@ class WriteToBigLakeDoFn(DoFn):
         yield output
 
 
-# class MapToCdcTableRow(DoFn):
-#     """
-#     Format data for BigQuery CDC write using Storage Write API.
-
-#     Required schema for CDC:
-#     {
-#         "row_mutation_info": {"mutation_type": "UPSERT" | "DELETE", "change_sequence_number": "..."},
-#         "record": { actual data fields }
-#     }
-#     """
-
-#     def process(self, element):
-#         import time
-
-#         LOGGER.info(f"[MapToCdcTableRow] element: {element}")
-#         cdc_type = element.get('cdc_type', 'UPSERT')
-#         is_delete = element.get('is_delete', False)
-
-#         mutation_type = 'DELETE' if is_delete or cdc_type == 'DELETE' else 'UPSERT'
-
-#         # Generate sequence number
-#         if element.get('updated_date'):
-#             if isinstance(element['updated_date'], datetime):
-#                 seq_num = str(int(element['updated_date'].timestamp() * 1000000))
-#             else:
-#                 seq_num = str(int(time.time() * 1000000))
-#         else:
-#             seq_num = str(int(time.time() * 1000000))
-
-#         # Clean up internal fields
-#         record = dict(element)
-#         for field in ['cdc_type', 'is_delete', '_CHANGE_TYPE', '_CHANGE_SEQUENCE_NUMBER']:
-#             record.pop(field, None)
-
-#         # Convert dateOfBirth
-#         if record.get('dateOfBirth'):
-#             try:
-#                 if isinstance(record['dateOfBirth'], str):
-#                     dt = datetime.strptime(record['dateOfBirth'], '%Y-%m-%d').date()
-#                     record['dateOfBirth'] = dt.isoformat()
-#             except:
-#                 pass
-
-#         cdc_row = {
-#             'row_mutation_info': {
-#                 'mutation_type': mutation_type,
-#                 'change_sequence_number': seq_num
-#             },
-#             'record': record
-#         }
-
-#         LOGGER.info(f"[MapToCdcTableRow] Created CDC row: {cdc_row}")
-#         yield cdc_row
-
 class MapToCdcTableRowDoFn(beam.DoFn):
     """
     Format data for BigQuery CDC write using Storage Write API.
@@ -907,111 +970,6 @@ class MapToCdcTableRowDoFn(beam.DoFn):
         yield cdc_row
 
 
-
-# class AddCDCMetadataDoFn(DoFn):
-#     """Add CDC metadata fields for BigLake table writes."""
-
-#     def __init__(self, primary_key_fields: List[str] = None, change_type: str = 'UPSERT'):
-#         """
-#         Initialize CDC metadata DoFn.
-
-#         Args:
-#             primary_key_fields: List of primary key field names
-#             change_type: Default change type ('UPSERT' or 'DELETE')
-#         """
-#         self.primary_key_fields = primary_key_fields or ['memberId']
-#         self.change_type = change_type
-#         LOGGER.info(f"[AddCDCMetadataDoFn] Initialized with PK: {self.primary_key_fields}")
-
-#     def process(self, element):
-#         """
-#         Add CDC metadata fields to each record.
-
-#         Args:
-#             element: Input record (dict)
-
-#         Yields:
-#             Record with CDC metadata fields added
-#         """
-#         try:
-#             record = dict(element)
-
-#             is_delete = record.get('is_delete', False) or record.get('_is_deleted', False)
-#             record['_CHANGE_TYPE'] = 'DELETE' if is_delete else self.change_type
-
-#             timestamp = record.get('updated_at') or record.get('timestamp') or record.get('event_timestamp')
-
-#             if timestamp:
-#                 if isinstance(timestamp, datetime):
-#                     sequence_num = timestamp.isoformat()
-#                 else:
-#                     sequence_num = str(timestamp)
-#             else:
-#                 sequence_num = datetime.now(timezone.utc).isoformat()
-
-#             record['_CHANGE_SEQUENCE_NUMBER'] = sequence_num
-
-#             yield record
-
-#         except Exception as e:
-#             LOGGER.error(f"[AddCDCMetadataDoFn] Error: {e}")
-#             raise
-
-# ------------------------------------- VER 2 ---------------------------------
-# ============================================================================
-# Alternative: Separate DoFn for adding CDC metadata (for backward compatibility)
-# ============================================================================
-
-# class AddCDCMetadataDoFn(beam.DoFn):
-#     """
-#     Add CDC metadata fields to records.
-    
-#     This DoFn adds _CHANGE_TYPE and _CHANGE_SEQUENCE_NUMBER as flat fields.
-#     Use this when NOT using use_cdc_writes=True (legacy approach).
-    
-#     For proper CDC with use_cdc_writes=True, use MapToCdcTableRowDoFn instead.
-#     """
-    
-#     def __init__(self, primary_key_fields: List[str] = None, change_type: str = "UPSERT"):
-#         self.primary_key_fields = primary_key_fields or ["memberId"]
-#         self.change_type = change_type
-    
-#     def process(self, element):
-#         import time
-        
-#         # Add _CHANGE_TYPE
-#         element['_CHANGE_TYPE'] = element.get('_CHANGE_TYPE', self.change_type)
-        
-#         # Add _CHANGE_SEQUENCE_NUMBER (timestamp-based)
-#         if '_CHANGE_SEQUENCE_NUMBER' not in element:
-#             if element.get('updated_date'):
-#                 if isinstance(element['updated_date'], datetime):
-#                     seq = str(int(element['updated_date'].timestamp() * 1000000))
-#                 else:
-#                     seq = str(int(time.time() * 1000000))
-#             else:
-#                 seq = str(int(time.time() * 1000000))
-#             element['_CHANGE_SEQUENCE_NUMBER'] = seq
-        
-#         yield element
-
-# class AddWindowPathDoFn(DoFn):
-#     """Add window path to each element for dynamic destination."""
-
-#     def process(self, element, window=DoFn.WindowParam):
-#         """Add _window_path based on window end time."""
-#         window_end = datetime.fromtimestamp(
-#             window.end.micros / 10**6,
-#             tz=timezone.utc
-#         ).astimezone(TZ_BANGKOK)
-
-#         # Path format: par_month=MM/par_day=DD/par_hour=HH/run_dt=YYYYMMDDHH
-#         path = window_end.strftime('par_month=%m/par_day=%d/par_hour=%H/run_dt=%Y%m%d%H')
-        
-#         yield {
-#             **element,
-#             '_window_path': path,
-#         }
 
 class WritePartitionToParquetDoFn(DoFn):
     """
@@ -1098,91 +1056,6 @@ class WritePartitionToParquetDoFn(DoFn):
                 'status': 'failed',
                 'error': str(e)
             }
-
-# class WriteParquetWithBeamFSDoFn(DoFn):
-#     """
-#     Write Parquet files to S3 using Beam's FileSystems.
-    
-#     FIXED VERSION: Uses apache_beam.io.filesystems.FileSystems
-#     - No credential management needed (uses pipeline environment)
-#     - Consistent with batch code approach
-#     - Handles S3, GCS, local filesystem automatically
-#     """
-
-#     def __init__(
-#         self,
-#         base_path: str,
-#         schema: pa.Schema = None,
-#         date_columns: Optional[List[str]] = None,
-#         output_filename: str = "ms-member.parquet"
-#     ):
-#         self.base_path = base_path.rstrip('/')
-#         self.schema = schema
-#         self.date_columns = date_columns or []
-#         self.output_filename = output_filename
-
-#     def process(self, group):
-#         import pandas as pd
-        
-#         window_path, records = group
-#         records_list = list(records)
-        
-#         if not records_list:
-#             LOGGER.warning(f"[WriteParquetWithBeamFS] Empty group: {window_path}")
-#             return
-
-#         # Generate unique filename to avoid overwrites
-#         shard_id = uuid.uuid4().hex[:8]
-#         base_name = self.output_filename.replace('.parquet', '')
-#         output_path = f"{self.base_path}/{window_path}/{base_name}-{shard_id}.snappy.parquet"
-        
-#         LOGGER.info(f"[WriteParquetWithBeamFS] Writing {len(records_list)} records to: {output_path}")
-
-#         try:
-#             # Create DataFrame
-#             df = pd.DataFrame(records_list)
-
-#             # Convert date columns
-#             for col in self.date_columns:
-#                 if col in df.columns:
-#                     df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
-
-#             # Remove internal columns
-#             internal_cols = [c for c in df.columns if c.startswith('_')]
-#             df.drop(columns=internal_cols, inplace=True, errors='ignore')
-
-#             # Create PyArrow table
-#             if self.schema:
-#                 table = pa.Table.from_pandas(df, schema=self.schema, preserve_index=False)
-#             else:
-#                 table = pa.Table.from_pandas(df, preserve_index=False)
-
-#             # ===== FIXED: Use Beam's FileSystems instead of s3fs =====
-#             # This automatically uses credentials from pipeline environment
-#             with FileSystems.create(output_path) as f:
-#                 pq.write_table(
-#                     table,
-#                     f,
-#                     compression='snappy',
-#                     use_dictionary=True
-#                 )
-
-#             LOGGER.info(f"[WriteParquetWithBeamFS] ✅ Written: {output_path}")
-#             yield {
-#                 'path': output_path,
-#                 'records': len(records_list),
-#                 'partition': window_path,
-#                 'status': 'success'
-#             }
-
-#         except Exception as e:
-#             LOGGER.error(f"[WriteParquetWithBeamFS] ❌ Failed: {e}")
-#             yield {
-#                 'path': output_path,
-#                 'partition': window_path,
-#                 'status': 'failed',
-#                 'error': str(e)
-#             }
 
 class ExtractWindowPathDoFn(DoFn):
     """
@@ -1279,9 +1152,12 @@ def build_pyarrow_schema_from_config(schema_config: Optional[Dict]) -> Optional[
 
 
 __all__ = [
+    # Constants and helper functions
+    'SQL_FUNCTION_MAPPING',
+    'DATA_TYPE_CONVERTERS',
+    'convert_value_to_type',
+    # DoFn classes
     'SyncToIcebergDoFn',
-    # 'AddWindowInfoFn',
-    # 'WriteParquetByWindowFn',
     'MappingRefreshDoFn',
     'ExtractPersonasDoFn',
     'FetchFromBigtableDoFn',
@@ -1290,13 +1166,10 @@ __all__ = [
     'TransformSchemasDoFn',
     'FullfillSchemasDoFn',
     'WriteToBigLakeDoFn',
-    # 'MapToCdcTableRow',
-    # 'AddCDCMetadataDoFn',
     'MapToCdcTableRowDoFn',
-    # 'AddWindowPathDoFn',
-    # 'WriteParquetWithBeamFSDoFn',
     'ExtractWindowPathDoFn',
     'WritePartitionToParquetDoFn',
+    # Helper functions
     'build_pyarrow_schema_from_config',
     'build_cdc_schema',
 ]
