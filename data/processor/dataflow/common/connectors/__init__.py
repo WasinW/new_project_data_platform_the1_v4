@@ -22,8 +22,8 @@ from apache_beam.io.parquetio import WriteToParquet
 from dataflow_common.config import PipelineConfig
 from dataflow_common.transforms.schema import load_schema_from_spec
 
-from dataflow_common.connectors.bigtable import BigTableConnector
-from dataflow_common.connectors.pubsub import PubSubConnector
+# from dataflow_common.connectors.bigtable import BigTableConnector
+# from dataflow_common.connectors.pubsub import PubSubConnector
 
 LOGGER = logging.getLogger(__name__)
 
@@ -284,4 +284,5 @@ class GCSFilesStorage:
 
 
 
-__all__ = ["BigQueryConnector", "ParquetConnector" , "PubSubConnector", "BigTableConnector", "GCSFilesStorage"]
+# __all__ = ["BigQueryConnector", "ParquetConnector" , "PubSubConnector", "BigTableConnector", "GCSFilesStorage"]
+__all__ = ["BigQueryConnector", "ParquetConnector" , "GCSFilesStorage"]

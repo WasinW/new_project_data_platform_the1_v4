@@ -246,13 +246,7 @@ class MappingRefreshDoFn(DoFn):
         """Return default query for mapping table."""
         return f"""
             SELECT * EXCEPT(row_num) FROM (
-                SELECT
-                    reconcile_column_name,
-                    mapping_column_name,
-                    reconcile_retrieved,
-                    reconcile_confirmed,
-                    -- logical_column,
-                    table_name,
+                SELECT *,
                     ROW_NUMBER() OVER (
                         PARTITION BY reconcile_column_name
                         -- ,mapping_column_name
@@ -262,6 +256,14 @@ class MappingRefreshDoFn(DoFn):
             )
             WHERE row_num = 1
             """
+    # def sql_function(self, logic: str) -> str:
+    #     """
+    #     Wrap mapping logic in SQL function format.
+
+    #     Args:
+    #         logic: Mapping logic string
+    #     """
+    #     return f"SQL_FUNCTION({logic})"
 
     def process(self, element):
         """
@@ -293,19 +295,40 @@ class MappingRefreshDoFn(DoFn):
             schemas_dict = []
 
             for row in results:
-                org_name = row['reconcile_column_name']
+                LOGGER.info(f"[MappingRefreshDoFn] row: {row}")
+                table_name = row['table_name'].split('.')[-1]
 
-                if row['reconcile_retrieved'] == True:
-                    new_name = row['mapping_column_name'].split('.')[-1]
-                    table_name = row['table_name']
+                # if row['reconcile_retrieved'] == True:
+                #     new_name = row['mapping_column_name'].split('.')[-1] 
+                #     table_name = row['table_name']
 
-                    if table_name not in mapping_dict:
-                        mapping_dict[table_name] = {'gcp': {}, 'aws': {}}
+                #     if table_name not in mapping_dict:
+                #         mapping_dict[table_name] = {'gcp': {}, 'aws': {}}
 
-                    mapping_dict[table_name]['gcp'][new_name] = row['mapping_column_name']
-                    mapping_dict[table_name]['aws'][org_name] = row['mapping_column_name']
+                #     mapping_dict[table_name]['gcp'][new_name] = row['mapping_column_name']
+                #     mapping_dict[table_name]['aws'][org_name] = row['mapping_column_name']
 
                 schemas_dict.append(row['reconcile_column_name'])
+                if table_name not in mapping_dict:
+                    mapping_dict[table_name] = {}
+                # # -----------------------------------------------------------------------------------
+                # ---------------------------- GCP SCHEMAS DICT -------------------------
+                # # -----------------------------------------------------------------------------------
+                if row['mapping_alias_name'] is not None and row['mapping_alias_name'].strip() != "":
+                    LOGGER.info(f"[MappingRefreshDoFn] GCP COL {mapping_dict[table_name]}")
+
+                    if mapping_dict[table_name].get('gcp') is None:
+                        mapping_dict[table_name]['gcp'] = {}
+                    mapping_dict[table_name]['gcp'][row['mapping_alias_name']] = row['mapping_column_name'] if row['mapping_column_name'] is not None else row['mapping_logic']
+                # # -----------------------------------------------------------------------------------
+                # ---------------------------- AWS SCHEMAS DICT -------------------------
+                # # -----------------------------------------------------------------------------------
+                if row['reconcile_retrieved'] == True:
+                    LOGGER.info(f"[MappingRefreshDoFn] AWS COL {row['reconcile_retrieved']}")
+                    if mapping_dict[table_name].get('aws') is None:
+                        mapping_dict[table_name]['aws'] = {}
+                    mapping_dict[table_name]['aws'][row['reconcile_column_name']] = row['mapping_column_name'] if row['mapping_column_name'] is not None else row['mapping_logic']
+
                 # # -----------------------------------------------------------------------------------
                 # # ------------------ AWS SCHEMAS LIST -----------------------
                 # # -----------------------------------------------------------------------------------
@@ -335,7 +358,7 @@ class MappingRefreshDoFn(DoFn):
             LOGGER.info(f"[MappingRefreshDoFn] Refreshed mapping_dict : {mapping_dict}")
 
         except Exception as exc:
-            LOGGER.error(f"[MappingRefreshDoFn] Error: {exc}")
+            LOGGER.error(f"[MappingRefreshDoFn] Error: {exc} , returning empty mapping : {mapping_dict} , values : {row['mapping_column_name'] if row['mapping_column_name'] is not None else row['mapping_logic']}")
             mapping_dict = {}
             schemas_dict = []
 
@@ -356,7 +379,7 @@ class ExtractPersonasDoFn(DoFn):
             element: Binary message from Pub/Sub
 
         Yields:
-            Dictionary with personas_id
+            Dictionary with personaId
         """
         try:
             json_reader = json.loads(element.decode('utf-8'))
@@ -365,10 +388,10 @@ class ExtractPersonasDoFn(DoFn):
             payload = json_reader.get('payload')
 
             if payload:
-                personas_id = payload.get('personaId')
-                if personas_id:
-                    yield {'personas_id': personas_id}
-                    LOGGER.info(f"[ExtractPersonasDoFn] Extracted: {personas_id}")
+                personaId = payload.get('personaId')
+                if personaId:
+                    yield {'personaId': personaId}
+                    LOGGER.info(f"[ExtractPersonasDoFn] Extracted: {personaId}")
                 else:
                     LOGGER.warning("[ExtractPersonasDoFn] No personaId in payload")
             else:
@@ -416,26 +439,26 @@ class FetchFromBigtableDoFn(DoFn):
         Fetch row from BigTable.
 
         Args:
-            element: Dictionary with personas_id
+            element: Dictionary with personaId
 
         Yields:
-            Dictionary with personas_id and extracted family data
+            Dictionary with personaId and extracted family data
         """
         if not self._table:
             LOGGER.error("[FetchFromBigtableDoFn] BigTable not available")
             return
 
         try:
-            personas_id = element.get('personas_id')
-            if not personas_id:
-                LOGGER.warning("[FetchFromBigtableDoFn] Missing personas_id")
+            personaId = element.get('personaId')
+            if not personaId:
+                LOGGER.warning("[FetchFromBigtableDoFn] Missing personaId")
                 return
 
-            LOGGER.info(f"[FetchFromBigtableDoFn] Fetching: {personas_id}")
-            row = self._table.read_row(personas_id)
+            LOGGER.info(f"[FetchFromBigtableDoFn] Fetching: {personaId}")
+            row = self._table.read_row(personaId)
 
             if row:
-                result = {'personas_id': personas_id}
+                result = {'personaId': personaId}
 
                 for family_name in self.parent_field:
                     if family_name in row.cells:
@@ -491,15 +514,15 @@ class FetchFromBigtableDoFn(DoFn):
                         LOGGER.warning(f"[FetchFromBigtableDoFn] Family '{family_name}' not found")
                         result[family_name] = {}
 
-                LOGGER.info(f"[FetchFromBigtableDoFn] Fetched data for {personas_id} : {result}")
+                LOGGER.info(f"[FetchFromBigtableDoFn] Fetched data for {personaId} : {result}")
                 yield result
             else:
-                LOGGER.warning(f"[FetchFromBigtableDoFn] Row not found: {personas_id}")
+                LOGGER.warning(f"[FetchFromBigtableDoFn] Row not found: {personaId}")
 
         except Exception as e:
             LOGGER.error(f"[FetchFromBigtableDoFn] Error: {str(e)}")
             yield {
-                'personas_id': element.get('personas_id'),
+                'personaId': element.get('personaId'),
                 'error': str(e),
                 'error_type': 'processing_error'
             }
@@ -519,6 +542,7 @@ class FilterEmptyPKDoFn(DoFn):
             Element if memberId is valid
         """
         try:
+            LOGGER.info(f"[FilterEmptyPKDoFn] element: {element}")
             profiles = element.get('profiles', {})
             member_id = profiles.get('memberId')
 
@@ -526,8 +550,8 @@ class FilterEmptyPKDoFn(DoFn):
                 LOGGER.info(f"[FilterEmptyPKDoFn] Valid: {member_id}")
                 yield element
             else:
-                personas_id = element.get('personas_id', 'unknown')
-                LOGGER.warning(f"[FilterEmptyPKDoFn] Filtering out: {personas_id}")
+                personaId = element.get('personaId', 'unknown')
+                LOGGER.warning(f"[FilterEmptyPKDoFn] Filtering out: {personaId}")
 
         except Exception as e:
             LOGGER.error(f"[FilterEmptyPKDoFn] Error: {str(e)}")
@@ -545,13 +569,16 @@ class FilterEmptyFamilyDoFn(DoFn):
             Element if memberId is valid
         """
         try:
+            LOGGER.info(f"[FilterEmptyFamilyDoFn] element: {element}")
             family_dict = element.get(family_name, {})
+            LOGGER.info(f"[FilterEmptyFamilyDoFn] element: {element}")
+            LOGGER.info(f"[FilterEmptyFamilyDoFn] family_dict: {family_dict} found")
             if family_dict or (isinstance(family_dict, dict) and len(family_dict) > 0):
                 LOGGER.info(f"[FilterEmptyFamilyDoFn] Valid: {family_name} found")
                 yield element
             else:
-                personas_id = element.get('personas_id', 'unknown')
-                LOGGER.warning(f"[FilterEmptyPKDoFn] Filtering out: {personas_id}")
+                personaId = element.get('personaId', 'unknown')
+                LOGGER.warning(f"[FilterEmptyPKDoFn] Filtering out: {personaId}")
 
         except Exception as e:
             LOGGER.error(f"[FilterEmptyPKDoFn] Error: {str(e)}")
@@ -574,7 +601,31 @@ class TransformSchemasDoFn(DoFn):
             return reduce(operator.getitem, path.split('.'), data)
         except (KeyError, TypeError):
             return None
+    def isSqlFunction(self, path: str) -> bool:
+        """
+        Check if the path represents a SQL function.
 
+        Args:
+        """
+        list_function = ['CURRENT_DATE()', 'CURRENT_TIMESTAMP()', 'NOW()', 'UUID()']
+        if path.upper().strip() in list_function:
+            return True
+        return False
+
+    def sql_function(self, logic: str) -> str:
+        """
+        Wrap mapping logic in SQL function format.
+
+        Args:
+            logic: Mapping logic string
+        """
+        if logic.upper().strip() == 'CURRENT_DATE()':
+            # formatted_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S') + f'.{datetime.now(timezone.utc).microsecond // 1000:03d}'
+            formatted_time = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            return formatted_time            
+        
+        return None
+    
     def transform_message(self, message_dict: dict, mapping_dict: dict,
                           target: str = 'gcp', table_name: str = 'ms_member') -> dict:
         """
@@ -594,6 +645,7 @@ class TransformSchemasDoFn(DoFn):
         # FIXED: Add INFO logging for debugging
         LOGGER.info(f"[TransformSchemasDoFn] transform_message called with target={target}, table_name={table_name}")
         LOGGER.info(f"[TransformSchemasDoFn] Available tables in mapping: {list(mapping_dict.keys())}")
+        LOGGER.info(f"[TransformSchemasDoFn] Available tables in message_dict: {message_dict}")
 
         specific_mapping = mapping_dict.get(table_name, {}).get(target, {})
         
@@ -604,12 +656,22 @@ class TransformSchemasDoFn(DoFn):
                 LOGGER.warning(f"[TransformSchemasDoFn] Available targets for {table_name}: {list(mapping_dict[table_name].keys())}")
             return result
         
-        LOGGER.info(f"[TransformSchemasDoFn] Found {len(specific_mapping)} fields in mapping")
+        LOGGER.info(f"[TransformSchemasDoFn] Found {len(specific_mapping)} fields in mapping : {specific_mapping}")
 
         for new_key, path in specific_mapping.items():
-            value = self.get_nested_value(message_dict, path)
+
+            if self.isSqlFunction(path):
+                LOGGER.info(f"[TransformSchemasDoFn] SQL_FUNCTION supported in this context for key={new_key}, path={path}")
+                value = self.sql_function(path)
+            else:
+                # value = self.get_nested_value(message_dict, path) if '.' in path else message_dict.get(path)
+                value = self.get_nested_value(message_dict, path)
+            
+            LOGGER.info(f"[TransformSchemasDoFn] new_key: {new_key} , value: {value} , path: {path}")
+
             result[new_key] = value if value is not None else None
 
+        LOGGER.info(f"[TransformSchemasDoFn] result : {result}")
         return result
 
     def process(self, element, mapping_info, table_name: str = 'ms_member'):

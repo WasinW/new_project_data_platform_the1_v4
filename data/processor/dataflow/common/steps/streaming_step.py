@@ -792,23 +792,28 @@ class WriteToBigLakeIcebergStreamingStep(BaseStep):
             from google.cloud import bigquery as bq_client
             client = bq_client.Client()
             table_ref = client.get_table(table)
+            # field_names_map = {f.name.lower(): f.name for f in table_ref.schema}
             schema_param = {
                 'fields': [
                     {
                         'name': f.name
                         , 'type': 'STRING' if f.field_type in unsupported_types else f.field_type
-                        , 'mode': f.mode or 'NULLABLE'
+                        # , 'mode': f.mode or 'NULLABLE'
+                        , 'mode': 'NULLABLE'
                     }
                     for f in table_ref.schema
                 ]
             }
+        LOGGER.info(f"[{self.step_id}] Writing to BigLake Iceberg schemas : {schema_param}")
 
         pcoll = self.state[input_key]
 
         # Prepare data (convert dict to JSON for nested fields)
+        # field_map = {f.name.lower(): f.name for f in table_ref.schema} # สร้าง map กันเหนียว
         prepared = (
             pcoll
-            | f"{self.step_id}_PrepareForBigLake" >> beam.ParDo(WriteToBigLakeDoFn(table_name=table))
+            | f"{self.step_id}_PrepareForBigLake" >> beam.ParDo(
+                WriteToBigLakeDoFn(table_name=table))
         )
 
         # Write using Storage Write API (APPEND mode)
