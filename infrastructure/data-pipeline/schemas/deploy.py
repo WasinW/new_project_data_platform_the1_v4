@@ -46,7 +46,8 @@ class TableDeployer:
         self.storage_bucket = f"the1-insight-{env}-data-pipeline-data-staging"
 
     def run_bq(self, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
-        cmd = ["bq"] + args
+        # Always include project_id for bq commands
+        cmd = ["bq", f"--project_id={self.project_id}"] + args
         result = subprocess.run(cmd, capture_output=True, text=True)
         if check and result.returncode != 0:
             print(f"  [ERROR] bq command failed: {' '.join(cmd)}")
@@ -169,7 +170,14 @@ OPTIONS(
 
             partitioning = definition.get("partitioning", {})
             if partitioning:
-                sql += f"\nPARTITION BY {partitioning.get('type', 'DAY')}({partitioning.get('field')})"
+                field = partitioning.get('field')
+                part_type = partitioning.get('type', 'DAY').upper()
+                # BigQuery uses DATE() for TIMESTAMP columns with daily partitioning
+                # or DATE_TRUNC for other granularities
+                if part_type == 'DAY':
+                    sql += f"\nPARTITION BY DATE({field})"
+                else:
+                    sql += f"\nPARTITION BY DATE_TRUNC({field}, {part_type})"
 
             clustering = definition.get("clustering", [])
             if clustering:
@@ -238,6 +246,9 @@ OPTIONS(
         result = self.run_bq([
             "query", "--use_legacy_sql=false", sql
         ], check=False)
+        if result.returncode != 0:
+            print(f"  [SQL ERROR] stdout: {result.stdout}")
+            print(f"  [SQL ERROR] stderr: {result.stderr}")
         return result.returncode == 0
 
     def deploy_table(self, definition: Dict, force: bool = False) -> bool:
