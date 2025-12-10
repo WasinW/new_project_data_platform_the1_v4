@@ -1,0 +1,34 @@
+{
+  "table_id": "ms_personas_iceberg",
+  "table_type": "iceberg",
+  "description": "Historical personas table with Iceberg format for time-travel and external engine access",
+
+  "schema": [
+    {"name": "accountId", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "dateOfBirth", "type": "DATE", "mode": "NULLABLE"},
+    {"name": "gender", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "hasEmail", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "hasMobile", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "languagePrefer", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "memberId", "type": "STRING", "mode": "REQUIRED", "description": "Primary key"},
+    {"name": "nationalityId", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "profileId", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "updated_date", "type": "TIMESTAMP", "mode": "NULLABLE"}
+  ],
+
+  "clustering": ["memberId"],
+
+  "biglake_config": {
+    "connection_id": "insight_data_pipeline_biglake_connection",
+    "file_format": "PARQUET",
+    "table_format": "ICEBERG",
+    "storage_uri_suffix": "iceberg/ms_personas_historical/"
+  },
+
+  "labels": {
+    "service": "data-pipeline",
+    "table_type": "biglake-iceberg",
+    "purpose": "historical",
+    "managed_by": "table_deployer"
+  }
+}
