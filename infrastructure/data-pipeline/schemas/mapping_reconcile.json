@@ -2,7 +2,6 @@
   "table_id": "mapping_reconcile",
   "table_type": "native",
   "description": "Staging table for mapping reconcile data",
-
   "schema": [
     {"name": "RECONCILE_COLUMN_NAME", "type": "STRING", "mode": "NULLABLE"},
     {"name": "MAPPING_COLUMN_NAME", "type": "STRING", "mode": "NULLABLE"},
@@ -15,7 +14,6 @@
     {"name": "MAPPING_COLUMN_TYPE", "type": "STRING", "mode": "NULLABLE"},
     {"name": "UPDATED_DATE", "type": "TIMESTAMP", "mode": "NULLABLE"}
   ],
-
   "labels": {
     "service": "data-pipeline",
     "table_type": "native",

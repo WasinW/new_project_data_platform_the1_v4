@@ -2,7 +2,6 @@
   "table_id": "ms_member",
   "table_type": "native",
   "description": "Staging table for MS member data from AWS S3",
-
   "schema": [
     {"name": "member_id", "type": "STRING", "mode": "NULLABLE"},
     {"name": "member_number", "type": "STRING", "mode": "REQUIRED", "description": "Primary key"},
@@ -137,12 +136,11 @@
     "type": "DAY",
     "field": "updated_date"
   },
-
   "clustering": ["member_number"],
-
   "labels": {
     "service": "data-pipeline",
     "table_type": "native",
+    "source": "aws-s3",
     "managed_by": "table_deployer"
   }
 }

@@ -65,14 +65,15 @@ variables:
     when: on_success
   - when: never
 
-# .table_rules: &table_rules
-#   rules:
-#   - !reference [ .execute-pipeline-template, rules ]
-#   - changes:
-#     - infrastructure/data-pipeline/schemas/**/*
-#     - pipeline/data/ms-personas.gitlab-ci.yml
-#     when: on_success
-#   - when: never
+# Rule for table schema changes
+.ms_psn_dtpl_table_rules: &ms_psn_dtpl_table_rules
+  rules:
+  - !reference [ .execute-pipeline-template, rules ]
+  - changes:
+    - infrastructure/data-pipeline/schemas/**/*
+    - pipeline/data/ms-personas.gitlab-ci.yml
+    when: on_success
+  - when: never
 
 # ============================================
 # SHARED SCRIPTS (like ms-personas pattern)
@@ -247,7 +248,91 @@ ms-personas:terraform:apply:prod:
 #   <<: *table_rules
 
 # ============================================
-# PART 2B: DATAFLOW_COMMON CHANGES (Build & Deploy)
+# PART 1B: DEPLOY TABLES (After Terraform)
+# Smart schema change detection with auto-migration
+# ============================================
+
+ms-personas:deploy-tables:nonprod:
+  stage: deploy-stg
+  tags:
+  - $MS_PSN_DTPL_RUNNER_TAG_NONPROD
+  image: $MS_PSN_DTPL_PYTHON_IMAGE
+  variables:
+    WORKSPACE_ENV: stg
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+    BQ_DATASET_ID: insight
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+
+  # Install gcloud SDK for bq command
+  - apt-get update && apt-get install -y apt-transport-https ca-certificates gnupg curl
+  - echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+  - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+  - apt-get update && apt-get install -y google-cloud-sdk
+
+  # Run table deployer
+  - cd $CI_PROJECT_DIR/infrastructure/data-pipeline/schemas
+  - |
+    echo "============================================"
+    echo "Deploying BigQuery Tables to STG"
+    echo "Project: $MS_PSN_DTPL_GCP_STG_PROJECT_ID"
+    echo "Dataset: $BQ_DATASET_ID"
+    echo "============================================"
+    python deploy.py $MS_PSN_DTPL_GCP_STG_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
+
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+
+  needs:
+  - ms-personas:terraform:apply:nonprod
+
+  allow_failure: false
+  when: on_success
+
+  <<: *ms_psn_dtpl_table_rules
+
+ms-personas:deploy-tables:prod:
+  stage: deploy-prod
+  tags:
+  - $MS_PSN_DTPL_RUNNER_TAG_PROD
+  image: $MS_PSN_DTPL_PYTHON_IMAGE
+  variables:
+    WORKSPACE_ENV: prod
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
+    BQ_DATASET_ID: insight
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+
+  # Install gcloud SDK for bq command
+  - apt-get update && apt-get install -y apt-transport-https ca-certificates gnupg curl
+  - echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+  - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+  - apt-get update && apt-get install -y google-cloud-sdk
+
+  # Run table deployer
+  - cd $CI_PROJECT_DIR/infrastructure/data-pipeline/schemas
+  - |
+    echo "============================================"
+    echo "Deploying BigQuery Tables to PROD"
+    echo "Project: $MS_PSN_DTPL_GCP_PRD_PROJECT_ID"
+    echo "Dataset: $BQ_DATASET_ID"
+    echo "============================================"
+    python deploy.py $MS_PSN_DTPL_GCP_PRD_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
+
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+
+  needs:
+  - ms-personas:terraform:apply:prod
+  - ms-personas:deploy-tables:nonprod
+
+  allow_failure: false
+  when: manual
+
+  <<: *ms_psn_dtpl_table_rules
+
+# ============================================
+# PART 2A: DATAFLOW_COMMON CHANGES (Build & Deploy)
 # ============================================
 # Security scan (like triggers pattern)
 sec:scan-secret:dataflow-common:

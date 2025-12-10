@@ -2,7 +2,6 @@
   "table_id": "ms_personas",
   "table_type": "native",
   "description": "Main personas table for CDC streaming pipeline",
-
   "schema": [
     {"name": "accountId", "type": "STRING", "mode": "NULLABLE"},
     {"name": "dateOfBirth", "type": "DATE", "mode": "NULLABLE"},
@@ -15,16 +14,12 @@
     {"name": "profileId", "type": "STRING", "mode": "NULLABLE"},
     {"name": "updated_date", "type": "TIMESTAMP", "mode": "NULLABLE"}
   ],
-
   "primary_key": ["memberId"],
-
   "partitioning": {
     "type": "DAY",
     "field": "updated_date"
   },
-
   "clustering": ["memberId"],
-
   "labels": {
     "service": "data-pipeline",
     "table_type": "native-cdc",
