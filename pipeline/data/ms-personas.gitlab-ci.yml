@@ -262,13 +262,14 @@ ms-personas:deploy-tables:nonprod:
     GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
     BQ_DATASET_ID: insight
   script:
-  - !reference [ .ms-personas-gcp-prepare, script ]
-
-  # Install gcloud SDK for bq command
+  # Install gcloud SDK FIRST (before GCP auth)
   - apt-get update && apt-get install -y apt-transport-https ca-certificates gnupg curl
   - echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
   - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
   - apt-get update && apt-get install -y google-cloud-sdk
+
+  # GCP Authentication (after gcloud is installed)
+  - !reference [ .ms-personas-gcp-prepare, script ]
 
   # Run table deployer
   - cd $CI_PROJECT_DIR/infrastructure/data-pipeline/schemas
@@ -301,13 +302,14 @@ ms-personas:deploy-tables:prod:
     GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
     BQ_DATASET_ID: insight
   script:
-  - !reference [ .ms-personas-gcp-prepare, script ]
-
-  # Install gcloud SDK for bq command
+  # Install gcloud SDK FIRST (before GCP auth)
   - apt-get update && apt-get install -y apt-transport-https ca-certificates gnupg curl
   - echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
   - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
   - apt-get update && apt-get install -y google-cloud-sdk
+
+  # GCP Authentication (after gcloud is installed)
+  - !reference [ .ms-personas-gcp-prepare, script ]
 
   # Run table deployer
   - cd $CI_PROJECT_DIR/infrastructure/data-pipeline/schemas
