@@ -46,7 +46,8 @@ class TableDeployer:
         self.storage_bucket = f"the1-insight-{env}-data-pipeline-data-staging"
 
     def run_bq(self, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
-        cmd = ["bq"] + args
+        # Always include project_id for bq commands
+        cmd = ["bq", f"--project_id={self.project_id}"] + args
         result = subprocess.run(cmd, capture_output=True, text=True)
         if check and result.returncode != 0:
             print(f"  [ERROR] bq command failed: {' '.join(cmd)}")
