@@ -200,6 +200,60 @@ ms-personas:terraform:apply:prod:
 # ============================================
 # PART 2A: DEPLOY TABLE
 # ============================================
+ms-personas:deploy-tables:nonprod:
+  stage: deploy-stg
+  tags:
+  - $RUNNER_TAG_NONPROD
+  image: google/cloud-sdk:alpine
+  variables:
+    WORKSPACE_ENV: stg
+    PROJECT_ID: $GCP_STG_PROJECT_ID
+    DATASET_ID: insight
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+  - cd $INFRASTRUCTURE_RUN_PATH/
+  # - chmod +x schemas/deploy_tables.sh
+  # - ./schemas/deploy_tables.sh $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
+  - python3 schemas/deploy.py $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
+  # - ./schemas/deploy_tables.sh $WORKSPACE_ENV
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  # needs:
+  # - ms-personas:terraform:apply:nonprod # ต้องรอ connection สร้างก่อน
+  when: manual
+  <<: *table_rules
+
+ms-personas:deploy-tables:prod:
+  stage: deploy-prod
+  tags:
+  - $RUNNER_TAG_PROD
+  image: google/cloud-sdk:alpine
+  variables:
+    WORKSPACE_ENV: prod
+    PROJECT_ID: $GCP_PRD_PROJECT_ID
+    DATASET_ID: insight
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
+  script:
+  - !reference [ .ms-personas-gcp-prepare, script ]
+  - cd $INFRASTRUCTURE_RUN_PATH
+  # - chmod +x schemas/deploy_tables.sh
+  # - ./schemas/deploy_tables.sh $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
+  - python3 schemas/deploy.py $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  - ms-personas:terraform:apply:prod
+  when: manual
+  <<: *table_rules
+
+# ============================================
+# PART 2B: DATAFLOW_COMMON CHANGES (Build & Deploy)
+# ============================================
+# PART 1B: DEPLOY TABLES (After Terraform)
+# Smart schema change detection with auto-migration
+# ============================================
+
 # ms-personas:deploy-tables:nonprod:
 #   stage: deploy-stg
 #   tags:
@@ -207,21 +261,36 @@ ms-personas:terraform:apply:prod:
 #   image: google/cloud-sdk:alpine
 #   variables:
 #     WORKSPACE_ENV: stg
-#     PROJECT_ID: the1-insight-stg
-#     DATASET_ID: insight
 #     GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
+#     BQ_DATASET_ID: insight
 #   script:
 #   - !reference [ .ms-personas-gcp-prepare, script ]
-#   - cd $INFRASTRUCTURE_RUN_PATH/
-#   # - chmod +x schemas/deploy_tables.sh
-#   # - ./schemas/deploy_tables.sh $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
-#   - python3 schemas/deploy.py $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
-#   # - ./schemas/deploy_tables.sh $WORKSPACE_ENV
+
+#   # Install gcloud SDK for bq command
+#   - apt-get update && apt-get install -y apt-transport-https ca-certificates gnupg curl
+#   - echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+#   - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+#   - apt-get update && apt-get install -y google-cloud-sdk
+
+#   # Run table deployer
+#   - cd $CI_PROJECT_DIR/infrastructure/data-pipeline/schemas
+#   - |
+#     echo "============================================"
+#     echo "Deploying BigQuery Tables to STG"
+#     echo "Project: $GCP_STG_PROJECT_ID"
+#     echo "Dataset: $BQ_DATASET_ID"
+#     echo "============================================"
+#     python deploy.py $GCP_STG_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
+
 #   after_script:
 #   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
-#   # needs:
-#   # - ms-personas:terraform:apply:nonprod # ต้องรอ connection สร้างก่อน
-#   when: manual
+
+#   needs:
+#   - ms-personas:terraform:apply:nonprod
+
+#   allow_failure: false
+#   when: on_success
+
 #   <<: *table_rules
 
 # ms-personas:deploy-tables:prod:
@@ -231,106 +300,37 @@ ms-personas:terraform:apply:prod:
 #   image: google/cloud-sdk:alpine
 #   variables:
 #     WORKSPACE_ENV: prod
-#     PROJECT_ID: the1-insight-prod
-#     DATASET_ID: insight
 #     GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
+#     BQ_DATASET_ID: insight
 #   script:
 #   - !reference [ .ms-personas-gcp-prepare, script ]
-#   - cd $INFRASTRUCTURE_RUN_PATH
-#   - chmod +x schemas/deploy_tables.sh
-#   - ./schemas/deploy_tables.sh $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
+#   # Install gcloud SDK for bq command
+#   - apt-get update && apt-get install -y apt-transport-https ca-certificates gnupg curl
+#   - echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+#   - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+#   - apt-get update && apt-get install -y google-cloud-sdk
+
+#   # Run table deployer
+#   - cd $CI_PROJECT_DIR/infrastructure/data-pipeline/schemas
+#   - |
+#     echo "============================================"
+#     echo "Deploying BigQuery Tables to PROD"
+#     echo "Project: $GCP_PRD_PROJECT_ID"
+#     echo "Dataset: $BQ_DATASET_ID"
+#     echo "============================================"
+#     python deploy.py $GCP_PRD_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
+
 #   after_script:
 #   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+
 #   needs:
 #   - ms-personas:terraform:apply:prod
+#   - ms-personas:deploy-tables:nonprod
+
+#   allow_failure: false
 #   when: manual
+
 #   <<: *table_rules
-
-# ============================================
-# PART 2B: DATAFLOW_COMMON CHANGES (Build & Deploy)
-# ============================================
-# PART 1B: DEPLOY TABLES (After Terraform)
-# Smart schema change detection with auto-migration
-# ============================================
-
-ms-personas:deploy-tables:nonprod:
-  stage: deploy-stg
-  tags:
-  - $RUNNER_TAG_NONPROD
-  image: $PYTHON_IMAGE
-  variables:
-    WORKSPACE_ENV: stg
-    GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
-    BQ_DATASET_ID: insight
-  script:
-  - !reference [ .ms-personas-gcp-prepare, script ]
-
-  # Install gcloud SDK for bq command
-  - apt-get update && apt-get install -y apt-transport-https ca-certificates gnupg curl
-  - echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
-  - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
-  - apt-get update && apt-get install -y google-cloud-sdk
-
-  # Run table deployer
-  - cd $CI_PROJECT_DIR/infrastructure/data-pipeline/schemas
-  - |
-    echo "============================================"
-    echo "Deploying BigQuery Tables to STG"
-    echo "Project: $GCP_STG_PROJECT_ID"
-    echo "Dataset: $BQ_DATASET_ID"
-    echo "============================================"
-    python deploy.py $GCP_STG_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
-
-  after_script:
-  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
-
-  needs:
-  - ms-personas:terraform:apply:nonprod
-
-  allow_failure: false
-  when: on_success
-
-  <<: *table_rules
-
-ms-personas:deploy-tables:prod:
-  stage: deploy-prod
-  tags:
-  - $RUNNER_TAG_PROD
-  image: $PYTHON_IMAGE
-  variables:
-    WORKSPACE_ENV: prod
-    GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
-    BQ_DATASET_ID: insight
-  script:
-  - !reference [ .ms-personas-gcp-prepare, script ]
-
-  # Install gcloud SDK for bq command
-  - apt-get update && apt-get install -y apt-transport-https ca-certificates gnupg curl
-  - echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
-  - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
-  - apt-get update && apt-get install -y google-cloud-sdk
-
-  # Run table deployer
-  - cd $CI_PROJECT_DIR/infrastructure/data-pipeline/schemas
-  - |
-    echo "============================================"
-    echo "Deploying BigQuery Tables to PROD"
-    echo "Project: $GCP_PRD_PROJECT_ID"
-    echo "Dataset: $BQ_DATASET_ID"
-    echo "============================================"
-    python deploy.py $GCP_PRD_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
-
-  after_script:
-  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
-
-  needs:
-  - ms-personas:terraform:apply:prod
-  - ms-personas:deploy-tables:nonprod
-
-  allow_failure: false
-  when: manual
-
-  <<: *table_rules
 
 # ============================================
 # PART 2A: DATAFLOW_COMMON CHANGES (Build & Deploy)
