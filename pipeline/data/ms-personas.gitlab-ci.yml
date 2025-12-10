@@ -65,8 +65,7 @@ variables:
     when: on_success
   - when: never
 
-# Rule for table schema changes
-.ms_psn_dtpl_table_rules: &ms_psn_dtpl_table_rules
+.table_rules: &table_rules
   rules:
   - !reference [ .execute-pipeline-template, rules ]
   - changes:
@@ -184,8 +183,8 @@ ms-personas:terraform:apply:prod:
   - !reference [ .ms-personas-gcp-prepare, script ]
   # - echo "!reference [ .ms-personas-gcp-prepare, script ]"
   # - echo "!reference [ .ms-personas-terraform-apply, script ]"
-  - bq rm -f -t the1-insight-prod:insight.ms_member
   - bq rm -f -t the1-insight-prod:insight.mapping_reconcile
+  - bq rm -f -t the1-insight-prod:insight.ms_member
   - bq rm -f -t the1-insight-prod:insight.ms_personas
   - bq rm -f -t the1-insight-prod:insight.ms_personas_iceberg
   - bq rm -f -t the1-insight-prod:insight.events_consents
@@ -248,6 +247,8 @@ ms-personas:terraform:apply:prod:
 #   <<: *table_rules
 
 # ============================================
+# PART 2B: DATAFLOW_COMMON CHANGES (Build & Deploy)
+# ============================================
 # PART 1B: DEPLOY TABLES (After Terraform)
 # Smart schema change detection with auto-migration
 # ============================================
@@ -255,8 +256,8 @@ ms-personas:terraform:apply:prod:
 ms-personas:deploy-tables:nonprod:
   stage: deploy-stg
   tags:
-  - $MS_PSN_DTPL_RUNNER_TAG_NONPROD
-  image: $MS_PSN_DTPL_PYTHON_IMAGE
+  - $RUNNER_TAG_NONPROD
+  image: $PYTHON_IMAGE
   variables:
     WORKSPACE_ENV: stg
     GOOGLE_APPLICATION_CREDENTIALS_PATH: $T1_PIPELINE_NP_SA
@@ -275,10 +276,10 @@ ms-personas:deploy-tables:nonprod:
   - |
     echo "============================================"
     echo "Deploying BigQuery Tables to STG"
-    echo "Project: $MS_PSN_DTPL_GCP_STG_PROJECT_ID"
+    echo "Project: $GCP_STG_PROJECT_ID"
     echo "Dataset: $BQ_DATASET_ID"
     echo "============================================"
-    python deploy.py $MS_PSN_DTPL_GCP_STG_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
+    python deploy.py $GCP_STG_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
 
   after_script:
   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
@@ -289,13 +290,13 @@ ms-personas:deploy-tables:nonprod:
   allow_failure: false
   when: on_success
 
-  <<: *ms_psn_dtpl_table_rules
+  <<: *table_rules
 
 ms-personas:deploy-tables:prod:
   stage: deploy-prod
   tags:
-  - $MS_PSN_DTPL_RUNNER_TAG_PROD
-  image: $MS_PSN_DTPL_PYTHON_IMAGE
+  - $RUNNER_TAG_PROD
+  image: $PYTHON_IMAGE
   variables:
     WORKSPACE_ENV: prod
     GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
@@ -314,10 +315,10 @@ ms-personas:deploy-tables:prod:
   - |
     echo "============================================"
     echo "Deploying BigQuery Tables to PROD"
-    echo "Project: $MS_PSN_DTPL_GCP_PRD_PROJECT_ID"
+    echo "Project: $GCP_PRD_PROJECT_ID"
     echo "Dataset: $BQ_DATASET_ID"
     echo "============================================"
-    python deploy.py $MS_PSN_DTPL_GCP_PRD_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
+    python deploy.py $GCP_PRD_PROJECT_ID $BQ_DATASET_ID $WORKSPACE_ENV
 
   after_script:
   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
@@ -329,7 +330,7 @@ ms-personas:deploy-tables:prod:
   allow_failure: false
   when: manual
 
-  <<: *ms_psn_dtpl_table_rules
+  <<: *table_rules
 
 # ============================================
 # PART 2A: DATAFLOW_COMMON CHANGES (Build & Deploy)
@@ -364,7 +365,7 @@ dataflow-common:test:
   - uv pip install --system -e .
   - uv pip install --system pytest
   - cd tests
-  # - python -m pytest -q . -v --tb=short
+  - python -m pytest -q . -v --tb=short
   <<: *dataflow_common_rules
 
 # Build wheel
@@ -767,7 +768,7 @@ ms-personas:setup-composer-variables:prod:
     # Check if Composer is ready
     gcloud composer environments describe $COMPOSER_ENV \
       --location $COMPOSER_LOCATION \
-      --project $GCP_STG_PROJECT_ID || exit 1
+      --project $GCP_PRD_PROJECT_ID || exit 1
 
     # Function to set variable
   - |
