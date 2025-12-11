@@ -37,28 +37,30 @@ class TestExtractWindowPathDoFn(unittest.TestCase):
         """Test adding window info to element"""
         print("\n[TEST] ExtractWindowPathDoFn - basic window info")
 
-        with TestPipeline() as p:
-            # Create test data
-            input_data = p | beam.Create([
-                {"personaId": "P001", "name": "Test"},
-                {"personaId": "P002", "name": "Test2"}
-            ])
+        fn = ExtractWindowPathDoFn()
 
-            # Apply windowing and ExtractWindowPathDoFn
-            result = (
-                input_data
-                | beam.WindowInto(beam.window.FixedWindows(60))
-                | beam.ParDo(ExtractWindowPathDoFn())
-            )
+        # Create mock window with valid timestamp (2024-01-15 17:30:00 UTC)
+        window_end_micros = 1705340400 * 10**6
+        mock_window = MagicMock()
+        mock_window.end.micros = window_end_micros
+
+        # Test with multiple elements
+        test_elements = [
+            {"personaId": "P001", "name": "Test"},
+            {"personaId": "P002", "name": "Test2"}
+        ]
+
+        for element in test_elements:
+            results = list(fn.process(element, window=mock_window))
+            self.assertEqual(len(results), 1)
+            result = results[0]
 
             # Verify output has partition path field
-            def check_window_fields(element):
-                assert "_partition_path" in element, "Missing _partition_path"
-                assert "personaId" in element, "Missing original field"
-                return element
+            self.assertIn("_partition_path", result, "Missing _partition_path")
+            self.assertIn("personaId", result, "Missing original field")
+            self.assertEqual(result["personaId"], element["personaId"])
 
-            result | beam.Map(check_window_fields)
-            print("   [OK] Window info added successfully")
+        print("   [OK] Window info added successfully")
 
     def test_window_path_format(self):
         """Test window path format is correct"""
