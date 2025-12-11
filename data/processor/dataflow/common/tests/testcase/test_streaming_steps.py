@@ -6,60 +6,13 @@ These tests focus on testing step initialization and parameter extraction
 without requiring full Apache Beam runtime.
 """
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 import logging
 import sys
 import os
 
-# Add paths for imports
-test_dir = os.path.dirname(os.path.abspath(__file__))
-tests_dir = os.path.dirname(test_dir)
-dataflow_dir = os.path.dirname(tests_dir)
-common_dir = os.path.join(dataflow_dir, 'common')
-
-for p in [dataflow_dir, common_dir]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-# Mock apache_beam and related modules before importing streaming_step
-# This allows tests to run even without all Beam dependencies installed
-mock_beam = MagicMock()
-mock_beam.Pipeline = MagicMock
-mock_beam.PCollection = MagicMock
-mock_beam.ParDo = MagicMock(return_value=MagicMock())
-mock_beam.Map = MagicMock(return_value=MagicMock())
-mock_beam.WindowInto = MagicMock(return_value=MagicMock())
-
-# Make pipeline operations chainable
-mock_pcoll = MagicMock()
-mock_pcoll.__or__ = MagicMock(return_value=mock_pcoll)
-mock_beam.Pipeline.return_value = mock_pcoll
-
-sys.modules['apache_beam'] = mock_beam
-sys.modules['apache_beam.options'] = MagicMock()
-sys.modules['apache_beam.options.pipeline_options'] = MagicMock()
-sys.modules['apache_beam.transforms'] = MagicMock()
-sys.modules['apache_beam.transforms.window'] = MagicMock()
-sys.modules['apache_beam.transforms.trigger'] = MagicMock()
-sys.modules['apache_beam.transforms.periodicsequence'] = MagicMock()
-sys.modules['apache_beam.io'] = MagicMock()
-sys.modules['apache_beam.io.gcp'] = MagicMock()
-sys.modules['apache_beam.io.gcp.pubsub'] = MagicMock()
-sys.modules['apache_beam.io.gcp.bigquery'] = MagicMock()
-sys.modules['apache_beam.pvalue'] = MagicMock()
-
-# Mock pyarrow (used by stream.py for schema building)
-sys.modules['pyarrow'] = MagicMock()
-
-# Mock google cloud modules
-sys.modules['google'] = MagicMock()
-sys.modules['google.cloud'] = MagicMock()
-sys.modules['google.cloud.bigtable'] = MagicMock()
-sys.modules['google.cloud.bigquery'] = MagicMock()
-
-# Now we can try to import the modules - use try/except for robustness
+# Import the actual modules - tests will work if dataflow_common is installed
 try:
-    # Try importing as installed package first
     from dataflow_common.steps.streaming_step import (
         RefreshMappingTableStep,
         ReadFromPubSubStep,
@@ -76,30 +29,11 @@ try:
         MergeToIcebergStreamingStep,
     )
     from dataflow_common.core import BaseStep
+    from dataflow_common.steps import streaming_step as streaming_step_module
     IMPORTS_AVAILABLE = True
-except ImportError:
-    try:
-        # Try importing from common directory
-        from common.steps.streaming_step import (
-            RefreshMappingTableStep,
-            ReadFromPubSubStep,
-            ExtractPersonasStep,
-            FetchFromBigtableStep,
-            FilterEmptyPKStep,
-            FilterEmptyFamilyStep,
-            TransformSchemasStep,
-            FullfillSchemasStep,
-            WriteToBigQueryStreamingStep,
-            WriteToS3ParquetStep,
-            WriteToBigQueryCDCStep,
-            WriteToBigLakeIcebergStreamingStep,
-            MergeToIcebergStreamingStep,
-        )
-        from common.core import BaseStep
-        IMPORTS_AVAILABLE = True
-    except ImportError as e:
-        IMPORTS_AVAILABLE = False
-        IMPORT_ERROR = str(e)
+except ImportError as e:
+    IMPORTS_AVAILABLE = False
+    IMPORT_ERROR = str(e)
 
 
 class MockConfig:
@@ -127,7 +61,7 @@ class MockConfig:
         self.params.run_dt = '2024011510'
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestRefreshMappingTableStep(unittest.TestCase):
     """Unit tests for RefreshMappingTableStep."""
 
@@ -182,7 +116,7 @@ class TestRefreshMappingTableStep(unittest.TestCase):
         print("   [OK] Parameters extracted correctly")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestReadFromPubSubStep(unittest.TestCase):
     """Unit tests for ReadFromPubSubStep."""
 
@@ -227,7 +161,7 @@ class TestReadFromPubSubStep(unittest.TestCase):
         print("   [OK] Subscription extracted correctly")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestExtractPersonasStep(unittest.TestCase):
     """Unit tests for ExtractPersonasStep."""
 
@@ -295,7 +229,7 @@ class TestExtractPersonasStep(unittest.TestCase):
         print("   [OK] Input key extracted from top-level spec")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestFetchFromBigtableStep(unittest.TestCase):
     """Unit tests for FetchFromBigtableStep."""
 
@@ -368,13 +302,12 @@ class TestFetchFromBigtableStep(unittest.TestCase):
         step = FetchFromBigtableStep(spec=spec, config=config, state=state)
 
         params = step.spec.get('params', {})
-        # Default should be ['profiles'] as defined in the class
         parent_field = params.get('parent_field', ['profiles'])
         self.assertEqual(parent_field, ['profiles'])
         print("   [OK] Default parent_field is ['profiles']")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestFilterEmptyPKStep(unittest.TestCase):
     """Unit tests for FilterEmptyPKStep."""
 
@@ -418,7 +351,7 @@ class TestFilterEmptyPKStep(unittest.TestCase):
         print("   [OK] Default pk_col is 'profiles.memberId'")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestFilterEmptyFamilyStep(unittest.TestCase):
     """Unit tests for FilterEmptyFamilyStep."""
 
@@ -462,7 +395,7 @@ class TestFilterEmptyFamilyStep(unittest.TestCase):
         print("   [OK] Default family_name is 'profiles'")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestTransformSchemasStep(unittest.TestCase):
     """Unit tests for TransformSchemasStep."""
 
@@ -516,7 +449,7 @@ class TestTransformSchemasStep(unittest.TestCase):
         print("   [OK] Outputs configured correctly")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestFullfillSchemasStep(unittest.TestCase):
     """Unit tests for FullfillSchemasStep."""
 
@@ -544,7 +477,7 @@ class TestFullfillSchemasStep(unittest.TestCase):
         print("   [OK] Step initialized correctly")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestWriteToBigQueryStreamingStep(unittest.TestCase):
     """Unit tests for WriteToBigQueryStreamingStep."""
 
@@ -590,7 +523,7 @@ class TestWriteToBigQueryStreamingStep(unittest.TestCase):
         print("   [OK] Table extracted correctly")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestWriteToS3ParquetStep(unittest.TestCase):
     """Unit tests for WriteToS3ParquetStep."""
 
@@ -684,7 +617,7 @@ class TestWriteToS3ParquetStep(unittest.TestCase):
         print("   [OK] Input 'in' alias works correctly")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestWriteToBigQueryCDCStep(unittest.TestCase):
     """Unit tests for WriteToBigQueryCDCStep."""
 
@@ -769,7 +702,7 @@ class TestWriteToBigQueryCDCStep(unittest.TestCase):
         print("   [OK] Default CDC params are correct")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestWriteToBigLakeIcebergStreamingStep(unittest.TestCase):
     """Unit tests for WriteToBigLakeIcebergStreamingStep."""
 
@@ -820,7 +753,7 @@ class TestWriteToBigLakeIcebergStreamingStep(unittest.TestCase):
         print("   [OK] Default streaming params are correct")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestMergeToIcebergStreamingStep(unittest.TestCase):
     """Unit tests for MergeToIcebergStreamingStep."""
 
@@ -902,7 +835,7 @@ class TestMergeToIcebergStreamingStep(unittest.TestCase):
         print("   [OK] Default lookback=30, interval=300")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestStepIdGeneration(unittest.TestCase):
     """Unit tests for step ID generation."""
 
@@ -942,18 +875,13 @@ class TestStepIdGeneration(unittest.TestCase):
         print("   [OK] step_id can use spec['out']")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestAllStepsExported(unittest.TestCase):
     """Test that all steps are properly exported."""
 
     def test_all_exports(self):
         """Test __all__ exports."""
         print("\n[TEST] Module exports")
-
-        try:
-            from dataflow_common.steps import streaming_step
-        except ImportError:
-            from common.steps import streaming_step
 
         expected_steps = [
             'RefreshMappingTableStep',
@@ -972,12 +900,12 @@ class TestAllStepsExported(unittest.TestCase):
         ]
 
         for step_name in expected_steps:
-            self.assertIn(step_name, streaming_step.__all__)
-            self.assertTrue(hasattr(streaming_step, step_name))
+            self.assertIn(step_name, streaming_step_module.__all__)
+            self.assertTrue(hasattr(streaming_step_module, step_name))
             print(f"   [OK] {step_name} exported")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestStepInheritance(unittest.TestCase):
     """Test that all steps inherit from BaseStep."""
 
@@ -1006,7 +934,7 @@ class TestStepInheritance(unittest.TestCase):
             print(f"   [OK] {step_class.__name__} inherits BaseStep")
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, f"Required modules not available")
+@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
 class TestStepExecuteMethod(unittest.TestCase):
     """Test that all steps have execute method."""
 
