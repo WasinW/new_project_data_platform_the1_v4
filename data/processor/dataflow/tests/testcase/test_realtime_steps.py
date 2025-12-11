@@ -1,6 +1,6 @@
 """
-Unit tests for realtime streaming pipeline steps (DoFns)
-Tests for: realtime.py
+Unit tests for realtime streaming pipeline DoFns
+Tests for: dofns/stream.py
 """
 import unittest
 import json
@@ -13,45 +13,48 @@ from apache_beam.testing.util import assert_that, equal_to, is_not_empty
 from apache_beam.transforms.window import GlobalWindow, IntervalWindow
 from apache_beam.utils.timestamp import Timestamp
 
-from dataflow_common.steps.realtime import (
-    AddWindowInfoFn,
-    WriteParquetByWindowFn,
+from dataflow_common.dofns.stream import (
+    ExtractWindowPathDoFn,
+    WritePartitionToParquetDoFn,
     MappingRefreshDoFn,
     ExtractPersonasDoFn,
     FetchFromBigtableDoFn,
-    FilterEmptyMemberIdDoFn,
+    FilterEmptyPKDoFn,
     TransformSchemasDoFn,
     FullfillSchemasDoFn,
     WriteToBigLakeDoFn,
+    MapToCdcTableRowDoFn,
+    SyncToIcebergDoFn,
+    convert_value_to_type,
+    SQL_FUNCTION_MAPPING,
 )
 
 
-class TestAddWindowInfoFn(unittest.TestCase):
-    """Test AddWindowInfoFn DoFn"""
+class TestExtractWindowPathDoFn(unittest.TestCase):
+    """Test ExtractWindowPathDoFn DoFn"""
 
     def test_add_window_info_basic(self):
         """Test adding window info to element"""
-        print("\n[TEST] AddWindowInfoFn - basic window info")
+        print("\n[TEST] ExtractWindowPathDoFn - basic window info")
 
         with TestPipeline() as p:
             # Create test data
             input_data = p | beam.Create([
-                {"personas_id": "P001", "name": "Test"},
-                {"personas_id": "P002", "name": "Test2"}
+                {"personaId": "P001", "name": "Test"},
+                {"personaId": "P002", "name": "Test2"}
             ])
 
-            # Apply windowing and AddWindowInfoFn
+            # Apply windowing and ExtractWindowPathDoFn
             result = (
                 input_data
                 | beam.WindowInto(beam.window.FixedWindows(60))
-                | beam.ParDo(AddWindowInfoFn())
+                | beam.ParDo(ExtractWindowPathDoFn())
             )
 
-            # Verify output has window fields
+            # Verify output has partition path field
             def check_window_fields(element):
-                assert "_window_path" in element, "Missing _window_path"
-                assert "_window_timestamp" in element, "Missing _window_timestamp"
-                assert "personas_id" in element, "Missing original field"
+                assert "_partition_path" in element, "Missing _partition_path"
+                assert "personaId" in element, "Missing original field"
                 return element
 
             result | beam.Map(check_window_fields)
@@ -59,28 +62,26 @@ class TestAddWindowInfoFn(unittest.TestCase):
 
     def test_window_path_format(self):
         """Test window path format is correct"""
-        print("\n[TEST] AddWindowInfoFn - path format")
+        print("\n[TEST] ExtractWindowPathDoFn - path format")
 
-        fn = AddWindowInfoFn()
+        fn = ExtractWindowPathDoFn()
 
-        # Create mock window with known timestamp
-        # 2024-01-15 10:30:00 UTC
+        # Create mock window with known timestamp (2024-01-15 10:30:00 UTC)
         window_end_micros = 1705315800 * 10**6
         mock_window = MagicMock()
         mock_window.end.micros = window_end_micros
 
-        element = {"personas_id": "P001"}
+        element = {"personaId": "P001"}
         results = list(fn.process(element, window=mock_window))
 
         self.assertEqual(len(results), 1)
         result = results[0]
 
-        # Check path format: par_month=MM/par_day=DD/par_hour=HH/run_dt=YYYYMMDDHH
-        path = result["_window_path"]
+        # Check path format: par_month=MM/par_day=DD/par_hour=HH
+        path = result["_partition_path"]
         self.assertIn("par_month=", path)
         self.assertIn("par_day=", path)
         self.assertIn("par_hour=", path)
-        self.assertIn("run_dt=", path)
         print(f"   [OK] Window path: {path}")
 
 
@@ -103,7 +104,7 @@ class TestExtractPersonasDoFn(unittest.TestCase):
             input_data = p | beam.Create([message])
             result = input_data | beam.ParDo(ExtractPersonasDoFn())
 
-            assert_that(result, equal_to([{"personas_id": "P12345"}]))
+            assert_that(result, equal_to([{"personaId": "P12345"}]))
             print("   [OK] Extracted personaId: P12345")
 
     def test_extract_missing_payload(self):
@@ -146,41 +147,37 @@ class TestExtractPersonasDoFn(unittest.TestCase):
             print("   [OK] Handled invalid JSON")
 
 
-class TestFilterEmptyMemberIdDoFn(unittest.TestCase):
-    """Test FilterEmptyMemberIdDoFn DoFn"""
+class TestFilterEmptyPKDoFn(unittest.TestCase):
+    """Test FilterEmptyPKDoFn DoFn"""
 
     def test_filter_valid_member_id(self):
         """Test passing through valid memberId"""
-        print("\n[TEST] FilterEmptyMemberIdDoFn - valid memberId")
+        print("\n[TEST] FilterEmptyPKDoFn - valid memberId")
 
         with TestPipeline() as p:
             input_data = p | beam.Create([
-                {"personas_id": "P001", "profiles": {"memberId": "M123"}},
-                {"personas_id": "P002", "profiles": {"memberId": "M456"}}
+                {"personaId": "P001", "profiles": {"memberId": "M123"}},
+                {"personaId": "P002", "profiles": {"memberId": "M456"}}
             ])
 
-            result = input_data | beam.ParDo(FilterEmptyMemberIdDoFn())
-
-            def count_results(elements):
-                return len(list(elements))
-
+            result = input_data | beam.ParDo(FilterEmptyPKDoFn())
             count = result | beam.combiners.Count.Globally()
             assert_that(count, equal_to([2]))
             print("   [OK] Passed 2 valid records")
 
     def test_filter_empty_member_id(self):
         """Test filtering out empty memberId"""
-        print("\n[TEST] FilterEmptyMemberIdDoFn - empty memberId")
+        print("\n[TEST] FilterEmptyPKDoFn - empty memberId")
 
         with TestPipeline() as p:
             input_data = p | beam.Create([
-                {"personas_id": "P001", "profiles": {"memberId": "M123"}},
-                {"personas_id": "P002", "profiles": {"memberId": ""}},
-                {"personas_id": "P003", "profiles": {"memberId": "   "}},
-                {"personas_id": "P004", "profiles": {}}
+                {"personaId": "P001", "profiles": {"memberId": "M123"}},
+                {"personaId": "P002", "profiles": {"memberId": ""}},
+                {"personaId": "P003", "profiles": {"memberId": "   "}},
+                {"personaId": "P004", "profiles": {}}
             ])
 
-            result = input_data | beam.ParDo(FilterEmptyMemberIdDoFn())
+            result = input_data | beam.ParDo(FilterEmptyPKDoFn())
             count = result | beam.combiners.Count.Globally()
 
             assert_that(count, equal_to([1]))
@@ -188,14 +185,14 @@ class TestFilterEmptyMemberIdDoFn(unittest.TestCase):
 
     def test_filter_none_member_id(self):
         """Test filtering out None memberId"""
-        print("\n[TEST] FilterEmptyMemberIdDoFn - None memberId")
+        print("\n[TEST] FilterEmptyPKDoFn - None memberId")
 
         with TestPipeline() as p:
             input_data = p | beam.Create([
-                {"personas_id": "P001", "profiles": {"memberId": None}},
+                {"personaId": "P001", "profiles": {"memberId": None}},
             ])
 
-            result = input_data | beam.ParDo(FilterEmptyMemberIdDoFn())
+            result = input_data | beam.ParDo(FilterEmptyPKDoFn())
             count = result | beam.combiners.Count.Globally()
 
             assert_that(count, equal_to([0]))
@@ -212,7 +209,7 @@ class TestTransformSchemasDoFn(unittest.TestCase):
         fn = TransformSchemasDoFn()
 
         message = {
-            "personas_id": "P001",
+            "personaId": "P001",
             "profiles": {
                 "memberId": "M123",
                 "email": "test@example.com"
@@ -222,12 +219,12 @@ class TestTransformSchemasDoFn(unittest.TestCase):
         mapping_dict = {
             "ms_personas": {
                 "gcp": {
-                    "member_id": "profiles.memberId",
-                    "email_address": "profiles.email"
+                    "member_id": {"type": "path", "value": "profiles.memberId", "data_type": "STRING"},
+                    "email_address": {"type": "path", "value": "profiles.email", "data_type": "STRING"}
                 },
                 "aws": {
-                    "MEMBER_ID": "profiles.memberId",
-                    "EMAIL": "profiles.email"
+                    "MEMBER_ID": {"type": "path", "value": "profiles.memberId", "data_type": "STRING"},
+                    "EMAIL": {"type": "path", "value": "profiles.email", "data_type": "STRING"}
                 }
             }
         }
@@ -253,8 +250,11 @@ class TestTransformSchemasDoFn(unittest.TestCase):
 
         mapping_dict = {
             "ms_personas": {
-                "gcp": {"member_id": "profiles.memberId"},
-                "aws": {"MEMBER_ID": "profiles.memberId", "EMAIL": "profiles.email"}
+                "gcp": {"member_id": {"type": "path", "value": "profiles.memberId", "data_type": "STRING"}},
+                "aws": {
+                    "MEMBER_ID": {"type": "path", "value": "profiles.memberId", "data_type": "STRING"},
+                    "EMAIL": {"type": "path", "value": "profiles.email", "data_type": "STRING"}
+                }
             }
         }
 
@@ -263,6 +263,54 @@ class TestTransformSchemasDoFn(unittest.TestCase):
         self.assertEqual(result["MEMBER_ID"], "M456")
         self.assertEqual(result["EMAIL"], "aws@example.com")
         print(f"   [OK] AWS result: {result}")
+
+    def test_transform_message_with_logic(self):
+        """Test transforming message with SQL function logic"""
+        print("\n[TEST] TransformSchemasDoFn - SQL function logic")
+
+        fn = TransformSchemasDoFn()
+
+        message = {"profiles": {"memberId": "M123"}}
+
+        mapping_dict = {
+            "ms_personas": {
+                "gcp": {
+                    "member_id": {"type": "path", "value": "profiles.memberId", "data_type": "STRING"},
+                    "created_date": {"type": "logic", "value": "CURRENT_DATE()", "data_type": "STRING"}
+                }
+            }
+        }
+
+        result = fn.transform_message(message, mapping_dict, target='gcp', table_name='ms_personas')
+
+        self.assertEqual(result["member_id"], "M123")
+        self.assertIsNotNone(result["created_date"])
+        # Verify date format YYYY-MM-DD
+        self.assertRegex(result["created_date"], r'\d{4}-\d{2}-\d{2}')
+        print(f"   [OK] Logic result: {result}")
+
+    def test_transform_message_with_constant(self):
+        """Test transforming message with constant value"""
+        print("\n[TEST] TransformSchemasDoFn - constant value")
+
+        fn = TransformSchemasDoFn()
+
+        message = {"profiles": {"memberId": "M123"}}
+
+        mapping_dict = {
+            "ms_personas": {
+                "gcp": {
+                    "member_id": {"type": "path", "value": "profiles.memberId", "data_type": "STRING"},
+                    "source": {"type": "constant", "value": "BIGTABLE", "data_type": "STRING"}
+                }
+            }
+        }
+
+        result = fn.transform_message(message, mapping_dict, target='gcp', table_name='ms_personas')
+
+        self.assertEqual(result["member_id"], "M123")
+        self.assertEqual(result["source"], "BIGTABLE")
+        print(f"   [OK] Constant result: {result}")
 
     def test_get_nested_value(self):
         """Test getting nested values from dict"""
@@ -394,23 +442,36 @@ class TestWriteToBigLakeDoFn(unittest.TestCase):
 class TestMappingRefreshDoFn(unittest.TestCase):
     """Test MappingRefreshDoFn DoFn"""
 
-    @patch('dataflow_common.steps.realtime.bigquery.Client')
+    @patch('dataflow_common.dofns.stream.bigquery.Client')
     def test_mapping_refresh_success(self, mock_client_class):
         """Test successful mapping refresh from BigQuery"""
         print("\n[TEST] MappingRefreshDoFn - successful refresh")
 
         # Mock BigQuery results
-        mock_row1 = MagicMock()
-        mock_row1.__getitem__ = lambda self, key: {
+        mock_row = MagicMock()
+        mock_row.__getitem__ = lambda self, key: {
             'reconcile_column_name': 'profiles.memberId',
-            'mapping_column_name': 'ms_personas.member_id',
+            'mapping_column_name': 'member_id',
+            'mapping_alias_name': 'member_id',
+            'mapping_logic': None,
+            'mapping_column_type': 'STRING',
             'reconcile_retrieved': True,
             'reconcile_confirmed': False,
             'table_name': 'ms_personas'
         }[key]
+        mock_row.get = lambda key, default=None: {
+            'reconcile_column_name': 'profiles.memberId',
+            'mapping_column_name': 'member_id',
+            'mapping_alias_name': 'member_id',
+            'mapping_logic': None,
+            'mapping_column_type': 'STRING',
+            'reconcile_retrieved': True,
+            'reconcile_confirmed': False,
+            'table_name': 'ms_personas'
+        }.get(key, default)
 
         mock_result = MagicMock()
-        mock_result.__iter__ = lambda self: iter([mock_row1])
+        mock_result.__iter__ = lambda self: iter([mock_row])
 
         mock_query = MagicMock()
         mock_query.result.return_value = mock_result
@@ -433,7 +494,7 @@ class TestMappingRefreshDoFn(unittest.TestCase):
         self.assertIn("schemas_dict", result)
         print(f"   [OK] Mapping refreshed: {len(result['schemas_dict'])} schemas")
 
-    @patch('dataflow_common.steps.realtime.bigquery.Client')
+    @patch('dataflow_common.dofns.stream.bigquery.Client')
     def test_mapping_refresh_query_failure(self, mock_client_class):
         """Test handling query failure"""
         print("\n[TEST] MappingRefreshDoFn - query failure")
@@ -487,10 +548,10 @@ class TestFetchFromBigtableDoFn(unittest.TestCase):
         self.assertEqual(fn.parent_field, ["profiles"])
         print("   [OK] Default parent_field is ['profiles']")
 
-    @patch('dataflow_common.steps.realtime.bigtable.Client')
+    @patch('dataflow_common.dofns.stream.bigtable.Client')
     def test_fetch_missing_personas_id(self, mock_client_class):
-        """Test handling missing personas_id"""
-        print("\n[TEST] FetchFromBigtableDoFn - missing personas_id")
+        """Test handling missing personaId"""
+        print("\n[TEST] FetchFromBigtableDoFn - missing personaId")
 
         fn = FetchFromBigtableDoFn(
             project_id="test-project",
@@ -509,13 +570,13 @@ class TestFetchFromBigtableDoFn(unittest.TestCase):
 
         fn.setup()
 
-        element = {}  # Missing personas_id
+        element = {}  # Missing personaId
         results = list(fn.process(element))
 
         self.assertEqual(len(results), 0)
-        print("   [OK] Handled missing personas_id")
+        print("   [OK] Handled missing personaId")
 
-    @patch('dataflow_common.steps.realtime.bigtable.Client')
+    @patch('dataflow_common.dofns.stream.bigtable.Client')
     def test_fetch_row_not_found(self, mock_client_class):
         """Test handling row not found in BigTable"""
         print("\n[TEST] FetchFromBigtableDoFn - row not found")
@@ -539,72 +600,149 @@ class TestFetchFromBigtableDoFn(unittest.TestCase):
 
         fn.setup()
 
-        element = {"personas_id": "P001"}
+        element = {"personaId": "P001"}
         results = list(fn.process(element))
 
         self.assertEqual(len(results), 0)
         print("   [OK] Handled row not found")
 
 
-class TestWriteParquetByWindowFn(unittest.TestCase):
-    """Test WriteParquetByWindowFn DoFn"""
+class TestMapToCdcTableRowDoFn(unittest.TestCase):
+    """Test MapToCdcTableRowDoFn DoFn"""
 
-    def test_init_parameters(self):
-        """Test initialization with parameters"""
-        print("\n[TEST] WriteParquetByWindowFn - initialization")
+    def test_upsert_format(self):
+        """Test UPSERT CDC format"""
+        print("\n[TEST] MapToCdcTableRowDoFn - UPSERT format")
 
-        import pyarrow as pa
-        schema = pa.schema([
-            pa.field("memberId", pa.string()),
-            pa.field("count", pa.int64())
-        ])
+        fn = MapToCdcTableRowDoFn(default_change_type="UPSERT")
 
-        fn = WriteParquetByWindowFn(
-            base_path="s3://bucket/prefix",
-            schema=schema
-        )
+        element = {
+            "memberId": "M123",
+            "email": "test@example.com"
+        }
 
-        self.assertEqual(fn.base_path, "s3://bucket/prefix")
-        self.assertEqual(fn.schema, schema)
-        print("   [OK] Parameters initialized correctly")
-
-    @patch('dataflow_common.steps.realtime.s3fs.S3FileSystem')
-    def test_write_parquet_success(self, mock_s3fs_class):
-        """Test successful Parquet write"""
-        print("\n[TEST] WriteParquetByWindowFn - write success")
-
-        import pyarrow as pa
-
-        schema = pa.schema([
-            pa.field("memberId", pa.string()),
-            pa.field("count", pa.int64())
-        ])
-
-        fn = WriteParquetByWindowFn(
-            base_path="s3://bucket/prefix",
-            schema=schema
-        )
-
-        # Mock S3 filesystem
-        mock_fs = MagicMock()
-        mock_file = MagicMock()
-        mock_fs.open.return_value.__enter__ = lambda s: mock_file
-        mock_fs.open.return_value.__exit__ = lambda s, *args: None
-        mock_s3fs_class.return_value = mock_fs
-
-        # Test data
-        window_path = "par_month=01/par_day=15/par_hour=10/run_dt=2024011510"
-        records = [
-            {"memberId": "M001", "count": 1, "_window_path": window_path, "_window_timestamp": None},
-            {"memberId": "M002", "count": 2, "_window_path": window_path, "_window_timestamp": None}
-        ]
-
-        group = (window_path, records)
-        results = list(fn.process(group))
+        results = list(fn.process(element))
 
         self.assertEqual(len(results), 1)
-        self.assertIn("Written 2 records", results[0])
-        print(f"   [OK] {results[0]}")
+        result = results[0]
+
+        self.assertIn("row_mutation_info", result)
+        self.assertIn("record", result)
+        self.assertEqual(result["row_mutation_info"]["mutation_type"], "UPSERT")
+        self.assertEqual(result["record"]["memberId"], "M123")
+        print(f"   [OK] UPSERT format: {result['row_mutation_info']}")
+
+    def test_delete_format(self):
+        """Test DELETE CDC format"""
+        print("\n[TEST] MapToCdcTableRowDoFn - DELETE format")
+
+        fn = MapToCdcTableRowDoFn(default_change_type="UPSERT")
+
+        element = {
+            "memberId": "M123",
+            "is_delete": True
+        }
+
+        results = list(fn.process(element))
+
+        self.assertEqual(len(results), 1)
+        result = results[0]
+
+        self.assertEqual(result["row_mutation_info"]["mutation_type"], "DELETE")
+        print(f"   [OK] DELETE format: {result['row_mutation_info']}")
+
+
+class TestConvertValueToType(unittest.TestCase):
+    """Test convert_value_to_type helper function"""
+
+    def test_string_conversion(self):
+        """Test STRING type conversion"""
+        print("\n[TEST] convert_value_to_type - STRING")
+
+        result = convert_value_to_type(123, "STRING")
+        self.assertEqual(result, "123")
+        self.assertIsInstance(result, str)
+        print("   [OK] STRING conversion works")
+
+    def test_int64_conversion(self):
+        """Test INT64 type conversion"""
+        print("\n[TEST] convert_value_to_type - INT64")
+
+        result = convert_value_to_type("42", "INT64")
+        self.assertEqual(result, 42)
+        self.assertIsInstance(result, int)
+        print("   [OK] INT64 conversion works")
+
+    def test_float64_conversion(self):
+        """Test FLOAT64 type conversion"""
+        print("\n[TEST] convert_value_to_type - FLOAT64")
+
+        result = convert_value_to_type("3.14", "FLOAT64")
+        self.assertAlmostEqual(result, 3.14)
+        self.assertIsInstance(result, float)
+        print("   [OK] FLOAT64 conversion works")
+
+    def test_boolean_conversion(self):
+        """Test BOOLEAN type conversion"""
+        print("\n[TEST] convert_value_to_type - BOOLEAN")
+
+        result = convert_value_to_type(1, "BOOLEAN")
+        self.assertEqual(result, True)
+        self.assertIsInstance(result, bool)
+        print("   [OK] BOOLEAN conversion works")
+
+    def test_date_conversion(self):
+        """Test DATE type conversion"""
+        print("\n[TEST] convert_value_to_type - DATE")
+
+        result = convert_value_to_type("2024-01-15", "DATE")
+        self.assertEqual(result, "2024-01-15")
+        print("   [OK] DATE conversion works")
+
+    def test_none_value(self):
+        """Test None value handling"""
+        print("\n[TEST] convert_value_to_type - None")
+
+        result = convert_value_to_type(None, "STRING")
+        self.assertIsNone(result)
+        print("   [OK] None value handled")
+
+
+class TestSQLFunctionMapping(unittest.TestCase):
+    """Test SQL_FUNCTION_MAPPING"""
+
+    def test_current_date(self):
+        """Test CURRENT_DATE() function"""
+        print("\n[TEST] SQL_FUNCTION_MAPPING - CURRENT_DATE()")
+
+        func = SQL_FUNCTION_MAPPING.get('CURRENT_DATE()')
+        result = func()
+
+        self.assertIsNotNone(result)
+        self.assertRegex(result, r'\d{4}-\d{2}-\d{2}')
+        print(f"   [OK] CURRENT_DATE() = {result}")
+
+    def test_current_timestamp(self):
+        """Test CURRENT_TIMESTAMP() function"""
+        print("\n[TEST] SQL_FUNCTION_MAPPING - CURRENT_TIMESTAMP()")
+
+        func = SQL_FUNCTION_MAPPING.get('CURRENT_TIMESTAMP()')
+        result = func()
+
+        self.assertIsNotNone(result)
+        self.assertRegex(result, r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}')
+        print(f"   [OK] CURRENT_TIMESTAMP() = {result}")
+
+    def test_uuid(self):
+        """Test UUID() function"""
+        print("\n[TEST] SQL_FUNCTION_MAPPING - UUID()")
+
+        func = SQL_FUNCTION_MAPPING.get('UUID()')
+        result = func()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 36)  # UUID format: 8-4-4-4-12
+        print(f"   [OK] UUID() = {result}")
 
 
 class TestIntegrationRealtimeSteps(unittest.TestCase):
@@ -650,8 +788,8 @@ class TestIntegrationRealtimeSteps(unittest.TestCase):
         mapping_dict = {
             "ms_personas": {
                 "gcp": {
-                    "member_id": "profiles.memberId",
-                    "email": "profiles.email"
+                    "member_id": {"type": "path", "value": "profiles.memberId", "data_type": "STRING"},
+                    "email": {"type": "path", "value": "profiles.email", "data_type": "STRING"}
                 }
             }
         }
