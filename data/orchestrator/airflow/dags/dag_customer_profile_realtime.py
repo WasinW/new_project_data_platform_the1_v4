@@ -569,6 +569,8 @@ dataflow_job = BeamRunPythonPipelineOperator(
             'sdk_worker_parallelism=1',
             'no_use_multiple_sdk_containers',
             'enable_streaming_engine',
+            # "storage_write_api_log_append",
+            # "storage_write_api_debug_logging"
         ],
 
         # Pipeline parameters - use refactored config (path matches GitLab CI upload location)

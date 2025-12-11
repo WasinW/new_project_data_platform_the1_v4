@@ -57,6 +57,7 @@ STEP_REGISTRY: Dict[str, Type] = {
     "CoalesceByMapping": CoalesceByMappingStep,
     "NormalizeToSchema": NormalizeToSchemaStep,
     "WriteParquet": WriteParquetStep,
+    # Optional batch steps (not currently used but may be useful)
     # Streaming steps (used in ms_member_realtime.yaml)
     "RefreshMappingTable": RefreshMappingTableStep,
     "ReadFromPubSub": ReadFromPubSubStep,
@@ -68,7 +69,7 @@ STEP_REGISTRY: Dict[str, Type] = {
     "FullfillSchemas": FullfillSchemasStep,
     "WriteToBigQueryStreaming": WriteToBigQueryStreamingStep,
     "WriteToS3Parquet": WriteToS3ParquetStep,
-    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,
+    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,  # For BigLake CDC streaming writes
     "WriteToBigLakeIcebergStreaming": WriteToBigLakeIcebergStreamingStep,
     "MergeToIcebergStreaming": MergeToIcebergStreamingStep,
 }

@@ -31,7 +31,7 @@ io:
     # iceberg_table: ms_personas_iceberg
     temp_gcs: gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp
   s3:
-    bucket: s3://t1-analytics/refined/insights/ms_personas_realtime_dev
+    bucket: s3://t1-analytics/refined/insights/ms_personas_{WORKSPACE_ENV}
     region: ap-southeast-1
 
 # Mapping refresh configuration

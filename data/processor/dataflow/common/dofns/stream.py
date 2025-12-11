@@ -378,7 +378,7 @@ class MappingRefreshDoFn(DoFn):
 
                     if mapping_dict[table_name].get('gcp') is None:
                         mapping_dict[table_name]['gcp'] = {}
-
+                    # mapping_dict[table_name]['gcp'][row['mapping_alias_name']] = row['mapping_column_name'] if row['mapping_column_name'] is not None else row['mapping_logic']
                     # Build mapping value with type, value, and data_type
                     gcp_mapping_value = self._build_mapping_value(row)
                     mapping_dict[table_name]['gcp'][row['mapping_alias_name']] = gcp_mapping_value
@@ -390,10 +390,12 @@ class MappingRefreshDoFn(DoFn):
                     LOGGER.info(f"[MappingRefreshDoFn] AWS COL {row['reconcile_retrieved']}")
                     if mapping_dict[table_name].get('aws') is None:
                         mapping_dict[table_name]['aws'] = {}
-
+                    # mapping_dict[table_name]['aws'][row['reconcile_column_name']] = row['mapping_column_name'] if row['mapping_column_name'] is not None else row['mapping_logic']
                     # Build mapping value with type, value, and data_type
+                    
                     aws_mapping_value = self._build_mapping_value(row)
                     mapping_dict[table_name]['aws'][row['reconcile_column_name']] = aws_mapping_value
+
 
                 # # -----------------------------------------------------------------------------------
                 # # ------------------ AWS SCHEMAS LIST -----------------------
@@ -649,6 +651,141 @@ class FilterEmptyFamilyDoFn(DoFn):
         except Exception as e:
             LOGGER.error(f"[FilterEmptyPKDoFn] Error: {str(e)}")
 
+# class TransformSchemasDoFn(DoFn):
+#     """Transform data according to mapping dictionary."""
+
+#     def get_nested_value(self, data: dict, path: str) -> Any:
+#         """
+#         Get value from nested dict using dot notation.
+
+#         Args:
+#             data: Source dictionary
+#             path: Dot-separated path (e.g., 'profiles.memberId')
+
+#         Returns:
+#             Value at path or None
+#         """
+#         try:
+#             return reduce(operator.getitem, path.split('.'), data)
+#         except (KeyError, TypeError):
+#             return None
+#     def isSqlFunction(self, path: str) -> bool:
+#         """
+#         Check if the path represents a SQL function.
+
+#         Args:
+#         """
+#         list_function = ['CURRENT_DATE()', 'CURRENT_TIMESTAMP()', 'NOW()', 'UUID()']
+#         if path.upper().strip() in list_function:
+#             return True
+#         return False
+
+#     def sql_function(self, logic: str) -> str:
+#         """
+#         Wrap mapping logic in SQL function format.
+
+#         Args:
+#             logic: Mapping logic string
+#         """
+#         if logic.upper().strip() == 'CURRENT_DATE()':
+#             # formatted_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S') + f'.{datetime.now(timezone.utc).microsecond // 1000:03d}'
+#             formatted_time = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+#             return formatted_time            
+        
+#         return None
+    
+#     def transform_message(self, message_dict: dict, mapping_dict: dict,
+#                           target: str = 'gcp', table_name: str = 'ms_member') -> dict:
+#         """
+#         Transform message according to mapping.
+
+#         Args:
+#             message_dict: Source message
+#             mapping_dict: Mapping configuration
+#             target: Target platform ('gcp' or 'aws')
+#             table_name: Table name for mapping lookup
+
+#         Returns:
+#             Transformed dictionary
+#         """
+#         result = {}
+
+#         # FIXED: Add INFO logging for debugging
+#         LOGGER.info(f"[TransformSchemasDoFn] transform_message called with target={target}, table_name={table_name}")
+#         LOGGER.info(f"[TransformSchemasDoFn] Available tables in mapping: {list(mapping_dict.keys())}")
+#         LOGGER.info(f"[TransformSchemasDoFn] Available tables in message_dict: {message_dict}")
+
+#         specific_mapping = mapping_dict.get(table_name, {}).get(target, {})
+        
+#         if not specific_mapping:
+#             LOGGER.warning(f"[TransformSchemasDoFn] ⚠️ No mapping found for table={table_name}, target={target}")
+#             LOGGER.warning(f"[TransformSchemasDoFn] Available tables: {list(mapping_dict.keys())}")
+#             if table_name in mapping_dict:
+#                 LOGGER.warning(f"[TransformSchemasDoFn] Available targets for {table_name}: {list(mapping_dict[table_name].keys())}")
+#             return result
+        
+#         LOGGER.info(f"[TransformSchemasDoFn] Found {len(specific_mapping)} fields in mapping : {specific_mapping}")
+
+#         for new_key, path in specific_mapping.items():
+
+#             if self.isSqlFunction(path):
+#                 LOGGER.info(f"[TransformSchemasDoFn] SQL_FUNCTION supported in this context for key={new_key}, path={path}")
+#                 value = self.sql_function(path)
+#             else:
+#                 # value = self.get_nested_value(message_dict, path) if '.' in path else message_dict.get(path)
+#                 value = self.get_nested_value(message_dict, path)
+            
+#             LOGGER.info(f"[TransformSchemasDoFn] new_key: {new_key} , value: {value} , path: {path}")
+
+#             result[new_key] = value if value is not None else None
+
+#         LOGGER.info(f"[TransformSchemasDoFn] result : {result}")
+#         return result
+
+#     def process(self, element, mapping_info, table_name: str = 'ms_member'):
+#         """
+#         Process element and output to GCP and AWS targets.
+
+#         Args:
+#             element: Input record
+#             mapping_info: Side input with mapping configuration
+#             table_name: Target table name
+
+#         Yields:
+#             Tagged outputs for 'aws' and 'gcp'
+#         """
+
+#         LOGGER.info(f"[TransformSchemasDoFn] ========== Processing element ==========")
+#         LOGGER.info(f"[TransformSchemasDoFn] Element keys: {list(element.keys()) if element else 'None'}")
+#         LOGGER.info(f"[TransformSchemasDoFn] table_name param: {table_name}")
+
+#         mapping_dict = mapping_info.get('mapping_dict', {})
+#         if not mapping_dict:
+#             LOGGER.error("[TransformSchemasDoFn] ❌ mapping_dict is EMPTY!")
+#             LOGGER.error(f"[TransformSchemasDoFn] mapping_info keys: {list(mapping_info.keys())}")
+#         else:
+#             LOGGER.info(f"[TransformSchemasDoFn] mapping_dict has {len(mapping_dict)} tables: {list(mapping_dict.keys())}")
+
+#         aws_output = self.transform_message(element, mapping_dict, target='aws', table_name=table_name)
+#         gcp_output = self.transform_message(element, mapping_dict, target='gcp', table_name=table_name)
+#         # output = self.transform_message(element, mapping_dict, target=outputs[0], table_name=table_name)
+        
+#         LOGGER.info(f"[TransformSchemasDoFn] aws_output: {len(aws_output)} fields")
+#         LOGGER.info(f"[TransformSchemasDoFn] gcp_output: {len(gcp_output)} fields")
+#         # LOGGER.info(f"[TransformSchemasDoFn] {outputs}_output: {len(output)} fields")
+        
+#         # # Log sample fields for debugging
+#         if aws_output:
+#             sample_keys = list(aws_output.keys())[:5]
+#             LOGGER.info(f"[TransformSchemasDoFn] AWS sample keys: {sample_keys}, output : {aws_output}")
+#         if gcp_output:
+#             sample_keys = list(gcp_output.keys())[:5]
+#             LOGGER.info(f"[TransformSchemasDoFn] GCP sample keys: {sample_keys}, output : {gcp_output}")
+
+#         yield beam.pvalue.TaggedOutput('aws', aws_output)
+#         yield beam.pvalue.TaggedOutput('gcp', gcp_output)
+#         # yield beam.pvalue.TaggedOutput(outputs[0], output)
+
 class TransformSchemasDoFn(DoFn):
     """Transform data according to mapping dictionary."""
 
@@ -886,10 +1023,12 @@ class WriteToBigLakeDoFn(DoFn):
         """
         output = {}
         for key, value in element.items():
+            
+            LOGGER.info(f"[WriteToBigLakeDoFn] key type {key}: {type(value)}")
             if value is None:
                 output[key] = None
             elif isinstance(value, dict):
-                output[key] = json.dumps(value)
+                output[key] = json.dumps(value,ensure_ascii=False)
             else:
                 output[key] = value
         LOGGER.info(f"[WriteToBigLakeDoFn] output: {output}")

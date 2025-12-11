@@ -138,4 +138,4 @@ plan:
 
 - step: WriteParquet
   in: ms_personas_casted
-  prefix: "{io.s3.refined_prefix}/ms_personas/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"
+  prefix: "{io.s3.refined_prefix}/ms_personas_{WORKSPACE_ENV}/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"

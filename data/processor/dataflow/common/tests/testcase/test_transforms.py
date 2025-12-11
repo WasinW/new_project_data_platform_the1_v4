@@ -2,7 +2,10 @@
 Test cases for transform functions
 """
 import unittest
+# import sys
+# import os
 
+# sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts', 'dataflow_common', 'src'))
 from dataflow_common.transforms import (
     normalize_path,
     extract_by_path,

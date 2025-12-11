@@ -816,6 +816,7 @@ class WriteToBigLakeIcebergStreamingStep(BaseStep):
                 WriteToBigLakeDoFn(table_name=table))
         )
 
+        LOGGER.info(f"[{self.step_id}] Writing to BigLake Iceberg prepared : {prepared}")
         # Write using Storage Write API (APPEND mode)
         result = (
             prepared
