@@ -42,7 +42,7 @@ class TestConnectorsModule(unittest.TestCase):
     @patch('dataflow_common.connectors.ReadFromBigQuery')
     def test_bigquery_read(self, mock_read_bq):
         """Test BigQuery connector read"""
-        print("\n🔬 Test: BigQuery read")
+        print("\n[Test] Test: BigQuery read")
         
         with TestPipeline() as pipeline:
             query = "SELECT * FROM table"
@@ -62,12 +62,12 @@ class TestConnectorsModule(unittest.TestCase):
                 gcs_location="gs://temp-bucket/temp"
             )
             
-            print(f"   ✅ BigQuery read configured correctly")
+            print(f"   [OK] BigQuery read configured correctly")
     
     @patch('dataflow_common.connectors.WriteToBigQuery')
     def test_bigquery_write(self, mock_write_bq):
         """Test BigQuery connector write - Fixed version"""
-        print("\n🔬 Test: BigQuery write")
+        print("\n[Test] Test: BigQuery write")
         
         # Create a mock that doesn't cause pipeline issues
         mock_instance = MagicMock()
@@ -97,17 +97,17 @@ class TestConnectorsModule(unittest.TestCase):
                 self.assertEqual(call_args[1]['table'], 
                                'test-project.test_dataset.output_table')
                 
-                print(f"   ✅ BigQuery write configured correctly")
+                print(f"   [OK] BigQuery write configured correctly")
                 
             except Exception as e:
                 # Expected behavior - we're just testing the call was made
-                print(f"   ✅ BigQuery write called (pipeline not executed)")
+                print(f"   [OK] BigQuery write called (pipeline not executed)")
     
     @patch('dataflow_common.connectors.WriteToParquet')
     @patch('dataflow_common.transforms.schema.load_schema_from_spec')
     def test_parquet_write(self, mock_load_schema, mock_write_parquet):
         """Test Parquet connector write"""
-        print("\n🔬 Test: Parquet write")
+        print("\n[Test] Test: Parquet write")
         
         # Mock schema
         import pyarrow as pa
@@ -134,16 +134,16 @@ class TestConnectorsModule(unittest.TestCase):
                 )
                 
                 mock_write_parquet.assert_called_once()
-                print(f"   ✅ Parquet write configured with schema")
+                print(f"   [OK] Parquet write configured with schema")
                 
             except Exception:
-                print(f"   ✅ Parquet write called (pipeline not executed)")
+                print(f"   [OK] Parquet write called (pipeline not executed)")
     
     
     @patch('apache_beam.io.WriteToText')
     def test_gcs_write_text(self, mock_write_text):
         """Test GCS text file write"""
-        print("\n🔬 Test: GCS text write")
+        print("\n[Test] Test: GCS text write")
         
         # Create proper mock
         mock_instance = MagicMock()
@@ -161,16 +161,16 @@ class TestConnectorsModule(unittest.TestCase):
                 )
                 
                 mock_write_text.assert_called_once()
-                print(f"   ✅ GCS text write configured")
+                print(f"   [OK] GCS text write configured")
                 
             except Exception:
-                print(f"   ✅ GCS text write called (pipeline not executed)")
+                print(f"   [OK] GCS text write called (pipeline not executed)")
     
     # แก้ patch path จาก 'beam' เป็น 'apache_beam'
     @patch('apache_beam.io.ReadFromText')
     def test_gcs_read_text(self, mock_read_text):
         """Test GCS text file read"""
-        print("\n🔬 Test: GCS text read")
+        print("\n[Test] Test: GCS text read")
         
         with TestPipeline() as pipeline:
             mock_read_text.return_value = beam.Create(["line1", "line2"])
@@ -182,7 +182,7 @@ class TestConnectorsModule(unittest.TestCase):
             )
             
             self.assertTrue(mock_read_text.called)
-            print(f"   ✅ GCS text read configured")
+            print(f"   [OK] GCS text read configured")
 
 if __name__ == "__main__":
     unittest.main()

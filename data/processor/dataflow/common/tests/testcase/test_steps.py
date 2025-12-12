@@ -49,7 +49,7 @@ class TestStepsModule(unittest.TestCase):
     @patch('dataflow_common.connectors.BigQueryConnector.read_query')
     def test_read_bq_query_step(self, mock_read):
         """Test ReadBQQuery step"""
-        print("\n🔬 Test: ReadBQQuery step")
+        print("\n[Test] Test: ReadBQQuery step")
         
         spec = {
             "step": "ReadBQQuery",
@@ -68,11 +68,11 @@ class TestStepsModule(unittest.TestCase):
             result = step.execute(p)
             
             mock_read.assert_called_once()
-            print(f"   ✅ ReadBQQuery executed")
+            print(f"   [OK] ReadBQQuery executed")
     
     def test_parse_json_step(self):
         """Test ParseJson step"""
-        print("\n🔬 Test: ParseJson step")
+        print("\n[Test] Test: ParseJson step")
         
         spec = {
             "step": "ParseJson",
@@ -99,11 +99,11 @@ class TestStepsModule(unittest.TestCase):
             
             result | beam.Map(check_parsed)
             
-            print(f"   ✅ JSON fields parsed successfully")
+            print(f"   [OK] JSON fields parsed successfully")
     
     def test_kv_pairs_step(self):
         """Test KVPairs step"""
-        print("\n🔬 Test: KVPairs step")
+        print("\n[Test] Test: KVPairs step")
         
         spec = {
             "step": "KVPairs",
@@ -127,11 +127,11 @@ class TestStepsModule(unittest.TestCase):
             count = result | beam.combiners.Count.Globally()
             assert_that(count, equal_to([2]))
             
-            print(f"   ✅ KV pairs created, None keys filtered")
+            print(f"   [OK] KV pairs created, None keys filtered")
     
     def test_co_group_by_key_step(self):
         """Test CoGroupByKey step"""
-        print("\n🔬 Test: CoGroupByKey step")
+        print("\n[Test] Test: CoGroupByKey step")
         
         spec = {
             "step": "CoGroupByKey",
@@ -168,11 +168,11 @@ class TestStepsModule(unittest.TestCase):
             
             result | beam.Map(check_grouped)
             
-            print(f"   ✅ Records grouped by key")
+            print(f"   [OK] Records grouped by key")
     
     def test_build_mapping_dict_step(self):
         """Test BuildMappingDict step"""
-        print("\n🔬 Test: BuildMappingDict step")
+        print("\n[Test] Test: BuildMappingDict step")
         
         spec = {
             "step": "BuildMappingDict",
@@ -215,7 +215,7 @@ class TestStepsModule(unittest.TestCase):
             
             result | beam.Map(check_mapping)
             
-            print(f"   ✅ Mapping dictionary built")
+            print(f"   [OK] Mapping dictionary built")
 
 if __name__ == "__main__":
     unittest.main()
