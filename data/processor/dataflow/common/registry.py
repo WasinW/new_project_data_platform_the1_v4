@@ -28,6 +28,7 @@ from dataflow_common.steps import (
     CoalesceByMappingStep,
     NormalizeToSchemaStep,
     WriteParquetStep,
+    RefreshMappingBatchStep,
     # Streaming steps (config-driven realtime pipeline) - from streaming_step.py
     RefreshMappingTableStep,
     ReadFromPubSubStep,
@@ -57,6 +58,7 @@ STEP_REGISTRY: Dict[str, Type] = {
     "CoalesceByMapping": CoalesceByMappingStep,
     "NormalizeToSchema": NormalizeToSchemaStep,
     "WriteParquet": WriteParquetStep,
+    "RefreshMappingBatch": RefreshMappingBatchStep,
     # Streaming steps (used in ms_member_realtime.yaml)
     "RefreshMappingTable": RefreshMappingTableStep,
     "ReadFromPubSub": ReadFromPubSubStep,

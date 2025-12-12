@@ -26,6 +26,7 @@ from dataflow_common.transforms import (
     normalize_row_to_schema,
     load_schema_from_spec,
 )
+from dataflow_common.dofns.stream import MappingRefreshDoFn
 
 LOGGER = logging.getLogger(__name__)
 
@@ -361,6 +362,57 @@ class WriteParquetStep(BaseStep):
             raise
 
 
+class RefreshMappingBatchStep(BaseStep):
+    """Refresh mapping table from BigQuery for batch pipelines.
+
+    This step is the batch equivalent of RefreshMappingTableStep.
+    Instead of using PeriodicImpulse (streaming), it uses beam.Create
+    to trigger a single mapping refresh.
+
+    Output format is identical to RefreshMappingTableStep:
+    {
+        'mapping_dict': {table_name: {target: {field: mapping_info}}},
+        'schemas_dict': [column_names]
+    }
+
+    Config params:
+        mapping_table: BigQuery table path (e.g., project.dataset.mapping_reconcile)
+        query: SQL query for mapping data (optional, overrides default)
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        try:
+            params = self.spec.get("params", {})
+            mapping_table = params.get("mapping_table")
+            query = params.get("query")
+
+            LOGGER.info(f"[{self.step_id}] RefreshMappingBatchStep - Loading mapping from: {mapping_table}")
+            if query:
+                LOGGER.info(f"[{self.step_id}] Using custom query from config")
+
+            # Create DoFn with parameters
+            mapping_dofn = MappingRefreshDoFn(
+                mapping_table=mapping_table,
+                project_id=self.config.io.bq.get('project'),
+                query=query
+            )
+
+            # Single trigger for batch mode (no PeriodicImpulse)
+            result = (
+                pipeline
+                | f"{self.step_id}_Trigger" >> beam.Create([1])
+                | f"{self.step_id}_RefreshMapping" >> beam.ParDo(mapping_dofn)
+            )
+
+            LOGGER.info(f"[{self.step_id}] Mapping refresh completed")
+            return result
+
+        except Exception as e:
+            LOGGER.error(f"[{self.step_id}] Failed in RefreshMappingBatchStep: {str(e)}")
+            LOGGER.debug(f"[{self.step_id}] Stack trace: {traceback.format_exc()}")
+            raise
+
+
 __all__ = [
     "ReadBQQueryStep",
     "BuildMappingDictStep",
@@ -371,4 +423,5 @@ __all__ = [
     "CoalesceByMappingStep",
     "NormalizeToSchemaStep",
     "WriteParquetStep",
+    "RefreshMappingBatchStep",
 ]

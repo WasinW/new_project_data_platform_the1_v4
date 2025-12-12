@@ -321,11 +321,13 @@ class FullfillSchemasStep(BaseStep):
 
 
 class WriteToBigQueryStreamingStep(BaseStep):
-    """Write streaming data to BigQuery using append mode.
+    """Write data to BigQuery with configurable write disposition.
 
     Config params:
         table: BigQuery table path (project.dataset.table)
         input: Input PCollection name from state
+        write_disposition: WRITE_APPEND (default) or WRITE_TRUNCATE
+        create_disposition: CREATE_NEVER (default) or CREATE_IF_NEEDED
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
@@ -335,7 +337,26 @@ class WriteToBigQueryStreamingStep(BaseStep):
         input_key = params.get("input") or self.spec.get("input")
         table = params.get("table")
 
+        # Configurable write disposition (default: WRITE_APPEND for streaming compatibility)
+        write_disposition_str = params.get("write_disposition", "WRITE_APPEND")
+        create_disposition_str = params.get("create_disposition", "CREATE_NEVER")
+
+        # Map string to BigQuery disposition enums
+        write_disposition_map = {
+            "WRITE_APPEND": bigquery.BigQueryDisposition.WRITE_APPEND,
+            "WRITE_TRUNCATE": bigquery.BigQueryDisposition.WRITE_TRUNCATE,
+            "WRITE_EMPTY": bigquery.BigQueryDisposition.WRITE_EMPTY,
+        }
+        create_disposition_map = {
+            "CREATE_NEVER": bigquery.BigQueryDisposition.CREATE_NEVER,
+            "CREATE_IF_NEEDED": bigquery.BigQueryDisposition.CREATE_IF_NEEDED,
+        }
+
+        write_disposition = write_disposition_map.get(write_disposition_str, bigquery.BigQueryDisposition.WRITE_APPEND)
+        create_disposition = create_disposition_map.get(create_disposition_str, bigquery.BigQueryDisposition.CREATE_NEVER)
+
         LOGGER.info(f"[{self.step_id}] Writing to BigQuery: {table}")
+        LOGGER.info(f"[{self.step_id}]   Write disposition: {write_disposition_str}")
 
         pcoll = self.state[input_key]
 
@@ -350,8 +371,8 @@ class WriteToBigQueryStreamingStep(BaseStep):
             prepared
             | f"{self.step_id}_WriteBQ" >> bigquery.WriteToBigQuery(
                 table=table,
-                write_disposition=bigquery.BigQueryDisposition.WRITE_APPEND,
-                create_disposition=bigquery.BigQueryDisposition.CREATE_NEVER
+                write_disposition=write_disposition,
+                create_disposition=create_disposition
             )
         )
 
