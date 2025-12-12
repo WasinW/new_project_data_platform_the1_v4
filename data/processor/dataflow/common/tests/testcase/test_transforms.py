@@ -16,7 +16,7 @@ class TestTransformModule(unittest.TestCase):
     
     def test_normalize_path(self):
         """Test path normalization"""
-        print("\n🔬 Test: Path normalization")
+        print("\n[Test] Test: Path normalization")
         
         test_cases = [
             ("profiles.memberId", ["profiles", "memberId"]),
@@ -35,11 +35,11 @@ class TestTransformModule(unittest.TestCase):
             result = normalize_path(input_path)
             self.assertEqual(result, expected, 
                            f"Failed for input: {input_path}")
-            print(f"   ✅ {input_path} -> {result}")
+            print(f"   [OK] {input_path} -> {result}")
     
     def test_extract_by_path(self):
         """Test nested value extraction"""
-        print("\n🔬 Test: Extract nested values")
+        print("\n[Test] Test: Extract nested values")
         
         # Test data
         record = {
@@ -55,23 +55,23 @@ class TestTransformModule(unittest.TestCase):
         path = ["level1", "level2", "value"]
         result = extract_by_path(record, path)
         self.assertEqual(result, "nested_value")
-        print(f"   ✅ Extracted nested: {result}")
+        print(f"   [OK] Extracted nested: {result}")
         
         # Test JSON string parsing
         path = ["profiles", "memberId"]
         result = extract_by_path(record, path)
         self.assertEqual(result, "12345")
-        print(f"   ✅ Extracted from JSON: {result}")
+        print(f"   [OK] Extracted from JSON: {result}")
         
         # Test missing path
         path = ["missing", "path"]
         result = extract_by_path(record, path)
         self.assertIsNone(result)
-        print(f"   ✅ Missing path returns None")
+        print(f"   [OK] Missing path returns None")
     
     def test_create_mapping_dict(self):
         """Test mapping dictionary creation"""
-        print("\n🔬 Test: Create mapping dictionary")
+        print("\n[Test] Test: Create mapping dictionary")
         
         mapping_rows = [
             {
@@ -101,11 +101,11 @@ class TestTransformModule(unittest.TestCase):
         self.assertTrue(mapping_dict["EMAIL"]["reconcile"])
         self.assertTrue(mapping_dict["EMAIL"]["original"])
         
-        print(f"   ✅ Created mapping with {len(mapping_dict)} entries")
+        print(f"   [OK] Created mapping with {len(mapping_dict)} entries")
     
     def test_map_record(self):
         """Test record mapping"""
-        print("\n🔬 Test: Map record")
+        print("\n[Test] Test: Map record")
         
         # Input record
         record = {
@@ -133,17 +133,17 @@ class TestTransformModule(unittest.TestCase):
         result = map_record(record, mapping_dict, mode="reconcile")
         self.assertEqual(result["MEMBER_NUMBER"], "123")
         self.assertEqual(result["EMAIL"], "test@example.com")
-        print(f"   ✅ Reconcile mode: {len(result)} fields mapped")
+        print(f"   [OK] Reconcile mode: {len(result)} fields mapped")
         
         # Test original mode
         result = map_record(record, mapping_dict, mode="original")
         self.assertNotIn("MEMBER_NUMBER", result)
         self.assertIn("EMAIL", result)
-        print(f"   ✅ Original mode: {len(result)} fields mapped")
+        print(f"   [OK] Original mode: {len(result)} fields mapped")
     
     def test_coalesce_by_mapping(self):
         """Test record coalescing"""
-        print("\n🔬 Test: Coalesce records")
+        print("\n[Test] Test: Coalesce records")
         
         # Test data
         kv = (
@@ -171,7 +171,7 @@ class TestTransformModule(unittest.TestCase):
         self.assertEqual(result["PHONE"], "555-1234")
         self.assertEqual(result["MEMBER_NUMBER"], "123")
         
-        print(f"   ✅ Coalesced {len(result)} fields")
+        print(f"   [OK] Coalesced {len(result)} fields")
 
 if __name__ == "__main__":
     unittest.main()

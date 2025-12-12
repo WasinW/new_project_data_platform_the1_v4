@@ -38,19 +38,19 @@ class TestOrchestratorModule(unittest.TestCase):
     @patch('dataflow_common.registry.STEP_REGISTRY')
     def test_orchestrator_initialization(self, mock_registry):
         """Test orchestrator initialization"""
-        print("\n🔬 Test: Orchestrator initialization")
+        print("\n[Test] Test: Orchestrator initialization")
         
         orchestrator = Orchestrator(self.config)
         
         self.assertEqual(orchestrator.config, self.config)
         self.assertEqual(orchestrator.state, {})
         
-        print(f"   ✅ Orchestrator initialized for: {self.config.name}")
+        print(f"   [OK] Orchestrator initialized for: {self.config.name}")
     
     @patch('dataflow_common.registry.STEP_REGISTRY')
     def test_step_execution_order(self, mock_registry):
         """Test steps execute in order"""
-        print("\n🔬 Test: Step execution order")
+        print("\n[Test] Test: Step execution order")
         
         # Create mock steps
         mock_step1 = MagicMock()
@@ -90,11 +90,11 @@ class TestOrchestratorModule(unittest.TestCase):
         self.assertIn("output1", orchestrator.state)
         self.assertIn("output2", orchestrator.state)
         
-        print(f"   ✅ Executed {len(self.config.plan)} steps in order")
+        print(f"   [OK] Executed {len(self.config.plan)} steps in order")
     
     def test_format_value(self):
         """Test config value formatting"""
-        print("\n🔬 Test: Format config values")
+        print("\n[Test] Test: Format config values")
         
         from dataflow_common.orchestrator import _format_value
         
@@ -103,14 +103,14 @@ class TestOrchestratorModule(unittest.TestCase):
         result = _format_value(template, self.config)
         
         self.assertEqual(result, "test-project.test_dataset.table")
-        print(f"   ✅ Formatted: {template} -> {result}")
+        print(f"   [OK] Formatted: {template} -> {result}")
         
         # Test missing value
         template = "{missing.key}"
         result = _format_value(template, self.config)
         
         self.assertEqual(result, "")
-        print(f"   ✅ Missing key handled: {template} -> (empty)")
+        print(f"   [OK] Missing key handled: {template} -> (empty)")
 
 if __name__ == "__main__":
     unittest.main()
