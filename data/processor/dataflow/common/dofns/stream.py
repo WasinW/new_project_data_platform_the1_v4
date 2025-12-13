@@ -529,9 +529,11 @@ class FetchFromBigtableDoFn(DoFn):
                 for family_name in self.parent_field:
                     if family_name in row.cells:
                         family_cells = row.cells[family_name]
+                        LOGGER.info(f"[FetchFromBigtableDoFn] Fetching: {personaId} , family_cells: {family_cells}")
 
                         # Check if single 'value' column with JSON
                         if len(family_cells) == 1 and b'value' in family_cells:
+                            LOGGER.info(f"[FetchFromBigtableDoFn] value in family_cells: {personaId} , family_cells: {family_cells}")
                             cells = family_cells[b'value']
                             if cells:
                                 latest_cell = cells[0]
@@ -556,19 +558,26 @@ class FetchFromBigtableDoFn(DoFn):
                         else:
                             # Multiple columns case
                             family_dict = {}
+                            LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , family_cells: {family_cells}")
                             for column_qualifier, cells in family_cells.items():
                                 if cells:
                                     latest_cell = cells[0]
                                     column_name = column_qualifier.decode('utf-8') if isinstance(column_qualifier, bytes) else column_qualifier
+                                    LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , column_qualifier: {column_qualifier}")
+                                    LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , cells: {cells}")
+                                    LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , latest_cell: {latest_cell}")
+                                    LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , column_name: {column_name}")
 
                                     try:
                                         cell_value = latest_cell.value.decode('utf-8') if isinstance(latest_cell.value, bytes) else latest_cell.value
+                                        LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , column_name: {column_name}, cell_value: {cell_value}")
 
-                                        if isinstance(cell_value, str) and (cell_value.startswith('{') or cell_value.startswith('[')):
-                                            try:
-                                                cell_value = json.loads(cell_value)
-                                            except json.JSONDecodeError:
-                                                pass
+                                        # if isinstance(cell_value, str) and (cell_value.startswith('{') or cell_value.startswith('[')):
+                                        #     try:
+                                        #         # cell_value = json.loads(cell_value)
+                                        #         LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , column_name: {column_name}, new_cell_value: {cell_value}")
+                                        #     except json.JSONDecodeError:
+                                        #         pass
 
                                         family_dict[column_name] = cell_value
 
