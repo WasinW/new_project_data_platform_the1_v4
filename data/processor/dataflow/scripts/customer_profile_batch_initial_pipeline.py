@@ -21,9 +21,8 @@ Pipeline flow:
 import argparse
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
-import pytz
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 
 # Import config loader and orchestrator
@@ -85,8 +84,8 @@ def main():
         LOGGER.error(f"Failed to load config: {e}", exc_info=True)
         sys.exit(1)
 
-    # Generate run_dt and partition params from current time (Thai timezone)
-    tz_th = pytz.timezone('Asia/Bangkok')
+    # Generate run_dt and partition params from current time (Thai timezone UTC+7)
+    tz_th = timezone(timedelta(hours=7))
     now_th = datetime.now(tz_th)
 
     config.params.run_dt = now_th.strftime('%Y%m%d%H')

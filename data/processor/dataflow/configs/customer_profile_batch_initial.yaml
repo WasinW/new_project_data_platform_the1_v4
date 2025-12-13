@@ -112,8 +112,7 @@ plan:
       table_name: ms_member
       mapping_info: mapping_refresh
       input: aws_ms_personas
-    outputs:
-      - aws_ms_member
+    out: aws_ms_member
 
   # Step 6: Write GCP data to BigQuery
   - step: WriteToBigQueryStreaming
