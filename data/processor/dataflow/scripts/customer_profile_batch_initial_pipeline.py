@@ -16,12 +16,14 @@ Pipeline flow:
 4. TransformSchemas - Transform to AWS/GCP schemas
 5. FullfillSchemas - Fill missing columns with None for AWS
 6. WriteToBigQueryStreaming - Write to GCP BigQuery (WRITE_TRUNCATE)
-7. WriteToS3Parquet - Write to AWS S3 as Parquet
+7. WriteParquet - Write to AWS S3 as Parquet
 """
 import argparse
 import logging
 import sys
+from datetime import datetime
 
+import pytz
 from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 
 # Import config loader and orchestrator
@@ -82,6 +84,20 @@ def main():
     except Exception as e:
         LOGGER.error(f"Failed to load config: {e}", exc_info=True)
         sys.exit(1)
+
+    # Generate run_dt and partition params from current time (Thai timezone)
+    tz_th = pytz.timezone('Asia/Bangkok')
+    now_th = datetime.now(tz_th)
+
+    config.params.run_dt = now_th.strftime('%Y%m%d%H')
+    config.params.run_par_month = now_th.strftime('%Y%m')
+    config.params.run_par_day = now_th.strftime('%d')
+    config.params.run_par_hour = now_th.strftime('%H')
+
+    LOGGER.info(f"Generated run_dt: {config.params.run_dt}")
+    LOGGER.info(f"Partition params: par_month={config.params.run_par_month}, "
+                f"par_day={config.params.run_par_day}, "
+                f"par_hour={config.params.run_par_hour}")
 
     # Create pipeline options
     pipeline_options = PipelineOptions(pipeline_args)

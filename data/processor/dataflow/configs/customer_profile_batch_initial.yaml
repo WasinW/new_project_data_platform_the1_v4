@@ -19,8 +19,8 @@ io:
     dataset: insight
     temp_gcs: gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp
   s3:
-    bucket: s3://t1-analytics/refined/insights/ms_personas_initial
-    region: ap-southeast-1
+    refined_prefix: s3://t1-analytics/refined/insights
+    num_shards: 400
 
 # Parquet output configuration
 parquet:
@@ -123,18 +123,7 @@ plan:
       input: gcp_ms_personas
       write_disposition: WRITE_TRUNCATE
 
-  # Step 7: Write AWS data to S3 as Parquet (batch version - no windowing)
-  - step: WriteToS3ParquetBatch
-    id: write_s3
-    params:
-      prefix: "{io.s3.bucket}"
-      date_columns:
-        - birth_date
-        - consent_date
-        - created_date
-        - register_date
-        - employee_join_date
-        - employee_resign_date
-        - passport_exp
-        - updated_date
-      input: aws_ms_member
+  # Step 7: Write AWS data to S3 as Parquet
+  - step: WriteParquet
+    in: aws_ms_member
+    prefix: "{io.s3.refined_prefix}/ms_personas/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"
