@@ -26,6 +26,7 @@ from dataflow_common.steps.batch_step import (
     NormalizeToSchemaStep,
     WriteParquetStep,
     RefreshMappingBatchStep,
+    WriteToS3ParquetBatchStep,
 )
 
 # =============================================================================
@@ -64,6 +65,7 @@ __all__ = [
     "NormalizeToSchemaStep",
     "WriteParquetStep",
     "RefreshMappingBatchStep",
+    "WriteToS3ParquetBatchStep",
 
     # Streaming pipeline steps
     "RefreshMappingTableStep",

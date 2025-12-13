@@ -123,12 +123,11 @@ plan:
       input: gcp_ms_personas
       write_disposition: WRITE_TRUNCATE
 
-  # Step 7: Write AWS data to S3 as Parquet
-  - step: WriteToS3Parquet
+  # Step 7: Write AWS data to S3 as Parquet (batch version - no windowing)
+  - step: WriteToS3ParquetBatch
     id: write_s3
     params:
-      bucket: "{io.s3.bucket}"
-      window_size: 3600
+      prefix: "{io.s3.bucket}"
       date_columns:
         - birth_date
         - consent_date
@@ -138,5 +137,4 @@ plan:
         - employee_resign_date
         - passport_exp
         - updated_date
-      output_filename: "ms-member.parquet"
-      input: full_aws
+      input: aws_ms_member

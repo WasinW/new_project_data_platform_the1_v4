@@ -413,6 +413,152 @@ class RefreshMappingBatchStep(BaseStep):
             raise
 
 
+class WriteToS3ParquetBatchStep(BaseStep):
+    """Write batch data to S3 as Parquet with timestamp-based partition path.
+
+    Unlike WriteToS3ParquetStep (streaming), this batch version:
+    - Uses current execution timestamp for partition path (not window end time)
+    - Does not require windowing
+    - Groups all records together and writes them as Parquet files
+
+    Output path pattern:
+        {prefix}/par_month=MM/par_day=DD/par_hour=HH/data-{shard}.snappy.parquet
+
+    Config params:
+        prefix: Base S3 path (e.g., s3://bucket/path/ms_personas)
+        date_columns: List of date column names to convert (optional)
+        input: Input PCollection name from state
+
+    Example config:
+        - step: WriteToS3ParquetBatch
+          id: write_s3
+          params:
+            prefix: "{io.s3.bucket}"
+            date_columns:
+              - birth_date
+              - updated_date
+            input: full_aws
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        import uuid
+        from datetime import datetime, timezone
+        import pytz
+        import pyarrow as pa
+        import pandas as pd
+        from apache_beam.io.filesystems import FileSystems
+
+        params = self.spec.get("params", {})
+        input_key = params.get("input") or self.spec.get("input") or self.spec.get("in")
+        prefix = params.get("prefix") or params.get("bucket", "")
+        date_columns = params.get("date_columns", [])
+
+        # Clean up prefix
+        prefix = prefix.rstrip('/')
+
+        LOGGER.info(f"[{self.step_id}] WriteToS3ParquetBatchStep configured:")
+        LOGGER.info(f"[{self.step_id}]   Prefix: {prefix}")
+        LOGGER.info(f"[{self.step_id}]   Input: {input_key}")
+        LOGGER.info(f"[{self.step_id}]   Date columns: {date_columns}")
+
+        pcoll = self.state[input_key]
+
+        # Generate partition path based on current timestamp (Thai timezone)
+        tz_bangkok = pytz.timezone('Asia/Bangkok')
+        now = datetime.now(tz_bangkok)
+        partition_path = (
+            f"par_month={now.strftime('%Y%m')}/"
+            f"par_day={now.strftime('%d')}/"
+            f"par_hour={now.strftime('%H')}"
+        )
+
+        LOGGER.info(f"[{self.step_id}]   Partition path: {partition_path}")
+
+        # Define a DoFn for writing batch Parquet
+        class WriteBatchParquetDoFn(beam.DoFn):
+            def __init__(self, base_prefix, partition_path, date_columns):
+                self.base_prefix = base_prefix
+                self.partition_path = partition_path
+                self.date_columns = date_columns or []
+
+            def process(self, group):
+                import pandas as pd
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+                import uuid
+                from apache_beam.io.filesystems import FileSystems
+
+                partition_key, records = group
+                records_list = list(records)
+
+                if not records_list:
+                    LOGGER.warning(f"[WriteBatchParquet] Empty partition: {partition_key}")
+                    return
+
+                # Generate unique shard id
+                shard_id = uuid.uuid4().hex[:8]
+
+                # Build output path
+                output_path = f"{self.base_prefix}/{self.partition_path}/data-{shard_id}.snappy.parquet"
+
+                LOGGER.info(f"[WriteBatchParquet] Writing {len(records_list)} records to: {output_path}")
+
+                try:
+                    # Create DataFrame
+                    df = pd.DataFrame(records_list)
+
+                    # Convert date columns
+                    for col in self.date_columns:
+                        if col in df.columns:
+                            df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
+
+                    # Remove internal columns (starts with _)
+                    internal_cols = [c for c in df.columns if c.startswith('_')]
+                    if internal_cols:
+                        df.drop(columns=internal_cols, inplace=True, errors='ignore')
+
+                    # Create PyArrow table
+                    table = pa.Table.from_pandas(df, preserve_index=False)
+
+                    # Write using Beam's FileSystems
+                    with FileSystems.create(output_path) as f:
+                        pq.write_table(table, f, compression='snappy')
+
+                    LOGGER.info(f"[WriteBatchParquet] Successfully wrote: {output_path}")
+
+                    yield {
+                        'output_path': output_path,
+                        'records_count': len(records_list),
+                        'partition': self.partition_path,
+                        'status': 'success'
+                    }
+
+                except Exception as e:
+                    LOGGER.error(f"[WriteBatchParquet] Failed to write: {str(e)}")
+                    yield {
+                        'output_path': output_path,
+                        'partition': self.partition_path,
+                        'status': 'failed',
+                        'error': str(e)
+                    }
+
+        # Group all records with a single key and write
+        result = (
+            pcoll
+            | f"{self.step_id}_AddKey" >> beam.Map(lambda x: ('batch', x))
+            | f"{self.step_id}_GroupAll" >> beam.GroupByKey()
+            | f"{self.step_id}_WriteParquet" >> beam.ParDo(
+                WriteBatchParquetDoFn(
+                    base_prefix=prefix,
+                    partition_path=partition_path,
+                    date_columns=date_columns
+                )
+            )
+        )
+
+        return result
+
+
 __all__ = [
     "ReadBQQueryStep",
     "BuildMappingDictStep",
@@ -424,4 +570,5 @@ __all__ = [
     "NormalizeToSchemaStep",
     "WriteParquetStep",
     "RefreshMappingBatchStep",
+    "WriteToS3ParquetBatchStep",
 ]
