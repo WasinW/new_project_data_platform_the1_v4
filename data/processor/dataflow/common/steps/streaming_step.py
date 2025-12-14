@@ -321,21 +321,36 @@ class FullfillSchemasStep(BaseStep):
 
 
 class WriteToBigQueryStreamingStep(BaseStep):
-    """Write data to BigQuery with configurable write disposition.
+    """Write data to BigQuery using Storage Write API with configurable disposition.
+
+    This step uses STORAGE_WRITE_API for reliable writes to native BigQuery tables.
+    Supports both WRITE_APPEND and WRITE_TRUNCATE modes.
 
     Config params:
         table: BigQuery table path (project.dataset.table)
         input: Input PCollection name from state
         write_disposition: WRITE_APPEND (default) or WRITE_TRUNCATE
         create_disposition: CREATE_NEVER (default) or CREATE_IF_NEEDED
+        schema: (Optional) BigQuery schema - if not provided, will fetch from table
+
+    Example config:
+        - step: WriteToBigQueryStreaming
+          id: write_bq
+          params:
+            table: "{io.bq.project}.{io.bq.dataset}.ms_personas"
+            input: gcp_ms_personas
+            write_disposition: WRITE_TRUNCATE
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        from google.cloud import bigquery as bq_client
+
         # Get params from params dict
         params = self.spec.get("params", {})
         # Support input in both params and top level
         input_key = params.get("input") or self.spec.get("input")
         table = params.get("table")
+        schema_param = params.get("schema")
 
         # Configurable write disposition (default: WRITE_APPEND for streaming compatibility)
         write_disposition_str = params.get("write_disposition", "WRITE_APPEND")
@@ -357,25 +372,62 @@ class WriteToBigQueryStreamingStep(BaseStep):
 
         LOGGER.info(f"[{self.step_id}] Writing to BigQuery: {table}")
         LOGGER.info(f"[{self.step_id}]   Write disposition: {write_disposition_str}")
+        LOGGER.info(f"[{self.step_id}]   Method: STORAGE_WRITE_API")
+
+        # Fetch schema from table if not provided
+        if not schema_param:
+            LOGGER.info(f"[{self.step_id}] Fetching schema from existing table...")
+            try:
+                client = bq_client.Client()
+                table_ref = client.get_table(table)
+                bq_schema = table_ref.schema
+
+                # Convert BigQuery SchemaField to Beam-compatible dict format
+                # Note: DATE, TIME, DATETIME need to be STRING for Storage Write API
+                unsupported_types = {'DATE', 'TIME', 'DATETIME'}
+
+                schema_param = {
+                    'fields': [
+                        {
+                            'name': field.name,
+                            'type': 'STRING' if field.field_type in unsupported_types else field.field_type,
+                            'mode': field.mode or 'NULLABLE',
+                        }
+                        for field in bq_schema
+                    ]
+                }
+                LOGGER.info(f"[{self.step_id}] Schema fetched: {len(bq_schema)} fields")
+
+                # Log type conversions
+                converted = [f.name for f in bq_schema if f.field_type in unsupported_types]
+                if converted:
+                    LOGGER.warning(f"[{self.step_id}] Converted DATE/TIME/DATETIME -> STRING: {converted}")
+
+            except Exception as e:
+                LOGGER.error(f"[{self.step_id}] Failed to fetch schema: {e}")
+                raise ValueError(f"Could not fetch schema from table {table}. Please provide schema in config.")
 
         pcoll = self.state[input_key]
 
-        # Transform to BigLake format (JSON serialization)
+        # Transform to BigLake format (JSON serialization for nested dicts)
         prepared = (
             pcoll
             | f"{self.step_id}_PrepareForBQ" >> beam.ParDo(WriteToBigLakeDoFn(table_name=table))
         )
 
-        # Write to BigQuery
+        # Write to BigQuery using Storage Write API
         result = (
             prepared
             | f"{self.step_id}_WriteBQ" >> bigquery.WriteToBigQuery(
                 table=table,
+                schema=schema_param,
+                method=bigquery.WriteToBigQuery.Method.STORAGE_WRITE_API,
                 write_disposition=write_disposition,
-                create_disposition=create_disposition
+                create_disposition=create_disposition,
             )
         )
 
+        LOGGER.info(f"[{self.step_id}] BigQuery write configured successfully")
         return result
 
 
