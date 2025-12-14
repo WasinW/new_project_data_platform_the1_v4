@@ -237,6 +237,55 @@ class FilterEmptyFamilyStep(BaseStep):
 
         return result
 
+
+class FilterNullFieldStep(BaseStep):
+    """Filter out records where a specified field is null/empty.
+
+    This step is useful for filtering transformed data where required fields
+    (like memberId) must have values before writing to BigQuery.
+
+    Config params:
+        input: Input PCollection name from state
+        field: Field name to check for null/empty (default: 'memberId')
+
+    Example config:
+        - step: FilterNullField
+          id: filter_null_memberid
+          params:
+            input: gcp_ms_personas
+            field: memberId
+          out: gcp_ms_personas_filtered
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        params = self.spec.get("params", {})
+        input_key = params.get("input") or self.spec.get("input") or self.spec.get("in")
+        field_name = params.get("field", "memberId")
+
+        LOGGER.info(f"[{self.step_id}] Filtering records where '{field_name}' is null/empty")
+
+        pcoll = self.state[input_key]
+
+        def has_valid_field(element):
+            """Check if element has valid (non-null, non-empty) field value."""
+            value = element.get(field_name)
+            if value is None:
+                LOGGER.debug(f"[FilterNullField] Filtered out: {field_name}=None")
+                return False
+            if isinstance(value, str) and not value.strip():
+                LOGGER.debug(f"[FilterNullField] Filtered out: {field_name}=empty string")
+                return False
+            return True
+
+        result = (
+            pcoll
+            | f"{self.step_id}_FilterNull_{field_name}" >> beam.Filter(has_valid_field)
+        )
+
+        LOGGER.info(f"[{self.step_id}] Filter configured for field: {field_name}")
+        return result
+
+
 class TransformSchemasStep(BaseStep):
     """Transform data to target schemas (AWS and GCP).
 
@@ -1021,6 +1070,7 @@ __all__ = [
     'FetchFromBigtableStep',
     'FilterEmptyPKStep',
     'FilterEmptyFamilyStep',
+    'FilterNullFieldStep',
     'TransformSchemasStep',
     'FullfillSchemasStep',
     'WriteToBigQueryStreamingStep', # append mode
