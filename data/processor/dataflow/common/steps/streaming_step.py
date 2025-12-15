@@ -486,9 +486,16 @@ class WriteToBigQueryStreamingStep(BaseStep):
 
         pcoll = self.state[input_key]
 
+        # Safety net: Filter out records with null memberId before write
+        # This is a last-resort filter in case FilterNullFieldStep doesn't catch all nulls
+        filtered = (
+            pcoll
+            | f"{self.step_id}_SafetyFilterNull" >> beam.ParDo(FilterNullDoFn('memberId'))
+        )
+
         # Transform to BigLake format (JSON serialization for nested dicts)
         prepared = (
-            pcoll
+            filtered
             | f"{self.step_id}_PrepareForBQ" >> beam.ParDo(WriteToBigLakeDoFn(table_name=table))
         )
 
