@@ -75,7 +75,7 @@ plan:
   outputs:
   - mapping_refresh
 
-# Step 2: Read personas from BigQuery (full load, no time filter)
+# Step 2: Read personas from BigQuery (full load, filter null memberId at source)
 - step: ReadBQQuery
   id: personas_rows
   query: |
@@ -83,6 +83,7 @@ plan:
       personaId,
       profiles
     FROM `{io.bq.project}.{io.bq.dataset}.personas`
+    WHERE COALESCE(JSON_VALUE(profiles, '$.memberId'), '') <> ''
   out: personas_rows
 
 # Step 3: Parse JSON profiles field
