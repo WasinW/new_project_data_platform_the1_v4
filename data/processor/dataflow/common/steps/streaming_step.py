@@ -459,6 +459,8 @@ class WriteToBigQueryStreamingStep(BaseStep):
 
                 # Convert BigQuery SchemaField to Beam-compatible dict format
                 # Note: DATE, TIME, DATETIME need to be STRING for Storage Write API
+                # IMPORTANT: Force all fields to NULLABLE to avoid Beam validation errors
+                # BQ API will still enforce REQUIRED constraints at write time
                 unsupported_types = {'DATE', 'TIME', 'DATETIME'}
 
                 schema_param = {
@@ -466,12 +468,12 @@ class WriteToBigQueryStreamingStep(BaseStep):
                         {
                             'name': field.name,
                             'type': 'STRING' if field.field_type in unsupported_types else field.field_type,
-                            'mode': field.mode or 'NULLABLE',
+                            'mode': 'NULLABLE',  # Force NULLABLE to bypass Beam validation
                         }
                         for field in bq_schema
                     ]
                 }
-                LOGGER.info(f"[{self.step_id}] Schema fetched: {len(bq_schema)} fields")
+                LOGGER.info(f"[{self.step_id}] Schema fetched: {len(bq_schema)} fields (all forced to NULLABLE)")
 
                 # Log type conversions
                 converted = [f.name for f in bq_schema if f.field_type in unsupported_types]
