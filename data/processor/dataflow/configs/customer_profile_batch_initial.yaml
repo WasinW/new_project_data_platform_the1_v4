@@ -122,15 +122,23 @@ plan:
     input: aws_ms_personas
   out: aws_ms_member
 
-# Step 7: Write GCP data to BigQuery
+# Step 7: Filter null memberId after transform (safety net for PROD edge cases)
+- step: FilterNullField
+  id: filter_null_memberid
+  params:
+    input: gcp_ms_personas
+    field: memberId
+  out: gcp_ms_personas_filtered
+
+# Step 8: Write GCP data to BigQuery
 - step: WriteToBigQueryStreaming
   id: write_gcp_bq
   params:
     table: "{io.bq.project}.{io.bq.dataset}.ms_personas"
-    input: gcp_ms_personas
+    input: gcp_ms_personas_filtered
     write_disposition: WRITE_TRUNCATE
 
-# Step 8: Write AWS data to S3 as Parquet
+# Step 9: Write AWS data to S3 as Parquet
 - step: WriteParquet
   in: aws_ms_member
   prefix: "{io.s3.refined_prefix}/ms_personas/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"
