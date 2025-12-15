@@ -238,6 +238,41 @@ class FilterEmptyFamilyStep(BaseStep):
         return result
 
 
+class FilterNullDoFn(beam.DoFn):
+    """DoFn to filter out records with null/empty field values.
+
+    Using DoFn instead of beam.Filter with closure to avoid serialization
+    issues with LOGGER reference in closure functions.
+    """
+
+    def __init__(self, field_name: str):
+        self.field_name = field_name
+
+    def process(self, element):
+        """Filter out records where field is null or empty string."""
+        # Support nested field access with dot notation
+        value = element
+        for key in self.field_name.split('.'):
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                value = None
+                break
+
+        # Filter out null values
+        if value is None:
+            LOGGER.debug(f"[FilterNullDoFn] Filtered out: {self.field_name}=None, record keys: {list(element.keys()) if isinstance(element, dict) else 'N/A'}")
+            return  # Don't yield = filter out
+
+        # Filter out empty strings
+        if isinstance(value, str) and not value.strip():
+            LOGGER.debug(f"[FilterNullDoFn] Filtered out: {self.field_name}=empty string")
+            return  # Don't yield = filter out
+
+        # Valid value - yield the element
+        yield element
+
+
 class FilterNullFieldStep(BaseStep):
     """Filter out records where a specified field is null/empty.
 
@@ -247,6 +282,7 @@ class FilterNullFieldStep(BaseStep):
     Config params:
         input: Input PCollection name from state
         field: Field name to check for null/empty (default: 'memberId')
+               Supports dot notation for nested fields (e.g., 'profiles.memberId')
 
     Example config:
         - step: FilterNullField
@@ -266,20 +302,10 @@ class FilterNullFieldStep(BaseStep):
 
         pcoll = self.state[input_key]
 
-        def has_valid_field(element):
-            """Check if element has valid (non-null, non-empty) field value."""
-            value = element.get(field_name)
-            if value is None:
-                LOGGER.debug(f"[FilterNullField] Filtered out: {field_name}=None")
-                return False
-            if isinstance(value, str) and not value.strip():
-                LOGGER.debug(f"[FilterNullField] Filtered out: {field_name}=empty string")
-                return False
-            return True
-
+        # Use DoFn instead of beam.Filter to avoid closure serialization issues
         result = (
             pcoll
-            | f"{self.step_id}_FilterNull_{field_name}" >> beam.Filter(has_valid_field)
+            | f"{self.step_id}_FilterNull_{field_name}" >> beam.ParDo(FilterNullDoFn(field_name))
         )
 
         LOGGER.info(f"[{self.step_id}] Filter configured for field: {field_name}")
