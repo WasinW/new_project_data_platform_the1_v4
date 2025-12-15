@@ -17,8 +17,8 @@ resource "google_composer_environment" "main" {
       # machine_type    = "n1-standard-1"
       # disk_size_gb    = 100
       ip_allocation_policy {
-        cluster_secondary_range_name  = "the1-subnet-composer-stg-pods"
-        services_secondary_range_name = "the1-subnet-composer-stg-services"
+        cluster_secondary_range_name  = "the1-subnet-composer-${terraform.workspace}-pods"
+        services_secondary_range_name = "the1-subnet-composer-${terraform.workspace}-services"
         
       }
           

@@ -14,8 +14,6 @@ def run_simple_query(**context):
     logging.info("▶ Starting BigQuery Query...")
     logging.info(f"query params: {context['params']['query']}")
     client = bigquery.Client()
-    # project: the1-insight-{WORKSPACE_ENV}insight.events_consents
-    # query = """ SELECT * FROM `the1-insight-stg.insight.events_consents` """
     query = context['params']['query']
     result = client.query(query).result()
     logging.info(f"Query Results: {result}")

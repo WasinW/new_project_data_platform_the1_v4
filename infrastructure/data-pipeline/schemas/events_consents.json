@@ -6,7 +6,7 @@
   "schema": [
     {"name": "personasId", "type": "STRING", "mode": "REQUIRED", "description": "Primary key"},
     {"name": "memberId", "type": "STRING", "mode": "NULLABLE"},
-    {"name": "consent", "type": "STRING", "mode": "NULLABLE"},
+    {"name": "consents", "type": "STRING", "mode": "NULLABLE"},
     {"name": "processDate", "type": "DATE", "mode": "REQUIRED"}
   ],
 

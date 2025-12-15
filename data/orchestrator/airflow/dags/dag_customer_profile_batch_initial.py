@@ -202,10 +202,10 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'subnetwork': '{{ var.value.dataflow_subnetwork }}',
 
         # Worker configuration (batch mode)
-        'worker_machine_type': 'n1-standard-4',
-        'max_num_workers': 8,
-        'num_workers': 4,
-        'disk_size_gb': 100,
+        'worker_machine_type': 'n1-standard-8',
+        'max_num_workers': 16,
+        'num_workers': 8,
+        'disk_size_gb': 400,
         'number_of_worker_harness_threads': 8,
         'save_main_session': True,
         'worker_disk_type': 'compute.googleapis.com/projects//zones//diskTypes/pd-ssd',

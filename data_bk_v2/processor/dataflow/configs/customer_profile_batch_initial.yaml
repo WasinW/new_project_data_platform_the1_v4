@@ -1,0 +1,146 @@
+# Customer Profile Batch Initial Pipeline
+# This config is for one-time initial load from personas to ms_personas
+# Similar to realtime pipeline but runs as batch (no dependency on AWS DTS data)
+
+defaults_file: null
+
+pipeline:
+  name: ms_member_batch_initial
+  mode: batch
+  term: initial
+
+params:
+  pk: member_number
+  run_dt: null # Set at runtime
+
+io:
+  bq:
+    project: the1-insight-{WORKSPACE_ENV}
+    dataset: insight
+    temp_gcs: gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp
+  s3:
+    bucket: s3://t1-analytics/refined/insights/ms_personas_WORKSPACE_ENV}
+    region: ap-southeast-1
+
+# Parquet output configuration
+parquet:
+  output_filename: ms-member.parquet
+  date_columns:
+  - birth_date
+  - consent_date
+  - created_date
+  - register_date
+  - employee_join_date
+  - employee_resign_date
+  - passport_exp
+  - updated_date
+
+schema:
+  bq:
+    project: "{io.bq.project}"
+    dataset: "{io.bq.dataset}"
+    table: "ms_personas"
+
+formats:
+  date:
+  - "%Y-%m-%d"
+  - "%d/%m/%Y"
+  timestamp:
+  - "%Y-%m-%d %H:%M:%S.%f"
+  - "%Y-%m-%d %H:%M:%S"
+  - "%Y-%m-%dT%H:%M:%S.%f"
+  - "%Y-%m-%dT%H:%M:%S"
+
+# Pipeline plan for batch initial load
+plan:
+# Step 1: Load mapping from BigQuery (same format as streaming)
+- step: RefreshMappingBatch
+  id: mapping_refresh
+  params:
+    mapping_table: "{io.bq.project}.{io.bq.dataset}.mapping_reconcile"
+    query: |
+      SELECT
+        reconcile_column_name
+        , mapping_column_name
+        , reconcile_retrieved
+        , reconcile_confirmed
+        , table_name
+        , reconcile_skippable
+        , updated_date
+        , mapping_logic
+        , mapping_alias_name
+        , mapping_column_type
+      FROM `{io.bq.project}.{io.bq.dataset}.mapping_reconcile`
+      WHERE table_name = 'insight.ms_member'
+  outputs:
+  - mapping_refresh
+
+# Step 2: Read personas from BigQuery (full load, no time filter)
+- step: ReadBQQuery
+  id: personas_rows
+  query: |
+    SELECT
+      personaId,
+      profiles
+    FROM `{io.bq.project}.{io.bq.dataset}.personas`
+  out: personas_rows
+
+# Step 3: Parse JSON profiles field
+- step: ParseJson
+  id: personas_parsed
+  in: personas_rows
+  json_fields:
+  - profiles
+  out: personas_parsed
+
+# Step 4: Transform to target schemas (AWS and GCP branches)
+# Uses TransformSchemasStep from streaming_step.py
+- step: TransformSchemas
+  id: transform_output
+  params:
+    mapping_info: mapping_refresh
+    table_name: ms_member
+    input: personas_parsed
+  outputs:
+  - aws_ms_personas
+  - gcp_ms_personas
+
+# Step 5: Fulfill AWS schema with all fields (missing fields = None)
+- step: FullfillSchemas
+  id: full_aws
+  params:
+    table_name: ms_member
+    mapping_info: mapping_refresh
+    input: aws_ms_personas
+  outputs:
+  - aws_ms_member
+
+# Step 6: Write GCP data to BigQuery
+- step: WriteToBigQueryStreaming
+  id: write_gcp_bq
+  params:
+    table: "{io.bq.project}.{io.bq.dataset}.ms_personas"
+    input: gcp_ms_personas
+    write_disposition: WRITE_TRUNCATE
+
+# Step 7: Write AWS data to S3 as Parquet
+- step: WriteParquet
+  in: aws_ms_member
+  prefix: "{io.s3.refined_prefix}/ms_personas_{WORKSPACE_ENV}/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"
+
+# - step: WriteToS3Parquet
+#   id: write_s3
+#   params:
+#     bucket: "{io.s3.bucket}"
+#     window_size: 3600
+#     date_columns:
+#     - birth_date
+#     - consent_date
+#     - created_date
+#     - register_date
+#     - employee_join_date
+#     - employee_resign_date
+#     - passport_exp
+#     - updated_date
+#     output_filename: "ms-member.parquet"
+#     input: full_aws

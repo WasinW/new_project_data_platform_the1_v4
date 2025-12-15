@@ -13,7 +13,7 @@
     {"name": "memberId", "type": "STRING", "mode": "REQUIRED", "description": "Primary key"},
     {"name": "nationalityId", "type": "STRING", "mode": "NULLABLE"},
     {"name": "profileId", "type": "STRING", "mode": "NULLABLE"},
-    {"name": "updated_date", "type": "TIMESTAMP", "mode": "NULLABLE"}
+    {"name": "timestamp", "type": "TIMESTAMP", "mode": "NULLABLE"}
   ],
 
   "clustering": ["memberId"],

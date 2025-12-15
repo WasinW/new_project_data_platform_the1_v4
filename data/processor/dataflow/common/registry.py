@@ -28,6 +28,7 @@ from dataflow_common.steps import (
     CoalesceByMappingStep,
     NormalizeToSchemaStep,
     WriteParquetStep,
+    RefreshMappingBatchStep,
     # Streaming steps (config-driven realtime pipeline) - from streaming_step.py
     RefreshMappingTableStep,
     ReadFromPubSubStep,
@@ -35,6 +36,7 @@ from dataflow_common.steps import (
     FetchFromBigtableStep,
     FilterEmptyPKStep,
     FilterEmptyFamilyStep,
+    FilterNullFieldStep,
     TransformSchemasStep,
     FullfillSchemasStep,
     WriteToBigQueryStreamingStep,
@@ -57,6 +59,8 @@ STEP_REGISTRY: Dict[str, Type] = {
     "CoalesceByMapping": CoalesceByMappingStep,
     "NormalizeToSchema": NormalizeToSchemaStep,
     "WriteParquet": WriteParquetStep,
+    "RefreshMappingBatch": RefreshMappingBatchStep,
+    # Optional batch steps (not currently used but may be useful)
     # Streaming steps (used in ms_member_realtime.yaml)
     "RefreshMappingTable": RefreshMappingTableStep,
     "ReadFromPubSub": ReadFromPubSubStep,
@@ -64,11 +68,12 @@ STEP_REGISTRY: Dict[str, Type] = {
     "FetchFromBigtable": FetchFromBigtableStep,
     "FilterEmptyPK": FilterEmptyPKStep,
     "FilterEmptyFamily": FilterEmptyFamilyStep,
+    "FilterNullField": FilterNullFieldStep,
     "TransformSchemas": TransformSchemasStep,
     "FullfillSchemas": FullfillSchemasStep,
     "WriteToBigQueryStreaming": WriteToBigQueryStreamingStep,
     "WriteToS3Parquet": WriteToS3ParquetStep,
-    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,
+    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,  # For BigLake CDC streaming writes
     "WriteToBigLakeIcebergStreaming": WriteToBigLakeIcebergStreamingStep,
     "MergeToIcebergStreaming": MergeToIcebergStreamingStep,
 }

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dataflow_common"
+version = "1.0.0"
+requires-python = ">=3.10"
+# TESTED COMPATIBLE SET - Must match Dockerfile versions!
+# s3fs → aiobotocore → botocore chain has STRICT version requirements
+dependencies = [
+    "pyyaml>=6.0",
+    "apache-beam[gcp]==2.69.0",  # MUST match Dockerfile SDK version
+    "google-cloud-bigquery==3.25.0",
+    "google-cloud-bigtable>=2.26.0",
+    "google-cloud-pubsub>=2.23.1",
+    "pyarrow==14.0.2",
+    "numpy>=1.21,<2",  # CRITICAL: pyarrow 14.0.2 requires numpy 1.x
+    "pandas>=1.5.0,<2.1.0",
+    "fastavro>=1.9.0",
+    # S3 dependencies - versions MUST be compatible!
+    # "s3fs==2024.6.1",
+    "fsspec==2024.6.1",
+    "aiobotocore==2.13.0",
+    "boto3==1.34.106",
+    "botocore==1.34.106",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4.0",
+]
+
+[tool.setuptools]
+packages = [
+    "dataflow_common",
+    "dataflow_common.connectors",
+    "dataflow_common.steps",
+    "dataflow_common.dofns",
+    # "dataflow_common.steps.dofns",
+    "dataflow_common.transforms",
+    "dataflow_common.utils"
+]
+
+
+[tool.setuptools.package-dir]
+dataflow_common = "."
+"dataflow_common.connectors" = "connectors"
+"dataflow_common.steps" = "steps"
+"dataflow_common.dofns" = "dofns"
+# "dataflow_common.steps.dofns" = "steps/dofns"
+"dataflow_common.transforms" = "transforms"
+"dataflow_common.utils" = "utils"

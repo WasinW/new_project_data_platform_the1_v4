@@ -15,20 +15,17 @@ export PYTHONPATH="${COMMON_DIR}:${PYTHONPATH}"
 cd "${SCRIPT_DIR}"
 
 # Run individual test modules
-echo "Testing transforms..."
-python -m -s pytest testcase/test_transforms.py -v
+echo "Testing Step Integration..."
+python -m -s pytest testcase/test_config_to_steps_integration.py -v -s 
 
-echo "Testing connectors..."
-python -m -s pytest testcase/test_connectors.py -v
+echo "Testing Customer Profile Realtime Pipeline..."
+python -m -s pytest testcase/test_customer_profile_realtime_pipeline.py -v -s 
 
-echo "Testing steps..."
-python -m -s pytest testcase/test_steps.py -v
+echo "Testing Customer Profile Short Pipeline..."
+python -m -s pytest testcase/test_customer_profile_short_pipeline.py -v -s 
 
-echo "Testing config..."
-python -m -s pytest testcase/test_config.py -v
-
-echo "Testing orchestrator..."
-python -m -s pytest testcase/test_orchestrator.py -v
+echo "Testing Pipeline Transforms Beam..."
+python -m -s pytest testcase/test_pipeline_transforms_beam.py -v -s 
 
 # Run all tests
 echo "Running all tests..."

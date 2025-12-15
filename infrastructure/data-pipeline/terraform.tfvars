@@ -7,7 +7,9 @@ bigquery_dataset_id      = "insight"
 # S3 paths for production
 # s3_mapping_path = "s3://t1-analytics/refined/insights/mapping_reconcile/ms_personas/**"
 s3_mapping_path = "s3://t1-analytics/refined/insights/mapping_reconcile/ms_personas_enhance/**"
-s3_member_path  = "s3://t1-analytics/refined/insights/ms_member/**"
+# s3_member_path  = "s3://t1-analytics/refined/insights/ms_member/**"
+s3_member_path  = "s3://t1-analytics/analysis/t1_master/ms_member/**"
+# s3://t1-analytics/analysis/t1_master/ms_member/
 
 # gcs_staging_bucket="the1-insight-${terraform.workspace}-data-pipeline-data-staging"
 # iceberg_data_bucket="the1-insight-${terraform.workspace}-data-pipeline-data-staging"

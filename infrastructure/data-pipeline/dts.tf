@@ -33,9 +33,10 @@ resource "google_bigquery_data_transfer_config" "mapping_transfer" {
       data.google_secret_manager_secret_version.insight_data_pipeline.secret_data
     )["aws-secret-key"]
 
-    file_format               = "PARQUET"
+    file_format               = "CSV"
     max_bad_records           = "0"
     skip_leading_rows         = "1"
+    field_delimiter           = ","
     write_disposition         = "WRITE_TRUNCATE"
   }
   

@@ -5,7 +5,7 @@
 defaults_file: null
 
 pipeline:
-  name: ms_member_realtime_refactor
+  name: ms_member_realtime
   mode: streaming
   term: realtime
 
@@ -31,7 +31,7 @@ io:
     # iceberg_table: ms_personas_iceberg
     temp_gcs: gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp
   s3:
-    bucket: s3://t1-analytics/refined/insights/ms_personas_realtime_dev
+    bucket: s3://t1-analytics/refined/insights/ms_personas_{WORKSPACE_ENV}
     region: ap-southeast-1
 
 # Mapping refresh configuration
@@ -214,7 +214,7 @@ plan:
   id: write_s3
   params:
     bucket: "{io.s3.bucket}"
-    window_size: 3600 # 1 hour - ใช้ integer ไม่ใช่ string!
+    window_size: 300 # 1 hour - ใช้ integer ไม่ใช่ string!
     # date_columns: "{parquet.date_columns}"
     # FIXED: Inline list instead of "{parquet.date_columns}"
     date_columns:

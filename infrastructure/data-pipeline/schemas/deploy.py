@@ -9,7 +9,8 @@ Usage:
 
 Examples:
     python deploy.py the1-insight-stg insight stg
-    python deploy.py the1-insight-prod insight prod --force
+    python deploy.py the1-insight-prod insight prod
+     --force
 """
 
 import json
@@ -48,6 +49,13 @@ class TableDeployer:
     def run_bq(self, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
         # Always include project_id for bq commands
         cmd = ["bq", f"--project_id={self.project_id}"] + args
+        # bq query
+        #  --use_legacy_sql=false
+        #  --nouse_cache
+        #  --destination_table=your_project_id:your_dataset.your_table_name
+        #  --create_disposition=CREATE_IF_NEEDED
+        #  --write_disposition=WRITE_EMPTY
+        #  --batch "CREATE TABLE `your_project_id.your_dataset.your_table_name` ( column1 STRING, column2 INT64, column3 TIMESTAMP );"
         result = subprocess.run(cmd, capture_output=True, text=True)
         if check and result.returncode != 0:
             print(f"  [ERROR] bq command failed: {' '.join(cmd)}")
@@ -170,6 +178,7 @@ OPTIONS(
 
             partitioning = definition.get("partitioning", {})
             if partitioning:
+                # sql += f"\nPARTITION BY {partitioning.get('type', 'DAY')}({partitioning.get('field')})"
                 field = partitioning.get('field')
                 part_type = partitioning.get('type', 'DAY').upper()
                 # BigQuery uses DATE() for TIMESTAMP columns with daily partitioning
@@ -237,6 +246,17 @@ OPTIONS(
 
         if result.returncode == 0:
             print(f"  [OK] Data restored")
+            query = f"""
+            DROP TABLE IF EXISTS `{self.project_id}.{self.dataset_id}.{source_table}`
+            """
+            print(f"  [DROP TEMP] Dropping backup table...")
+            drop_backup_result = self.run_bq([
+                "query", "--use_legacy_sql=false", query
+            ], check=False)
+            if drop_backup_result.returncode == 0:
+                print(f"  [OK] Drop Backup table successful")
+            else:
+                print(f"  [WARN] Drop Backup table failed - manual intervention needed")
         else:
             print(f"  [WARN] Data restore failed - manual intervention needed")
             print(f"      Backup table: {source_table}")
@@ -246,6 +266,7 @@ OPTIONS(
         result = self.run_bq([
             "query", "--use_legacy_sql=false", sql
         ], check=False)
+        print(f" execute_sql result : {result}")
         if result.returncode != 0:
             print(f"  [SQL ERROR] stdout: {result.stdout}")
             print(f"  [SQL ERROR] stderr: {result.stderr}")

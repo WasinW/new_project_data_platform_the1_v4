@@ -185,7 +185,7 @@ class ParquetConnector:
             if not schema:
                 LOGGER.warning(f"[{label}] No schema specified, using default")
             
-            num_shards = cfg.io.s3.get("num_shards") if cfg.io and cfg.io.s3 else 2
+            num_shards = cfg.io.s3.get("num_shards", 10) if cfg.io and cfg.io.s3 else 10
             LOGGER.info(f"[{label}] Using {num_shards} shards")
 
             pcoll | label >> WriteToParquet(

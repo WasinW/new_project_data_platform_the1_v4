@@ -361,7 +361,6 @@ class WriteParquetStep(BaseStep):
             LOGGER.debug(f"[{self.step_id}] Stack trace: {traceback.format_exc()}")
             raise
 
-
 class RefreshMappingBatchStep(BaseStep):
     """Refresh mapping table from BigQuery for batch pipelines.
     This step is the batch equivalent of RefreshMappingTableStep.
@@ -408,7 +407,6 @@ class RefreshMappingBatchStep(BaseStep):
             LOGGER.error(f"[{self.step_id}] Failed in RefreshMappingBatchStep: {str(e)}")
             LOGGER.debug(f"[{self.step_id}] Stack trace: {traceback.format_exc()}")
             raise
-
 __all__ = [
     "ReadBQQueryStep",
     "BuildMappingDictStep",
@@ -419,4 +417,5 @@ __all__ = [
     "CoalesceByMappingStep",
     "NormalizeToSchemaStep",
     "WriteParquetStep",
+    "RefreshMappingBatchStep",
 ]

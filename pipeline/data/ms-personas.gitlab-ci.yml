@@ -59,8 +59,8 @@ variables:
   - !reference [ .execute-pipeline-template, rules ]
   - changes:
     - data/orchestrator/airflow/**/*
-    - data/processor/dataflow/scripts/**/*
     - data/processor/dataflow/configs/**/*
+    - data/processor/dataflow/scripts/**/*
     - pipeline/data/ms-personas.gitlab-ci.yml
     when: on_success
   - when: never
@@ -105,7 +105,6 @@ variables:
   - terraform init
   - terraform workspace select -or-create $WORKSPACE_ENV
   # - terraform destroy -target=google_bigquery_table.ms_personas_native_table -auto-approve || echo "No ms_personas_native_table table to destroy"
-  # - terraform destroy -target=google_bigquery_table.ms_personas_iceberg -auto-approve || echo "No ms_personas_native_table table to destroy"
   - terraform apply -auto-approve
 
 # ============================================
@@ -139,14 +138,7 @@ ms-personas:terraform:apply:nonprod:
     BIGQUERY_DATASET_ID: insight
   script:
   - !reference [ .ms-personas-gcp-prepare, script ]
-  - bq rm -f -t the1-insight-stg:insight.ms_member
-  - bq rm -f -t the1-insight-stg:insight.mapping_reconcile
-  - bq rm -f -t the1-insight-stg:insight.ms_personas
-  - bq rm -f -t the1-insight-stg:insight.ms_personas_iceberg
-  - bq rm -f -t the1-insight-stg:insight.event_consent
   - !reference [ .ms-personas-terraform-apply, script ]
-  # - !reference [ .ms-personas-table-init, script ]
-  # - !reference [ .ms-personas-iceberg-init, script ]
   after_script:
   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
   needs:
@@ -181,13 +173,6 @@ ms-personas:terraform:apply:prod:
     BIGQUERY_DATASET_ID: insight
   script:
   - !reference [ .ms-personas-gcp-prepare, script ]
-  # - echo "!reference [ .ms-personas-gcp-prepare, script ]"
-  # - echo "!reference [ .ms-personas-terraform-apply, script ]"
-  - bq rm -f -t the1-insight-prod:insight.mapping_reconcile
-  - bq rm -f -t the1-insight-prod:insight.ms_member
-  - bq rm -f -t the1-insight-prod:insight.ms_personas
-  - bq rm -f -t the1-insight-prod:insight.ms_personas_iceberg
-  - bq rm -f -t the1-insight-prod:insight.events_consents
   - !reference [ .ms-personas-terraform-apply, script ]
 
   after_script:
@@ -213,8 +198,6 @@ ms-personas:deploy-tables:nonprod:
   script:
   - !reference [ .ms-personas-gcp-prepare, script ]
   - cd $INFRASTRUCTURE_RUN_PATH/
-  # - chmod +x schemas/deploy_tables.sh
-  # - ./schemas/deploy_tables.sh $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
   - python3 schemas/deploy.py $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
   # - ./schemas/deploy_tables.sh $WORKSPACE_ENV
   after_script:
@@ -354,11 +337,6 @@ dataflow-common:test:
   image: $PYTHON_IMAGE
   script:
   - cd $RUN_PATH
-  # - python -m pip install --upgrade pip
-  # - python -m pip install -e .
-  # - python -m pip install pytest
-  # - cd ../tests
-  # - python -m pytest -q . -v --tb=short
   # ใช้ uv แทน pip (ใช้ --system ใน CI environment ที่เป็น container)
   - pip install uv
   - uv pip install --system --upgrade pip
@@ -366,6 +344,8 @@ dataflow-common:test:
   - uv pip install --system pytest
   - cd tests
   - python -m pytest -q . -v --tb=short
+  # - cd ../../tests/
+  # - python -m pytest -q . -v --tb=short
   <<: *dataflow_common_rules
 
 # Build wheel
@@ -456,7 +436,10 @@ processor:create-image:dataflow-common:prod:
       --dockerfile "$CI_PROJECT_DIR/$RUN_PATH/Dockerfile" \
       --destination "$GAR_PROD_REPOSITORY_BASE_PATH/$GCP_PRD_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:$VERSION_TAG" \
       --destination "$GAR_PROD_REPOSITORY_BASE_PATH/$GCP_PRD_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:$DEPLOYMENT_TAG" \
-      --cache=true
+      --destination "$GAR_PROD_REPOSITORY_BASE_PATH/$GCP_PRD_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common:latest" \
+      --cache=true \
+      --cache-repo="$GAR_PROD_REPOSITORY_BASE_PATH/$GCP_STG_PROJECT_ID/$GAR_REPOSITORY_NAME/dataflow-common/cache" \
+      --snapshotMode=redo
   after_script:
   - rm -f /kaniko/.docker/gcloud-key.json
   needs:
@@ -485,9 +468,11 @@ dataflow-common:upload-wheel:nonprod:
   - export COMPOSER_BUCKET=$(terraform output -raw composer_bucket 2>/dev/null || echo "t1-airflow-composer-bucket")
   - echo $COMPOSER_BUCKET
   - cd $CI_PROJECT_DIR
-  # - ls -l /builds/The1central/The1/the1-api/insight-api/data/ms-personas/scripts/dataflow_common/*/*
   - ls -l /builds/The1central/The1/the1-api/insight-api/data/processor/dataflow/common/dist/*
+  - ls -l $RUN_PATH/dist/*.whl
+  - echo 'Uploading wheel to GCS...'
   # Upload wheel
+  - gsutil rm gs://${COMPOSER_BUCKET}/dags/packages/*.whl || echo "Clean up old wheels"
   - gsutil cp $RUN_PATH/dist/*.whl gs://${COMPOSER_BUCKET}/dags/packages/
   - gsutil cp $RUN_PATH/dist/*.whl gs://${COMPOSER_BUCKET}/dags/packages/dataflow_common-$DEPLOYMENT_TAG.whl
   after_script:
@@ -525,9 +510,8 @@ dataflow-common:upload-wheel:prod:
   - export COMPOSER_BUCKET=$(terraform output -raw composer_bucket 2>/dev/null || echo "t1-airflow-composer-bucket")
   - echo $COMPOSER_BUCKET
   - cd $CI_PROJECT_DIR
-  # - ls -l /builds/The1central/The1/the1-api/insight-api/data/ms-personas/scripts/dataflow_common/*/*
-  - ls -l /builds/The1central/The1/the1-api/insight-api/data/processor/dataflow/common/dist/*
   # Upload wheel
+  - gsutil rm gs://${COMPOSER_BUCKET}/dags/packages/*.whl || echo "Clean up old wheels"
   - gsutil cp $RUN_PATH/dist/*.whl gs://${COMPOSER_BUCKET}/dags/packages/
   - gsutil cp $RUN_PATH/dist/*.whl gs://${COMPOSER_BUCKET}/dags/packages/dataflow_common-$DEPLOYMENT_TAG.whl
   # - docker inspect <IMAGE_NAME> | grep "Architecture"
@@ -586,7 +570,7 @@ ms-personas:upload-scripts:nonprod:
   - echo 'Copying scripts to GCS...'
   # Upload DAGs from new structure
   - |
-    gsutil rm -r gs://${COMPOSER_BUCKET}/dags/ || echo "No existing dags to remove"
+    gsutil rm -r gs://${COMPOSER_BUCKET}/dags/*.py || echo "No existing dags to remove"
     sed -i "s/{WORKSPACE_ENV}/${WORKSPACE_ENV}/g" data/orchestrator/airflow/dags/*.py
     gsutil cp data/orchestrator/airflow/dags/*.py gs://${COMPOSER_BUCKET}/dags/
   # Upload dataflow scripts
@@ -609,9 +593,9 @@ ms-personas:upload-scripts:nonprod:
   #   fi
   after_script:
   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
-  needs:
-  - ms-personas:terraform:apply:nonprod
-  - processor:create-image:dataflow-common:nonprod
+  # needs:
+  # - ms-personas:terraform:apply:nonprod
+  # - processor:create-image:dataflow-common:nonprod
   when: manual
   <<: *scripts_config_rules
 
@@ -634,7 +618,7 @@ ms-personas:upload-scripts:prod:
   - echo 'Copying scripts to GCS...'
   # Upload DAGs from new structure
   - |
-    gsutil rm -r gs://${COMPOSER_BUCKET}/dags/ || echo "No existing dags to remove"
+    gsutil rm -r gs://${COMPOSER_BUCKET}/dags/*.py || echo "No existing dags to remove"
     sed -i "s/{WORKSPACE_ENV}/${WORKSPACE_ENV}/g" data/orchestrator/airflow/dags/*.py
     gsutil cp data/orchestrator/airflow/dags/*.py gs://${COMPOSER_BUCKET}/dags/
   # Upload dataflow scripts
@@ -648,9 +632,9 @@ ms-personas:upload-scripts:prod:
     gsutil cp data/processor/dataflow/configs/*.yaml gs://${COMPOSER_BUCKET}/config/
   after_script:
   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
-  needs:
-  # - ms-personas:terraform:apply:prod
-  - processor:create-image:dataflow-common:nonprod
+  # needs:
+  # # - ms-personas:terraform:apply:prod
+  # - processor:create-image:dataflow-common:nonprod
   when: manual
   <<: *scripts_config_rules
 

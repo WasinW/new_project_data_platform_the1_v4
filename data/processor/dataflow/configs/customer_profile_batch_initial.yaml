@@ -19,7 +19,8 @@ io:
     dataset: insight
     temp_gcs: gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp
   s3:
-    bucket: s3://t1-analytics/refined/insights/ms_personas_WORKSPACE_ENV}
+    bucket: s3://t1-analytics/refined/insights
+    num_shards: 10
     region: ap-southeast-1
 
 # Parquet output configuration
@@ -37,8 +38,8 @@ parquet:
 
 schema:
   bq:
-    project: "{io.bq.project}"
-    dataset: "{io.bq.dataset}"
+    project: "the1-insight-{WORKSPACE_ENV}"
+    dataset: "insight"
     table: "ms_personas"
 
 formats:
@@ -82,7 +83,8 @@ plan:
     SELECT
       personaId,
       profiles
-    FROM `{io.bq.project}.{io.bq.dataset}.personas`
+    FROM `{io.bq.project}.{io.bq.dataset}.personas` 
+    WHERE COALESCE(JSON_VALUE(profiles, '$.memberId'), '') <> ''
   out: personas_rows
 
 # Step 3: Parse JSON profiles field
@@ -93,40 +95,55 @@ plan:
   - profiles
   out: personas_parsed
 
-# Step 4: Transform to target schemas (AWS and GCP branches)
+# Step 4: Filter out empty memberId (before transform)
+- step: FilterEmptyPK
+  id: filter_empty_pk
+  params:
+    input: personas_parsed
+    field: profiles.memberId
+  out: personas_filtered
+
+# Step 5: Transform to target schemas (AWS and GCP branches)
 # Uses TransformSchemasStep from streaming_step.py
 - step: TransformSchemas
   id: transform_output
   params:
     mapping_info: mapping_refresh
     table_name: ms_member
-    input: personas_parsed
+    input: personas_filtered
   outputs:
   - aws_ms_personas
   - gcp_ms_personas
 
-# Step 5: Fulfill AWS schema with all fields (missing fields = None)
+# Step 6: Fulfill AWS schema with all fields (missing fields = None)
+# NOTE: Use 'out' not 'outputs' because this step returns single PCollection
 - step: FullfillSchemas
   id: full_aws
   params:
     table_name: ms_member
     mapping_info: mapping_refresh
     input: aws_ms_personas
-  outputs:
-  - aws_ms_member
+  out: aws_ms_member
+# Step 7: Filter null memberId after transform (safety net for PROD edge cases)
+- step: FilterNullField
+  id: filter_null_memberid
+  params:
+    input: gcp_ms_personas
+    field: memberId
+  out: gcp_ms_personas_filtered
 
-# Step 6: Write GCP data to BigQuery
+# Step 8: Write GCP data to BigQuery
 - step: WriteToBigQueryStreaming
   id: write_gcp_bq
   params:
     table: "{io.bq.project}.{io.bq.dataset}.ms_personas"
-    input: gcp_ms_personas
+    input: gcp_ms_personas_filtered
     write_disposition: WRITE_TRUNCATE
 
 # Step 7: Write AWS data to S3 as Parquet
 - step: WriteParquet
   in: aws_ms_member
-  prefix: "{io.s3.refined_prefix}/ms_personas_{WORKSPACE_ENV}/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"
+  prefix: "{io.s3.bucket}/ms_personas_{WORKSPACE_ENV}/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"
 
 # - step: WriteToS3Parquet
 #   id: write_s3
