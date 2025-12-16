@@ -1015,6 +1015,17 @@ class WritePartitionToParquetDoFn(DoFn):
             # Create DataFrame
             df = pd.DataFrame(records_list)
 
+            # Debug: Log sample data and columns
+            LOGGER.info(f"[WritePartitionToParquet] DataFrame columns: {list(df.columns)}")
+            LOGGER.info(f"[WritePartitionToParquet] DataFrame shape: {df.shape}")
+            if len(df) > 0:
+                # Log first record for debugging
+                first_record = records_list[0] if records_list else {}
+                LOGGER.info(f"[WritePartitionToParquet] First record keys: {list(first_record.keys()) if isinstance(first_record, dict) else 'N/A'}")
+                # Log non-null columns count
+                non_null_counts = df.notna().sum()
+                LOGGER.info(f"[WritePartitionToParquet] Non-null counts per column: {dict(non_null_counts)}")
+
             # Remove columns with None name (can happen from bad mapping)
             none_cols = [c for c in df.columns if c is None]
             if none_cols:
@@ -1029,7 +1040,10 @@ class WritePartitionToParquetDoFn(DoFn):
             # Remove internal columns (starts with _)
             internal_cols = [c for c in df.columns if isinstance(c, str) and c.startswith('_')]
             if internal_cols:
+                LOGGER.info(f"[WritePartitionToParquet] Removing internal columns: {internal_cols}")
                 df.drop(columns=internal_cols, inplace=True, errors='ignore')
+
+            LOGGER.info(f"[WritePartitionToParquet] Final DataFrame columns: {list(df.columns)}")
 
             # Create PyArrow table
             if self.schema:
@@ -1038,12 +1052,15 @@ class WritePartitionToParquetDoFn(DoFn):
                 table = pa.Table.from_pandas(df, preserve_index=False)
 
             # Write using Beam's FileSystems (handles S3/GCS automatically)
+            # Use coerce_timestamps to ensure Spark compatibility (us = microseconds)
             with FileSystems.create(output_path) as f:
                 pq.write_table(
                     table,
                     f,
                     compression='snappy',
-                    use_dictionary=True
+                    use_dictionary=True,
+                    coerce_timestamps='us',  # Convert to microseconds for Spark compatibility
+                    allow_truncated_timestamps=True
                 )
 
             LOGGER.info(f"[WritePartitionToParquet] ✅ Written: {output_path} , records: {len(records_list)} , partition: {partition_path}")
