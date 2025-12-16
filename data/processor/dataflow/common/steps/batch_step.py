@@ -314,26 +314,69 @@ class NormalizeToSchemaStep(BaseStep):
             raise
 
 
+def _query_mapping_schema(project: str, dataset: str, table_name: str) -> list:
+    """Query mapping_reconcile to get column names for building Parquet schema.
+
+    This queries BigQuery at graph construction time (not runtime) to get
+    the list of reconcile_column_name values for building PyArrow schema.
+
+    Args:
+        project: BigQuery project ID
+        dataset: BigQuery dataset name
+        table_name: Table name to filter (e.g., 'ms_member')
+
+    Returns:
+        List of column names (reconcile_column_name values)
+    """
+    try:
+        from google.cloud import bigquery
+
+        client = bigquery.Client(project=project)
+        query = f"""
+            SELECT reconcile_column_name
+            FROM `{project}.{dataset}.mapping_reconcile`
+            WHERE table_name = '{table_name}'
+            ORDER BY reconcile_column_name
+        """
+
+        LOGGER.info(f"[_query_mapping_schema] Querying mapping for table: {table_name}")
+
+        results = client.query(query).result()
+        columns = [row.reconcile_column_name for row in results if row.reconcile_column_name]
+
+        LOGGER.info(f"[_query_mapping_schema] Found {len(columns)} columns for {table_name}")
+        return columns
+
+    except Exception as e:
+        LOGGER.error(f"[_query_mapping_schema] Failed to query mapping: {e}")
+        raise
+
+
 class WriteParquetStep(BaseStep):
     """Write a PCollection of dictionaries to Parquet files.
 
     Config params:
         in: Input PCollection name from state
         prefix: Output path prefix template
-        mapping_info: (Optional) Name of mapping_info PCollection in state.
-                      If provided, builds schema from schemas_dict (all STRING types)
-                      instead of using config.schema from BigQuery.
+        mapping_info: (Optional) If provided, queries mapping_reconcile at graph
+                      construction time to build schema with all STRING types.
+        table_name: (Optional) Table name for mapping query (default: 'ms_member')
     """
 
     def execute(self, pipeline: beam.Pipeline) -> None:
+        import pyarrow as pa
+        from apache_beam.io.parquetio import WriteToParquet
+
         try:
             input_key = self.spec.get("in")
             prefix_template: str = self.spec.get("prefix") or ""
-            # mapping_info: Optional - if provided, build schema from schemas_dict
+            # mapping_info: If provided, query BQ at graph construction time for schema
             mapping_info_key = self.spec.get("mapping_info")
+            # table_name for mapping query (default: ms_member)
+            table_name = self.spec.get("table_name", "ms_member")
 
             LOGGER.info(f"[{self.step_id}] Writing Parquet - input: {input_key}, prefix: {prefix_template[:100]}...")
-            LOGGER.info(f"[{self.step_id}] mapping_info: {mapping_info_key}")
+            LOGGER.info(f"[{self.step_id}] mapping_info: {mapping_info_key}, table_name: {table_name}")
 
             if not input_key or input_key not in self.state:
                 raise KeyError(f"Step {self.step_id}: missing or unknown input '{input_key}'")
@@ -354,7 +397,6 @@ class WriteParquetStep(BaseStep):
             try:
                 prefix = prefix_template.format(**format_dict)
                 LOGGER.info(f"[{self.step_id}] Final Parquet path: {prefix}")
-                LOGGER.info(f"[{self.step_id}] config: {self.config}")
 
             except Exception as exc:
                 raise RuntimeError(f"Failed to format prefix '{prefix_template}': {exc}")
@@ -363,23 +405,47 @@ class WriteParquetStep(BaseStep):
             label = f"WriteParquet_{output_key}"
             num_shards = self.config.io.s3.get("num_shards", 2) if self.config.io and self.config.io.s3 else 2
 
-            if mapping_info_key and mapping_info_key in self.state:
-                # Use custom DoFn that builds schema from mapping_info at runtime
-                LOGGER.info(f"[{self.step_id}] Using mapping_info to build schema from schemas_dict (all STRING)")
-                mapping_pcoll = self.state[mapping_info_key]
+            if mapping_info_key:
+                # Query BigQuery at graph construction time to get schema columns
+                # This avoids GroupByKey and uses Beam's built-in WriteToParquet
+                LOGGER.info(f"[{self.step_id}] Querying mapping_reconcile for schema (all STRING types)")
 
-                result = (
-                    pcoll
-                    | f"{label}_AddKey" >> beam.Map(lambda x: ('batch', x))
-                    | f"{label}_GroupAll" >> beam.GroupByKey()
-                    | f"{label}_WriteParquet" >> beam.ParDo(
-                        WriteParquetWithMappingDoFn(
-                            base_prefix=prefix,
-                            num_shards=num_shards
-                        ),
-                        mapping_info=beam.pvalue.AsSingleton(mapping_pcoll)
-                    )
-                )
+                project = self.config.io.bq.get("project")
+                dataset = self.config.io.bq.get("dataset")
+
+                columns = _query_mapping_schema(project, dataset, table_name)
+
+                if not columns:
+                    raise ValueError(f"No columns found in mapping_reconcile for table: {table_name}")
+
+                LOGGER.info(f"[{self.step_id}] Building PyArrow schema with {len(columns)} STRING columns")
+
+                # Build PyArrow schema with all STRING types
+                pa_schema = pa.schema([pa.field(col, pa.string()) for col in columns])
+
+                # Ensure records have all columns and convert to string
+                def ensure_all_columns(record):
+                    result = {}
+                    for col in columns:
+                        val = record.get(col)
+                        if val is None:
+                            result[col] = None
+                        else:
+                            result[col] = str(val)
+                    return result
+
+                # Use Beam's WriteToParquet with the dynamic schema
+                (pcoll
+                 | f"{label}_EnsureCols" >> beam.Map(ensure_all_columns)
+                 | label >> WriteToParquet(
+                     file_path_prefix=prefix,
+                     schema=pa_schema,
+                     file_name_suffix=".snappy.parquet",
+                     num_shards=num_shards,
+                     use_deprecated_int96_timestamps=True,  # Spark compatibility
+                 ))
+
+                LOGGER.info(f"[{self.step_id}] WriteToParquet configured with {len(columns)} columns")
             else:
                 # Use default ParquetConnector with config schema
                 ParquetConnector.write(pcoll, prefix, self.config, label)
