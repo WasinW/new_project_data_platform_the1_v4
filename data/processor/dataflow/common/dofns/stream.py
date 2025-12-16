@@ -1015,13 +1015,19 @@ class WritePartitionToParquetDoFn(DoFn):
             # Create DataFrame
             df = pd.DataFrame(records_list)
 
+            # Remove columns with None name (can happen from bad mapping)
+            none_cols = [c for c in df.columns if c is None]
+            if none_cols:
+                LOGGER.warning(f"[WritePartitionToParquet] Removing {len(none_cols)} columns with None name")
+                df = df.loc[:, df.columns.notnull()]
+
             # Convert date columns
             for col in self.date_columns:
                 if col in df.columns:
                     df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
 
             # Remove internal columns (starts with _)
-            internal_cols = [c for c in df.columns if c.startswith('_')]
+            internal_cols = [c for c in df.columns if isinstance(c, str) and c.startswith('_')]
             if internal_cols:
                 df.drop(columns=internal_cols, inplace=True, errors='ignore')
 
