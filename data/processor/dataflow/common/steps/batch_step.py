@@ -315,14 +315,25 @@ class NormalizeToSchemaStep(BaseStep):
 
 
 class WriteParquetStep(BaseStep):
-    """Write a PCollection of dictionaries to Parquet files."""
+    """Write a PCollection of dictionaries to Parquet files.
+
+    Config params:
+        in: Input PCollection name from state
+        prefix: Output path prefix template
+        mapping_info: (Optional) Name of mapping_info PCollection in state.
+                      If provided, builds schema from schemas_dict (all STRING types)
+                      instead of using config.schema from BigQuery.
+    """
 
     def execute(self, pipeline: beam.Pipeline) -> None:
         try:
             input_key = self.spec.get("in")
             prefix_template: str = self.spec.get("prefix") or ""
+            # mapping_info: Optional - if provided, build schema from schemas_dict
+            mapping_info_key = self.spec.get("mapping_info")
 
             LOGGER.info(f"[{self.step_id}] Writing Parquet - input: {input_key}, prefix: {prefix_template[:100]}...")
+            LOGGER.info(f"[{self.step_id}] mapping_info: {mapping_info_key}")
 
             if not input_key or input_key not in self.state:
                 raise KeyError(f"Step {self.step_id}: missing or unknown input '{input_key}'")
@@ -344,14 +355,34 @@ class WriteParquetStep(BaseStep):
                 prefix = prefix_template.format(**format_dict)
                 LOGGER.info(f"[{self.step_id}] Final Parquet path: {prefix}")
                 LOGGER.info(f"[{self.step_id}] config: {self.config}")
-                # LOGGER.info(f"[{self.step_id}] spec: {self.spec}")
-                
+
             except Exception as exc:
                 raise RuntimeError(f"Failed to format prefix '{prefix_template}': {exc}")
 
             output_key = self.spec.get("out") or self.spec.get("in")
             label = f"WriteParquet_{output_key}"
-            ParquetConnector.write(pcoll, prefix, self.config, label)
+            num_shards = self.config.io.s3.get("num_shards", 2) if self.config.io and self.config.io.s3 else 2
+
+            if mapping_info_key and mapping_info_key in self.state:
+                # Use custom DoFn that builds schema from mapping_info at runtime
+                LOGGER.info(f"[{self.step_id}] Using mapping_info to build schema from schemas_dict (all STRING)")
+                mapping_pcoll = self.state[mapping_info_key]
+
+                result = (
+                    pcoll
+                    | f"{label}_AddKey" >> beam.Map(lambda x: ('batch', x))
+                    | f"{label}_GroupAll" >> beam.GroupByKey()
+                    | f"{label}_WriteParquet" >> beam.ParDo(
+                        WriteParquetWithMappingDoFn(
+                            base_prefix=prefix,
+                            num_shards=num_shards
+                        ),
+                        mapping_info=beam.pvalue.AsSingleton(mapping_pcoll)
+                    )
+                )
+            else:
+                # Use default ParquetConnector with config schema
+                ParquetConnector.write(pcoll, prefix, self.config, label)
 
             LOGGER.info(f"[{self.step_id}] Parquet write initiated")
             return None
@@ -360,6 +391,95 @@ class WriteParquetStep(BaseStep):
             LOGGER.error(f"[{self.step_id}] Failed in WriteParquetStep: {str(e)}")
             LOGGER.debug(f"[{self.step_id}] Stack trace: {traceback.format_exc()}")
             raise
+
+
+class WriteParquetWithMappingDoFn(beam.DoFn):
+    """Write Parquet files using schema built from mapping_info (all STRING types).
+
+    This DoFn builds PyArrow schema from schemas_dict at runtime,
+    enabling dynamic schema without hardcoding column names.
+    """
+
+    def __init__(self, base_prefix: str, num_shards: int = 1):
+        self.base_prefix = base_prefix
+        self.num_shards = num_shards
+
+    def process(self, element, mapping_info):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+        from apache_beam.io.filesystems import FileSystems
+
+        key, records = element
+        records_list = list(records)
+
+        if not records_list:
+            LOGGER.warning("[WriteParquetWithMappingDoFn] No records to write")
+            return
+
+        LOGGER.info(f"[WriteParquetWithMappingDoFn] Writing {len(records_list)} records")
+
+        # Build schema from schemas_dict (all STRING types)
+        schemas_dict = mapping_info.get('schemas_dict', [])
+        if not schemas_dict:
+            LOGGER.error("[WriteParquetWithMappingDoFn] schemas_dict is empty!")
+            raise ValueError("schemas_dict is empty - cannot build schema")
+
+        LOGGER.info(f"[WriteParquetWithMappingDoFn] Building schema from {len(schemas_dict)} columns (all STRING)")
+
+        # Create PyArrow schema with all STRING types
+        pa_schema = pa.schema([pa.field(col, pa.string()) for col in schemas_dict])
+
+        # Convert records to DataFrame
+        df = pd.DataFrame(records_list)
+
+        # Ensure all columns from schema exist in DataFrame
+        for col in schemas_dict:
+            if col not in df.columns:
+                df[col] = None
+
+        # Reorder columns to match schema and convert all to string
+        df = df[schemas_dict]
+        for col in df.columns:
+            df[col] = df[col].astype(str).replace('None', None).replace('nan', None)
+
+        # Write parquet files
+        for shard_idx in range(self.num_shards):
+            # Split records across shards
+            shard_start = (len(records_list) * shard_idx) // self.num_shards
+            shard_end = (len(records_list) * (shard_idx + 1)) // self.num_shards
+            shard_df = df.iloc[shard_start:shard_end]
+
+            if shard_df.empty:
+                continue
+
+            output_path = f"{self.base_prefix}-{shard_idx:05d}-of-{self.num_shards:05d}.snappy.parquet"
+
+            try:
+                # Convert to PyArrow table with explicit schema
+                table = pa.Table.from_pandas(shard_df, schema=pa_schema, preserve_index=False)
+
+                # Write using Beam's FileSystems
+                with FileSystems.create(output_path) as f:
+                    pq.write_table(table, f, compression='snappy')
+
+                LOGGER.info(f"[WriteParquetWithMappingDoFn] Wrote {len(shard_df)} records to: {output_path}")
+
+                yield {
+                    'output_path': output_path,
+                    'records_count': len(shard_df),
+                    'shard': shard_idx,
+                    'status': 'success'
+                }
+
+            except Exception as e:
+                LOGGER.error(f"[WriteParquetWithMappingDoFn] Failed to write shard {shard_idx}: {str(e)}")
+                yield {
+                    'output_path': output_path,
+                    'shard': shard_idx,
+                    'status': 'failed',
+                    'error': str(e)
+                }
 
 
 class RefreshMappingBatchStep(BaseStep):
@@ -569,6 +689,7 @@ __all__ = [
     "CoalesceByMappingStep",
     "NormalizeToSchemaStep",
     "WriteParquetStep",
+    "WriteParquetWithMappingDoFn",
     "RefreshMappingBatchStep",
     "WriteToS3ParquetBatchStep",
 ]

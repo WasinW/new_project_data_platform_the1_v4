@@ -140,6 +140,9 @@ plan:
     write_disposition: WRITE_TRUNCATE
 
 # Step 9: Write AWS data to S3 as Parquet
+# NOTE: Uses mapping_info to build schema from schemas_dict (127 columns, all STRING)
+# This ensures schema matches FullfillSchemas output exactly
 - step: WriteParquet
   in: aws_ms_member
+  mapping_info: mapping_refresh
   prefix: "{io.s3.refined_prefix}/ms_personas/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"

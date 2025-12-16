@@ -188,11 +188,14 @@ class ParquetConnector:
             num_shards = cfg.io.s3.get("num_shards", 2) if cfg.io and cfg.io.s3 else 2
             LOGGER.info(f"[{label}] Using {num_shards} shards")
 
+            # use_deprecated_int96_timestamps=True for Spark compatibility
+            # Spark cannot read INT64 (TIMESTAMP(NANOS,false)) format
             pcoll | label >> WriteToParquet(
                 file_path_prefix=prefix,
                 schema=schema,
                 file_name_suffix=".snappy.parquet",
                 num_shards=num_shards,
+                use_deprecated_int96_timestamps=True,
             )
             
             LOGGER.info(f"[{label}] Parquet write transform created successfully")
