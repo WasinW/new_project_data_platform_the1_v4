@@ -1031,11 +1031,12 @@ class WritePartitionToParquetDoFn(DoFn):
             if internal_cols:
                 df.drop(columns=internal_cols, inplace=True, errors='ignore')
 
-            # Create PyArrow table
-            if self.schema:
-                table = pa.Table.from_pandas(df, schema=self.schema, preserve_index=False)
-            else:
-                table = pa.Table.from_pandas(df, preserve_index=False)
+            # Convert ALL columns to STRING (keep column order from FullfillSchemas)
+            for col in df.columns:
+                df[col] = df[col].apply(lambda x: None if pd.isna(x) else str(x))
+
+            # Let PyArrow infer schema from DataFrame (order preserved from FullfillSchemas)
+            table = pa.Table.from_pandas(df, preserve_index=False)
 
             # Write using Beam's FileSystems (handles S3/GCS automatically)
             with FileSystems.create(output_path) as f:
