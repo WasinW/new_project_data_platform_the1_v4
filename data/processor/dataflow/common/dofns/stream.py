@@ -46,8 +46,52 @@ SQL_FUNCTION_MAPPING = {
 
 # Data Type Conversion Functions
 # All return values compatible with BigQuery types
+
+def _convert_to_nested_json_string(value):
+    """
+    Convert value to JSON string, parsing nested JSON strings.
+
+    For dicts with JSON string values, parses the inner JSON to create
+    a fully nested JSON structure.
+
+    Example:
+        Input: {'PWB': '{"email":true}', 'T1C': '{"flag":"Y"}'}
+        Output: '{"PWB": {"email": true}, "T1C": {"flag": "Y"}}'
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        # Already a string, return as-is
+        return value
+
+    if isinstance(value, dict):
+        # Try to parse JSON string values to create nested structure
+        parsed_dict = {}
+        for k, v in value.items():
+            if isinstance(v, str):
+                try:
+                    # Try to parse as JSON
+                    parsed_dict[k] = json.loads(v)
+                except (json.JSONDecodeError, TypeError):
+                    # Not valid JSON, keep as string
+                    parsed_dict[k] = v
+            elif isinstance(v, dict):
+                # Nested dict, keep as-is
+                parsed_dict[k] = v
+            else:
+                parsed_dict[k] = v
+        return json.dumps(parsed_dict, ensure_ascii=False)
+
+    if isinstance(value, list):
+        return json.dumps(value, ensure_ascii=False)
+
+    # For other types, convert to string
+    return str(value)
+
+
 DATA_TYPE_CONVERTERS = {
-    'STRING': lambda v: str(v) if v is not None and not isinstance(v, str) else None,
+    'STRING': _convert_to_nested_json_string,
     'INT64': lambda v: int(v) if v is not None else None,
     'INTEGER': lambda v: int(v) if v is not None else None,
     'FLOAT64': lambda v: float(v) if v is not None else None,
