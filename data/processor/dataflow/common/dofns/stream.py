@@ -1009,8 +1009,14 @@ class WritePartitionToParquetDoFn(DoFn):
             for col in df.columns:
                 df[col] = df[col].apply(lambda x: None if pd.isna(x) else str(x))
 
-            # Let PyArrow infer schema from DataFrame (order preserved from FullfillSchemas)
-            table = pa.Table.from_pandas(df, preserve_index=False)
+            # Build explicit STRING schema from DataFrame columns (order preserved from FullfillSchemas)
+            # This is CRITICAL: PyArrow infers columns with all None as "null" type, not "string"
+            # We must explicitly define all columns as STRING to avoid schema mismatch errors
+            string_schema = pa.schema([pa.field(str(col), pa.string()) for col in df.columns])
+            LOGGER.info(f"[WritePartitionToParquet] Explicit STRING schema: {string_schema}")
+
+            # Use explicit STRING schema (not PyArrow inference) to handle all-None columns
+            table = pa.Table.from_pandas(df, schema=string_schema, preserve_index=False)
 
             # Write using Beam's FileSystems (handles S3/GCS automatically)
             with FileSystems.create(output_path) as f:
