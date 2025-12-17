@@ -1043,7 +1043,8 @@ class WritePartitionToParquetDoFn(DoFn):
                     table,
                     f,
                     compression='snappy',
-                    use_dictionary=True
+                    use_dictionary=True,
+                    use_deprecated_int96_timestamps=True,  # Spark compatibility
                 )
 
             LOGGER.info(f"[WritePartitionToParquet] ✅ Written: {output_path} , records: {len(records_list)} , partition: {partition_path}")
