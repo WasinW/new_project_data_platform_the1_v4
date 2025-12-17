@@ -1031,16 +1031,11 @@ class WritePartitionToParquetDoFn(DoFn):
             if internal_cols:
                 df.drop(columns=internal_cols, inplace=True, errors='ignore')
 
-            # Convert ALL columns to STRING for Spark compatibility
-            # This matches batch WriteParquet behavior
-            for col in df.columns:
-                df[col] = df[col].apply(lambda x: None if pd.isna(x) else str(x))
-
-            # Build PyArrow schema with all STRING types
-            string_schema = pa.schema([pa.field(str(col), pa.string()) for col in df.columns])
-
-            # Create PyArrow table with STRING schema
-            table = pa.Table.from_pandas(df, schema=string_schema, preserve_index=False)
+            # Create PyArrow table
+            if self.schema:
+                table = pa.Table.from_pandas(df, schema=self.schema, preserve_index=False)
+            else:
+                table = pa.Table.from_pandas(df, preserve_index=False)
 
             # Write using Beam's FileSystems (handles S3/GCS automatically)
             with FileSystems.create(output_path) as f:
