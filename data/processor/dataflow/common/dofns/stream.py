@@ -47,7 +47,7 @@ SQL_FUNCTION_MAPPING = {
 # Data Type Conversion Functions
 # All return values compatible with BigQuery types
 DATA_TYPE_CONVERTERS = {
-    'STRING': lambda v: str(v) if v is not None else None,
+    'STRING': lambda v: str(v) if v is not None and not isinstance(v, str) else None,
     'INT64': lambda v: int(v) if v is not None else None,
     'INTEGER': lambda v: int(v) if v is not None else None,
     'FLOAT64': lambda v: float(v) if v is not None else None,
@@ -127,6 +127,7 @@ def convert_value_to_type(value, data_type: str):
 
     if converter:
         try:
+            LOGGER.info(f"[convert_value_to_type] Converting '{value}' to {data_type_upper}: {converter(value)}")
             return converter(value)
         except (ValueError, TypeError) as e:
             LOGGER.error(f"[convert_value_to_type] Failed to convert '{value}' to {data_type}: {e}")
@@ -315,15 +316,6 @@ class MappingRefreshDoFn(DoFn):
             'data_type': data_type
         }
 
-    # def sql_function(self, logic: str) -> str:
-    #     """
-    #     Wrap mapping logic in SQL function format.
-
-    #     Args:
-    #         logic: Mapping logic string
-    #     """
-    #     return f"SQL_FUNCTION({logic})"
-
     def process(self, element):
         """
         Refresh mapping from BigQuery.
@@ -357,16 +349,6 @@ class MappingRefreshDoFn(DoFn):
                 LOGGER.info(f"[MappingRefreshDoFn] row: {row}")
                 table_name = row['table_name'].split('.')[-1]
 
-                # if row['reconcile_retrieved'] == True:
-                #     new_name = row['mapping_column_name'].split('.')[-1] 
-                #     table_name = row['table_name']
-
-                #     if table_name not in mapping_dict:
-                #         mapping_dict[table_name] = {'gcp': {}, 'aws': {}}
-
-                #     mapping_dict[table_name]['gcp'][new_name] = row['mapping_column_name']
-                #     mapping_dict[table_name]['aws'][org_name] = row['mapping_column_name']
-
                 schemas_dict.append(row['reconcile_column_name'])
                 if table_name not in mapping_dict:
                     mapping_dict[table_name] = {}
@@ -378,7 +360,6 @@ class MappingRefreshDoFn(DoFn):
 
                     if mapping_dict[table_name].get('gcp') is None:
                         mapping_dict[table_name]['gcp'] = {}
-
                     # Build mapping value with type, value, and data_type
                     gcp_mapping_value = self._build_mapping_value(row)
                     mapping_dict[table_name]['gcp'][row['mapping_alias_name']] = gcp_mapping_value
@@ -390,35 +371,9 @@ class MappingRefreshDoFn(DoFn):
                     LOGGER.info(f"[MappingRefreshDoFn] AWS COL {row['reconcile_retrieved']}")
                     if mapping_dict[table_name].get('aws') is None:
                         mapping_dict[table_name]['aws'] = {}
-
                     # Build mapping value with type, value, and data_type
                     aws_mapping_value = self._build_mapping_value(row)
                     mapping_dict[table_name]['aws'][row['reconcile_column_name']] = aws_mapping_value
-
-                # # -----------------------------------------------------------------------------------
-                # # ------------------ AWS SCHEMAS LIST -----------------------
-                # # -----------------------------------------------------------------------------------
-                # if row['reconcile_column_name'] is not None and row['reconcile_column_name'].strip() != "":
-                #     schemas_dict.append(row['reconcile_column_name'])
-
-                # # -----------------------------------------------------------------------------------
-                # # ------------------ GCP/AWS SCHEMAS DICT -----------------------
-                # # -----------------------------------------------------------------------------------
-                # table_name = row['table_name']
-                # if table_name not in mapping_dict:
-                #     mapping_dict[table_name] = {'gcp': {}, 'aws': {}}
-
-                # # VALUES
-                # if row['mapping_column_name'] is None or row['mapping_column_name'].strip() == "":
-                #     value = rowgi['logical_column'] if row['logical_column'] is not None and row['logical_column'].strip() != "" else None
-                # else:
-                #     value = row['mapping_column_name'] 
-
-                # if row['reconcile_column_name'] is not None and row['reconcile_column_name'].strip() != "":
-                #     # org_name = row['reconcile_column_name'] 
-                #     mapping_dict[table_name]['aws'][row['reconcile_column_name']] = row['mapping_column_name']
-
-
 
             LOGGER.info(f"[MappingRefreshDoFn] Refreshed with {len(mapping_dict)} table mappings")
             LOGGER.info(f"[MappingRefreshDoFn] Refreshed mapping_dict : {mapping_dict}")
@@ -529,9 +484,11 @@ class FetchFromBigtableDoFn(DoFn):
                 for family_name in self.parent_field:
                     if family_name in row.cells:
                         family_cells = row.cells[family_name]
+                        LOGGER.info(f"[FetchFromBigtableDoFn] Fetching: {personaId} , family_cells: {family_cells}")
 
                         # Check if single 'value' column with JSON
                         if len(family_cells) == 1 and b'value' in family_cells:
+                            LOGGER.info(f"[FetchFromBigtableDoFn] value in family_cells: {personaId} , family_cells: {family_cells}")
                             cells = family_cells[b'value']
                             if cells:
                                 latest_cell = cells[0]
@@ -556,17 +513,23 @@ class FetchFromBigtableDoFn(DoFn):
                         else:
                             # Multiple columns case
                             family_dict = {}
+                            LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , family_cells: {family_cells}")
                             for column_qualifier, cells in family_cells.items():
                                 if cells:
                                     latest_cell = cells[0]
                                     column_name = column_qualifier.decode('utf-8') if isinstance(column_qualifier, bytes) else column_qualifier
+                                    LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , column_qualifier: {column_qualifier}")
+                                    LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , cells: {cells}")
+                                    LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , latest_cell: {latest_cell}")
+                                    LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , column_name: {column_name}")
 
                                     try:
                                         cell_value = latest_cell.value.decode('utf-8') if isinstance(latest_cell.value, bytes) else latest_cell.value
+                                        LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , column_name: {column_name}, cell_value: {cell_value}")
 
                                         if isinstance(cell_value, str) and (cell_value.startswith('{') or cell_value.startswith('[')):
                                             try:
-                                                cell_value = json.loads(cell_value)
+                                                LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , column_name: {column_name}, new_cell_value: {cell_value}")
                                             except json.JSONDecodeError:
                                                 pass
 
@@ -649,6 +612,40 @@ class FilterEmptyFamilyDoFn(DoFn):
         except Exception as e:
             LOGGER.error(f"[FilterEmptyPKDoFn] Error: {str(e)}")
 
+
+class FilterNullDoFn(beam.DoFn):
+    """DoFn to filter out records with null/empty field values.
+    Using DoFn instead of beam.Filter with closure to avoid serialization
+    issues with LOGGER reference in closure functions.
+    """
+
+    def __init__(self, field_name: str):
+        self.field_name = field_name
+
+    def process(self, element):
+        """Filter out records where field is null or empty string."""
+        # Support nested field access with dot notation
+        value = element
+        for key in self.field_name.split('.'):
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                value = None
+                break
+
+        # Filter out null values
+        if value is None:
+            LOGGER.info(f"[FilterNullDoFn] Filtered out: {self.field_name}=None, record keys: {list(element.keys()) if isinstance(element, dict) else 'N/A'}")
+            return  # Don't yield = filter out
+
+        # Filter out empty strings
+        if isinstance(value, str) and not value.strip():
+            LOGGER.info(f"[FilterNullDoFn] Filtered out: {self.field_name}=empty string")
+            return  # Don't yield = filter out
+
+        # Valid value - yield the element
+        yield element
+
 class TransformSchemasDoFn(DoFn):
     """Transform data according to mapping dictionary."""
 
@@ -664,6 +661,7 @@ class TransformSchemasDoFn(DoFn):
             Value at path or None
         """
         try:
+            LOGGER.info(f"[TransformSchemasDoFn] get_nested_value: data={data}, path={path}")
             return reduce(operator.getitem, path.split('.'), data)
         except (KeyError, TypeError):
             return None
@@ -722,24 +720,16 @@ class TransformSchemasDoFn(DoFn):
         """
         result = {}
 
-        LOGGER.info(f"[TransformSchemasDoFn] transform_message called with target={target}, table_name={table_name}")
-        LOGGER.info(f"[TransformSchemasDoFn] Available tables in mapping: {list(mapping_dict.keys())}")
-        LOGGER.debug(f"[TransformSchemasDoFn] message_dict: {message_dict}")
+        LOGGER.info(f"[TransformSchemasDoFn] transform_message : Check_param : message_dict: {message_dict} , target: {target} , table_name: {table_name} , mapping_dict: {mapping_dict} ")
+        LOGGER.info(f"[TransformSchemasDoFn] values mapping_dict['{table_name}']['{target}']: {mapping_dict.get(table_name, {}).get(target, {})}")
 
         specific_mapping = mapping_dict.get(table_name, {}).get(target, {})
-
-        if not specific_mapping:
-            LOGGER.warning(f"[TransformSchemasDoFn] No mapping found for table={table_name}, target={target}")
-            LOGGER.warning(f"[TransformSchemasDoFn] Available tables: {list(mapping_dict.keys())}")
-            if table_name in mapping_dict:
-                LOGGER.warning(f"[TransformSchemasDoFn] Available targets for {table_name}: {list(mapping_dict[table_name].keys())}")
-            return result
-
-        LOGGER.info(f"[TransformSchemasDoFn] Found {len(specific_mapping)} fields in mapping")
+        LOGGER.info(f"[TransformSchemasDoFn] message_dict: {message_dict} , mapping_dict : {mapping_dict} , specific_mapping : {specific_mapping}")
 
         for new_key, mapping_info in specific_mapping.items():
             try:
-                # Handle both old format (string) and new format (dict)
+                LOGGER.info(f"[TransformSchemasDoFn] new_key : {new_key} , mapping_info: {mapping_info}")
+
                 if isinstance(mapping_info, str):
                     # OLD FORMAT: mapping_info is just the path/logic string (backward compatibility)
                     if self.isSqlFunction(mapping_info):
@@ -747,7 +737,7 @@ class TransformSchemasDoFn(DoFn):
                     else:
                         value = self.get_nested_value(message_dict, mapping_info)
                     result[new_key] = value
-                    LOGGER.debug(f"[TransformSchemasDoFn] (old format) {new_key}={value}")
+                    LOGGER.info(f"[TransformSchemasDoFn] (old format) {new_key}={value}")
                 else:
                     # NEW FORMAT: mapping_info is dict with type, value, data_type
                     mapping_type = mapping_info.get('type', 'path')
@@ -758,19 +748,19 @@ class TransformSchemasDoFn(DoFn):
                     if mapping_type == 'logic':
                         # SQL function
                         raw_value = self.sql_function(mapping_value)
-                        LOGGER.debug(f"[TransformSchemasDoFn] {new_key}: logic '{mapping_value}' -> {raw_value}")
+                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: logic '{mapping_value}' -> {raw_value}")
                     elif mapping_type == 'path':
                         # Extract from nested dict
                         raw_value = self.get_nested_value(message_dict, mapping_value)
-                        LOGGER.debug(f"[TransformSchemasDoFn] {new_key}: path '{mapping_value}' -> {raw_value}")
+                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: path '{mapping_value}' -> {raw_value}")
                     elif mapping_type == 'constant':
                         # Fixed value
                         raw_value = mapping_value
-                        LOGGER.debug(f"[TransformSchemasDoFn] {new_key}: constant -> {raw_value}")
+                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: constant -> {raw_value}")
                     else:
                         # Unknown type, treat as path
                         raw_value = self.get_nested_value(message_dict, mapping_value) if mapping_value else None
-                        LOGGER.warning(f"[TransformSchemasDoFn] Unknown mapping type '{mapping_type}' for {new_key}")
+                        LOGGER.warning(f"[TransformSchemasDoFn] Get_Values_Newkey : Unknown mapping type '{mapping_type}' for {new_key}")
 
                     # Convert to target data type
                     if raw_value is not None and data_type:
@@ -787,8 +777,7 @@ class TransformSchemasDoFn(DoFn):
                 LOGGER.error(f"[TransformSchemasDoFn] Error processing field {new_key}: {e}")
                 raise  # Re-raise error as user requested
 
-        LOGGER.info(f"[TransformSchemasDoFn] Transformed {len(result)} fields")
-        LOGGER.debug(f"[TransformSchemasDoFn] result: {result}")
+        LOGGER.info(f"[TransformSchemasDoFn] result: {result}")
         return result
 
     def process(self, element, mapping_info, table_name: str = 'ms_member'):
@@ -805,25 +794,13 @@ class TransformSchemasDoFn(DoFn):
         """
 
         LOGGER.info(f"[TransformSchemasDoFn] ========== Processing element ==========")
-        LOGGER.info(f"[TransformSchemasDoFn] Element keys: {list(element.keys()) if element else 'None'}")
-        LOGGER.info(f"[TransformSchemasDoFn] table_name param: {table_name}")
+        LOGGER.info(f"[TransformSchemasDoFn] table_name param: {table_name} , element: {element} , mapping_info: {mapping_info} ")
 
         mapping_dict = mapping_info.get('mapping_dict', {})
-        if not mapping_dict:
-            LOGGER.error("[TransformSchemasDoFn] ❌ mapping_dict is EMPTY!")
-            LOGGER.error(f"[TransformSchemasDoFn] mapping_info keys: {list(mapping_info.keys())}")
-        else:
-            LOGGER.info(f"[TransformSchemasDoFn] mapping_dict has {len(mapping_dict)} tables: {list(mapping_dict.keys())}")
 
         aws_output = self.transform_message(element, mapping_dict, target='aws', table_name=table_name)
         gcp_output = self.transform_message(element, mapping_dict, target='gcp', table_name=table_name)
-        # output = self.transform_message(element, mapping_dict, target=outputs[0], table_name=table_name)
-        
-        LOGGER.info(f"[TransformSchemasDoFn] aws_output: {len(aws_output)} fields")
-        LOGGER.info(f"[TransformSchemasDoFn] gcp_output: {len(gcp_output)} fields")
-        # LOGGER.info(f"[TransformSchemasDoFn] {outputs}_output: {len(output)} fields")
-        
-        # # Log sample fields for debugging
+
         if aws_output:
             sample_keys = list(aws_output.keys())[:5]
             LOGGER.info(f"[TransformSchemasDoFn] AWS sample keys: {sample_keys}, output : {aws_output}")
@@ -833,7 +810,6 @@ class TransformSchemasDoFn(DoFn):
 
         yield beam.pvalue.TaggedOutput('aws', aws_output)
         yield beam.pvalue.TaggedOutput('gcp', gcp_output)
-        # yield beam.pvalue.TaggedOutput(outputs[0], output)
 
 
 class FullfillSchemasDoFn(DoFn):
@@ -889,7 +865,7 @@ class WriteToBigLakeDoFn(DoFn):
             if value is None:
                 output[key] = None
             elif isinstance(value, dict):
-                output[key] = json.dumps(value)
+                output[key] = json.dumps(value,ensure_ascii=False)
             else:
                 output[key] = value
         LOGGER.info(f"[WriteToBigLakeDoFn] output: {output}")
@@ -900,7 +876,7 @@ class WriteToBigLakeDoFn(DoFn):
 class MapToCdcTableRowDoFn(beam.DoFn):
     """
     Format data for BigQuery CDC write using Storage Write API.
-    
+
     This DoFn wraps data in the required CDC format:
     {
         "row_mutation_info": {
@@ -909,19 +885,19 @@ class MapToCdcTableRowDoFn(beam.DoFn):
         },
         "record": { actual data fields }
     }
-    
+
     This is required when use_cdc_writes=True in WriteToBigQuery.
     """
-    
+
     def __init__(self, default_change_type: str = "UPSERT"):
         LOGGER.info(f"[MapToCdcTableRowDoFn] Initialized with default_change_type: {default_change_type}")
         self.default_change_type = default_change_type
-    
+
     def process(self, element):
         # Get CDC operation type from element or use default
         cdc_type = element.get('_CHANGE_TYPE', self.default_change_type)
         is_delete = element.get('is_delete', False)
-        
+
         # Determine mutation type
         if is_delete:
             mutation_type = 'DELETE'
@@ -929,7 +905,7 @@ class MapToCdcTableRowDoFn(beam.DoFn):
             mutation_type = 'DELETE'
         else:
             mutation_type = 'UPSERT'  # INSERT or UPDATE both use UPSERT
-        
+
         # Generate sequence number (timestamp-based for ordering)
         # Use updated_date if available, otherwise current time
         if element.get('updated_date'):
@@ -939,14 +915,14 @@ class MapToCdcTableRowDoFn(beam.DoFn):
                 seq_num = str(int(time.time() * 1000000))
         else:
             seq_num = str(int(time.time() * 1000000))
-        
+
         # Clean up internal fields from record
         record = dict(element)
         record.pop('cdc_type', None)
         record.pop('is_delete', None)
         record.pop('_CHANGE_TYPE', None)
         record.pop('_CHANGE_SEQUENCE_NUMBER', None)
-        
+
         # Convert date fields to proper format if needed
         if record.get('dateOfBirth'):
             try:
@@ -955,7 +931,7 @@ class MapToCdcTableRowDoFn(beam.DoFn):
                     record['dateOfBirth'] = dt.isoformat()
             except:
                 pass
-        
+
         # Format for CDC API: must have "row_mutation_info" and "record" fields
         cdc_row = {
             'row_mutation_info': {
@@ -964,21 +940,24 @@ class MapToCdcTableRowDoFn(beam.DoFn):
             },
             'record': record
         }
-        
+
         LOGGER.info(f"MapToCdcTableRowDoFn output: mutation_type={mutation_type}, seq={seq_num}")
         LOGGER.info(f"MapToCdcTableRowDoFn output: cdc_row={cdc_row}")
         yield cdc_row
 
 
-
 class WritePartitionToParquetDoFn(DoFn):
     """
     Write a partition of records to Parquet using Beam FileSystems.
-    
+
     Output path pattern:
     {base_prefix}/{partition_path}/data-{shard_id}.snappy.parquet
-    
+
     Uses Beam's FileSystems for S3/GCS support (credentials from pipeline env).
+
+    IMPORTANT: Data comes from FullfillSchemasDoFn which already orders columns
+    according to schemas_dict. This DoFn converts all values to STRING and
+    preserves that column order.
     """
 
     def __init__(
@@ -994,37 +973,32 @@ class WritePartitionToParquetDoFn(DoFn):
 
     def process(self, group):
         import pandas as pd
-        
+
         partition_path, records = group
         records_list = list(records)
-        
+
         if not records_list:
             LOGGER.warning(f"[WritePartitionToParquet] Empty partition: {partition_path}")
             return
 
         # Generate unique shard id
         shard_id = uuid.uuid4().hex[:8]
-        
+
         # Build output path: base_prefix/partition_path/data-{shard}.snappy.parquet
-        # s3://t1-analytics/refined/insights/ms_personas_realtime_dev/par_month=xxxx12/par_day=03/par_hour=09/run_dt=2025120309/
         output_path = f"{self.base_prefix}/{partition_path}/data-{shard_id}.snappy.parquet"
-        
+
         LOGGER.info(f"[WritePartitionToParquet] Writing {len(records_list)} records to: {output_path}")
 
         try:
-            # Create DataFrame
+            # Create DataFrame (column order preserved from FullfillSchemasDoFn)
             df = pd.DataFrame(records_list)
+            LOGGER.info(f"[WritePartitionToParquet] DF columns: {list(df.columns)}")
 
             # Remove columns with None name (can happen from bad mapping)
             none_cols = [c for c in df.columns if c is None]
             if none_cols:
-                LOGGER.warning(f"[WritePartitionToParquet] Removing {len(none_cols)} columns with None name")
+                LOGGER.info(f"[WritePartitionToParquet] Removing {len(none_cols)} columns with None name")
                 df = df.loc[:, df.columns.notnull()]
-
-            # Convert date columns
-            for col in self.date_columns:
-                if col in df.columns:
-                    df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
 
             # Remove internal columns (starts with _)
             internal_cols = [c for c in df.columns if isinstance(c, str) and c.startswith('_')]
@@ -1065,12 +1039,13 @@ class WritePartitionToParquetDoFn(DoFn):
                 'error': str(e)
             }
 
+
 class ExtractWindowPathDoFn(DoFn):
     """
     Extract partition path from window end time.
-    
+
     Output format: par_month=MM/par_day=DD/par_hour=HH/run_dt=YYYYMMDDHH
-    
+
     This mimics the batch config pattern:
     prefix: "{io.s3.refined_prefix}/ms_personas/par_month={params.run_par_month}/..."
     """
@@ -1087,22 +1062,22 @@ class ExtractWindowPathDoFn(DoFn):
             f"par_month={window_end.strftime('%Y%m')}/"
             f"par_day={window_end.strftime('%d')}/"
             f"par_hour={window_end.strftime('%H')}"
-            # f"run_dt={window_end.strftime('%Y%m%d%H')}"
         )
-        
+
         LOGGER.info(f"[ExtractWindowPath] Partition path: {partition_path}")
         yield {
             **element,
             '_partition_path': partition_path,
         }
 
+
 def build_cdc_schema(record_fields: List[Dict]) -> Dict:
     """
     Build CDC schema with row_mutation_info wrapper.
-    
+
     Args:
         record_fields: List of field definitions for the actual data
-        
+
     Returns:
         BigQuery schema dict with CDC wrapper structure
     """
@@ -1126,15 +1101,16 @@ def build_cdc_schema(record_fields: List[Dict]) -> Dict:
         ]
     }
 
+
 def build_pyarrow_schema_from_config(schema_config: Optional[Dict]) -> Optional[pa.Schema]:
     """Build PyArrow schema from config dict."""
     if not schema_config:
         return None
-    
+
     fields = schema_config.get('fields', [])
     if not fields:
         return None
-    
+
     type_mapping = {
         'STRING': pa.string(),
         'INT64': pa.int64(),
@@ -1148,14 +1124,14 @@ def build_pyarrow_schema_from_config(schema_config: Optional[Dict]) -> Optional[
         'DATETIME': pa.string(),
         'BYTES': pa.binary(),
     }
-    
+
     pa_fields = []
     for field in fields:
         field_name = field.get('name')
         field_type = field.get('type', 'STRING').upper()
         pa_type = type_mapping.get(field_type, pa.string())
         pa_fields.append(pa.field(field_name, pa_type, nullable=True))
-    
+
     return pa.schema(pa_fields)
 
 
@@ -1171,6 +1147,7 @@ __all__ = [
     'FetchFromBigtableDoFn',
     'FilterEmptyPKDoFn',
     'FilterEmptyFamilyDoFn',
+    'FilterNullDoFn',
     'TransformSchemasDoFn',
     'FullfillSchemasDoFn',
     'WriteToBigLakeDoFn',
