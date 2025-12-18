@@ -445,8 +445,7 @@ class WriteToBigQueryStreamingStep(BaseStep):
                         {
                             'name': field.name,
                             'type': 'STRING' if field.field_type in unsupported_types else field.field_type,
-                            # 'mode': field.mode or 'NULLABLE',
-                            'mode': 'NULLABLE',  # Force NULLABLE to bypass Beam validation
+                            'mode': field.mode or 'NULLABLE',
                         }
                         for field in bq_schema
                     ]
@@ -464,16 +463,9 @@ class WriteToBigQueryStreamingStep(BaseStep):
 
         pcoll = self.state[input_key]
 
-        # Safety net: Filter out records with null memberId before write
-        # This is a last-resort filter in case FilterNullFieldStep doesn't catch all nulls
-        filtered = (
-            pcoll
-            | f"{self.step_id}_SafetyFilterNull" >> beam.ParDo(FilterNullDoFn('memberId'))
-        )
-
         # Transform to BigLake format (JSON serialization)
         prepared = (
-            filtered
+            pcoll
             | f"{self.step_id}_PrepareForBQ" >> beam.ParDo(WriteToBigLakeDoFn(table_name=table))
         )
         LOGGER.info(f"[{self.step_id}] Writing to BigQuery message : {prepared}")

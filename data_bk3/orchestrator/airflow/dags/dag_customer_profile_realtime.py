@@ -636,16 +636,16 @@ verify_launch = PythonOperator(
 )
 
 # Task 4: Initial health check (optional, runs once)
-# initial_health_check = DataflowStreamingJobHealthSensor(
-#     task_id='initial_health_check',
-#     job_id="{{ task_instance.xcom_pull(task_ids='run_dataflow_pipeline')['id'] }}",
-#     project_id=PROJECT_ID,
-#     location=REGION,
-#     timeout=600,  # 10 minutes for initial check
-#     poke_interval=60,  # Check every minute
-#     mode='poke',
-#     dag=dag,
-# )
+initial_health_check = DataflowStreamingJobHealthSensor(
+    task_id='initial_health_check',
+    job_id="{{ task_instance.xcom_pull(task_ids='run_dataflow_pipeline')['id'] }}",
+    project_id=PROJECT_ID,
+    location=REGION,
+    timeout=600,  # 10 minutes for initial check
+    poke_interval=60,  # Check every minute
+    mode='poke',
+    dag=dag,
+)
 
 # ============================================
 # MONITORING DAG TASKS
@@ -664,8 +664,7 @@ health_check = PythonOperator(
 
 # Main DAG flow - FIXED: Added get_credentials before dataflow_job
 # pre_check >> get_credentials >> dataflow_job >> verify_launch >> initial_health_check
-# pre_check >>  dataflow_job >> verify_launch >> initial_health_check
-pre_check >>  dataflow_job >> verify_launch 
+pre_check >>  dataflow_job >> verify_launch >> initial_health_check
 
 # Monitoring DAG has single task
 # health_check runs independently on schedule

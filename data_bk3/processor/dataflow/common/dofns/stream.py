@@ -47,7 +47,7 @@ SQL_FUNCTION_MAPPING = {
 # Data Type Conversion Functions
 # All return values compatible with BigQuery types
 DATA_TYPE_CONVERTERS = {
-    'STRING': lambda v: str(v) if v is not None and not isinstance(v, (dict, list)) else None,
+    'STRING': lambda v: str(v) if v is not None else None,
     'INT64': lambda v: int(v) if v is not None else None,
     'INTEGER': lambda v: int(v) if v is not None else None,
     'FLOAT64': lambda v: float(v) if v is not None else None,
@@ -127,7 +127,6 @@ def convert_value_to_type(value, data_type: str):
 
     if converter:
         try:
-            LOGGER.info(f"[convert_value_to_type] Converting '{value}' to {data_type_upper}: {converter(value)}")
             return converter(value)
         except (ValueError, TypeError) as e:
             LOGGER.error(f"[convert_value_to_type] Failed to convert '{value}' to {data_type}: {e}")
@@ -650,12 +649,12 @@ class FilterNullDoFn(beam.DoFn):
 
         # Filter out null values
         if value is None:
-            LOGGER.info(f"[FilterNullDoFn] Filtered out: {self.field_name}=None, record keys: {list(element.keys()) if isinstance(element, dict) else 'N/A'}")
+            LOGGER.debug(f"[FilterNullDoFn] Filtered out: {self.field_name}=None, record keys: {list(element.keys()) if isinstance(element, dict) else 'N/A'}")
             return  # Don't yield = filter out
 
         # Filter out empty strings
         if isinstance(value, str) and not value.strip():
-            LOGGER.info(f"[FilterNullDoFn] Filtered out: {self.field_name}=empty string")
+            LOGGER.debug(f"[FilterNullDoFn] Filtered out: {self.field_name}=empty string")
             return  # Don't yield = filter out
 
         # Valid value - yield the element
@@ -676,7 +675,7 @@ class TransformSchemasDoFn(DoFn):
             Value at path or None
         """
         try:
-            LOGGER.info(f"[TransformSchemasDoFn] get_nested_value: data={data}, path={path}")
+            LOGGER.debug(f"[TransformSchemasDoFn] get_nested_value: data={data}, path={path}")
             return reduce(operator.getitem, path.split('.'), data)
         except (KeyError, TypeError):
             return None
@@ -708,7 +707,6 @@ class TransformSchemasDoFn(DoFn):
         if logic is None:
             return None
         func = SQL_FUNCTION_MAPPING.get(logic.upper().strip())
-        # LOGGER.info(f"[TransformSchemasDoFn] sql_function: logic={logic}, func={func}")
         if func:
             return func()
         return None
@@ -736,14 +734,13 @@ class TransformSchemasDoFn(DoFn):
         """
         result = {}
 
-        LOGGER.info(f"[TransformSchemasDoFn] transform_message : Check_param : message_dict: {message_dict} , target: {target} , table_name: {table_name} , mapping_dict: {mapping_dict} ")
-        # LOGGER.info(f"[TransformSchemasDoFn] transform_message called with target={target}, table_name={table_name} ,mapping_dict:{mapping_dict}")
-        # LOGGER.info(f"[TransformSchemasDoFn] type mapping_dict['{table_name}']: {type(mapping_dict.get(table_name, {}))}")
-        # LOGGER.info(f"[TransformSchemasDoFn] values mapping_dict['{table_name}']: {mapping_dict.get(table_name, {})}")
+        LOGGER.info(f"[TransformSchemasDoFn] transform_message called with target={target}, table_name={table_name} ,mapping_dict:{mapping_dict}")
+        LOGGER.info(f"[TransformSchemasDoFn] type mapping_dict['{table_name}']: {type(mapping_dict.get(table_name, {}))}")
+        LOGGER.info(f"[TransformSchemasDoFn] values mapping_dict['{table_name}']: {mapping_dict.get(table_name, {})}")
         LOGGER.info(f"[TransformSchemasDoFn] values mapping_dict['{table_name}']['{target}']: {mapping_dict.get(table_name, {}).get(target, {})}")
 
         specific_mapping = mapping_dict.get(table_name, {}).get(target, {})
-        LOGGER.info(f"[TransformSchemasDoFn] message_dict: {message_dict} , mapping_dict : {mapping_dict} , specific_mapping : {specific_mapping}")
+        LOGGER.debug(f"[TransformSchemasDoFn] message_dict: {message_dict} , mapping_dict : {mapping_dict} , specific_mapping : {specific_mapping}")
 
         # if not specific_mapping:
         #     LOGGER.warning(f"[TransformSchemasDoFn] No mapping found for table={table_name}, target={target}")
@@ -757,9 +754,7 @@ class TransformSchemasDoFn(DoFn):
         for new_key, mapping_info in specific_mapping.items():
             try:
                 # Handle both old format (string) and new format (dict)
-                # LOGGER.info(f"[TransformSchemasDoFn] mapping_info: {mapping_info}")
-                LOGGER.info(f"[TransformSchemasDoFn] new_key : {new_key} , mapping_info: {mapping_info}")
-
+                LOGGER.debug(f"[TransformSchemasDoFn] mapping_info: {mapping_info}")
                 if isinstance(mapping_info, str):
                     # OLD FORMAT: mapping_info is just the path/logic string (backward compatibility)
                     if self.isSqlFunction(mapping_info):
@@ -767,7 +762,7 @@ class TransformSchemasDoFn(DoFn):
                     else:
                         value = self.get_nested_value(message_dict, mapping_info)
                     result[new_key] = value
-                    LOGGER.info(f"[TransformSchemasDoFn] (old format) {new_key}={value}")
+                    LOGGER.debug(f"[TransformSchemasDoFn] (old format) {new_key}={value}")
                 else:
                     # NEW FORMAT: mapping_info is dict with type, value, data_type
                     # gcp_output = self.transform_message(element, mapping_dict, target='gcp', table_name=table_name)
@@ -779,24 +774,23 @@ class TransformSchemasDoFn(DoFn):
                     if mapping_type == 'logic':
                         # SQL function
                         raw_value = self.sql_function(mapping_value)
-                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: logic '{mapping_value}' -> {raw_value}")
+                        LOGGER.debug(f"[TransformSchemasDoFn] {new_key}: logic '{mapping_value}' -> {raw_value}")
                     elif mapping_type == 'path':
                         # Extract from nested dict
                         raw_value = self.get_nested_value(message_dict, mapping_value)
-                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: path '{mapping_value}' -> {raw_value}")
+                        LOGGER.debug(f"[TransformSchemasDoFn] {new_key}: path '{mapping_value}' -> {raw_value}")
                     elif mapping_type == 'constant':
                         # Fixed value
                         raw_value = mapping_value
-                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: constant -> {raw_value}")
+                        LOGGER.debug(f"[TransformSchemasDoFn] {new_key}: constant -> {raw_value}")
                     else:
                         # Unknown type, treat as path
                         raw_value = self.get_nested_value(message_dict, mapping_value) if mapping_value else None
-                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : Unknown mapping type '{mapping_type}' for {new_key}")
+                        LOGGER.warning(f"[TransformSchemasDoFn] Unknown mapping type '{mapping_type}' for {new_key}")
 
                     # Convert to target data type
                     if raw_value is not None and data_type:
                         try:
-                            LOGGER.info(f"[TransformSchemasDoFn] Convert Data Type: '{raw_value}' for {data_type}")
                             converted_value = convert_value_to_type(raw_value, data_type)
                             result[new_key] = converted_value
                         except ValueError as e:
@@ -810,7 +804,7 @@ class TransformSchemasDoFn(DoFn):
                 raise  # Re-raise error as user requested
 
         # LOGGER.info(f"[TransformSchemasDoFn] Transformed {len(result)} fields")
-        LOGGER.info(f"[TransformSchemasDoFn] result: {result}")
+        LOGGER.debug(f"[TransformSchemasDoFn] result: {result}")
         return result
 
     def process(self, element, mapping_info, table_name: str = 'ms_member'):
@@ -1033,39 +1027,27 @@ class WritePartitionToParquetDoFn(DoFn):
         # s3://t1-analytics/refined/insights/ms_personas_realtime_dev/par_month=xxxx12/par_day=03/par_hour=09/run_dt=2025120309/
         output_path = f"{self.base_prefix}/{partition_path}/data-{shard_id}.snappy.parquet"
         
-        LOGGER.info(f"[WritePartitionToParquet] Writing {records_list} records to: {output_path} , date_columns : {self.date_columns}")
+        LOGGER.info(f"[WritePartitionToParquet] Writing {len(records_list)} records to: {output_path}")
 
         try:
             # Create DataFrame
             df = pd.DataFrame(records_list)
-            LOGGER.info(f"[WritePartitionToParquet] DF : {df.head()}")
-            # # Remove columns with None name (can happen from bad mapping)
-            # none_cols = [c for c in df.columns if c is None]
-            # if none_cols:
-            #     LOGGER.warning(f"[WritePartitionToParquet] Removing {len(none_cols)} columns with None name")
-            #     df = df.loc[:, df.columns.notnull()]
 
-            # Remove columns with None name (can happen from bad mapping)
-            none_cols = [c for c in df.columns if c is None]
-            if none_cols:
-                LOGGER.info(f"[WritePartitionToParquet] Removing {len(none_cols)} columns with None name")
-                df = df.loc[:, df.columns.notnull()]
+            # Convert date columns
+            for col in self.date_columns:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
 
             # Remove internal columns (starts with _)
-            internal_cols = [c for c in df.columns if isinstance(c, str) and c.startswith('_')]
+            internal_cols = [c for c in df.columns if c.startswith('_')]
             if internal_cols:
                 df.drop(columns=internal_cols, inplace=True, errors='ignore')
 
-            # Convert ALL columns to STRING (keep column order from FullfillSchemas)
-            for col in df.columns:
-                df[col] = df[col].apply(lambda x: None if pd.isna(x) else str(x))
-
-            # # Let PyArrow infer schema from DataFrame (order preserved from FullfillSchemas)
-            # table = pa.Table.from_pandas(df, preserve_index=False)
-            # LOGGER.info(f"[WritePartitionToParquet] Parquet schema: {table.schema}")            
-            string_schema = pa.schema([pa.field(str(col), pa.string()) for col in df.columns])
-            LOGGER.info(f"[WritePartitionToParquet] Explicit STRING schema: {string_schema}")
-            table = pa.Table.from_pandas(df, schema=string_schema, preserve_index=False)
+            # Create PyArrow table
+            if self.schema:
+                table = pa.Table.from_pandas(df, schema=self.schema, preserve_index=False)
+            else:
+                table = pa.Table.from_pandas(df, preserve_index=False)
 
             # Write using Beam's FileSystems (handles S3/GCS automatically)
             with FileSystems.create(output_path) as f:
@@ -1073,8 +1055,7 @@ class WritePartitionToParquetDoFn(DoFn):
                     table,
                     f,
                     compression='snappy',
-                    use_dictionary=True,
-                    use_deprecated_int96_timestamps=True,  # Spark compatibility
+                    use_dictionary=True
                 )
 
             LOGGER.info(f"[WritePartitionToParquet] ✅ Written: {output_path} , records: {len(records_list)} , partition: {partition_path}")
@@ -1187,96 +1168,6 @@ def build_pyarrow_schema_from_config(schema_config: Optional[Dict]) -> Optional[
     
     return pa.schema(pa_fields)
 
-class WriteParquetWithMappingDoFn(beam.DoFn):
-    """Write Parquet files using schema built from mapping_info (all STRING types).
-
-    This DoFn builds PyArrow schema from schemas_dict at runtime,
-    enabling dynamic schema without hardcoding column names.
-    """
-
-    def __init__(self, base_prefix: str, num_shards: int = 1):
-        self.base_prefix = base_prefix
-        self.num_shards = num_shards
-
-    def process(self, element, mapping_info):
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-        import pandas as pd
-        from apache_beam.io.filesystems import FileSystems
-
-        key, records = element
-        records_list = list(records)
-
-        if not records_list:
-            LOGGER.warning("[WriteParquetWithMappingDoFn] No records to write")
-            return
-
-        LOGGER.info(f"[WriteParquetWithMappingDoFn] Writing {len(records_list)} records")
-
-        # Build schema from schemas_dict (all STRING types)
-        schemas_dict = mapping_info.get('schemas_dict', [])
-        if not schemas_dict:
-            LOGGER.error("[WriteParquetWithMappingDoFn] schemas_dict is empty!")
-            raise ValueError("schemas_dict is empty - cannot build schema")
-
-        LOGGER.info(f"[WriteParquetWithMappingDoFn] Building schema from {len(schemas_dict)} columns (all STRING)")
-
-        # Create PyArrow schema with all STRING types
-        pa_schema = pa.schema([pa.field(col, pa.string()) for col in schemas_dict])
-
-        # Convert records to DataFrame
-        df = pd.DataFrame(records_list)
-
-        # Ensure all columns from schema exist in DataFrame
-        for col in schemas_dict:
-            if col not in df.columns:
-                df[col] = None
-
-        # Reorder columns to match schema and convert all to string
-        df = df[schemas_dict]
-        for col in df.columns:
-            df[col] = df[col].astype(str).replace('None', None).replace('nan', None)
-
-        # Write parquet files
-        for shard_idx in range(self.num_shards):
-            # Split records across shards
-            shard_start = (len(records_list) * shard_idx) // self.num_shards
-            shard_end = (len(records_list) * (shard_idx + 1)) // self.num_shards
-            shard_df = df.iloc[shard_start:shard_end]
-
-            if shard_df.empty:
-                continue
-
-            output_path = f"{self.base_prefix}-{shard_idx:05d}-of-{self.num_shards:05d}.snappy.parquet"
-
-            try:
-                # Convert to PyArrow table with explicit schema
-                table = pa.Table.from_pandas(shard_df, schema=pa_schema, preserve_index=False)
-
-                # Write using Beam's FileSystems
-                with FileSystems.create(output_path) as f:
-                    pq.write_table(table, f, compression='snappy')
-
-                LOGGER.info(f"[WriteParquetWithMappingDoFn] Wrote {len(shard_df)} records to: {output_path}")
-
-                yield {
-                    'output_path': output_path,
-                    'records_count': len(shard_df),
-                    'shard': shard_idx,
-                    'status': 'success'
-                }
-
-            except Exception as e:
-                LOGGER.error(f"[WriteParquetWithMappingDoFn] Failed to write shard {shard_idx}: {str(e)}")
-                yield {
-                    'output_path': output_path,
-                    'shard': shard_idx,
-                    'status': 'failed',
-                    'error': str(e)
-                }
-
-
-
 
 __all__ = [
     # Constants and helper functions
@@ -1297,7 +1188,6 @@ __all__ = [
     'MapToCdcTableRowDoFn',
     'ExtractWindowPathDoFn',
     'WritePartitionToParquetDoFn',
-    'WriteParquetWithMappingDoFn',
     # Helper functions
     'build_pyarrow_schema_from_config',
     'build_cdc_schema',

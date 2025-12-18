@@ -193,7 +193,6 @@ class ParquetConnector:
                 schema=schema,
                 file_name_suffix=".snappy.parquet",
                 num_shards=num_shards,
-                use_deprecated_int96_timestamps=True,
             )
             
             LOGGER.info(f"[{label}] Parquet write transform created successfully")

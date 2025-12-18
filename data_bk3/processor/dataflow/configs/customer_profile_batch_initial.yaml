@@ -80,12 +80,11 @@ plan:
 - step: ReadBQQuery
   id: personas_rows
   query: |
-    SELECT personaId,profiles FROM (
-      SELECT personaId,profiles,ROW_NUMBER() OVER (PARTITION BY JSON_VALUE(profiles, '$.memberId') ORDER BY timestamp DESC) AS rn
-      FROM `{io.bq.project}.{io.bq.dataset}.personas` 
-      WHERE COALESCE(JSON_VALUE(profiles, '$.memberId'), '') <> ''
-    ) WHERE rn = 1
-
+    SELECT
+      personaId,
+      profiles
+    FROM `{io.bq.project}.{io.bq.dataset}.personas` 
+    WHERE COALESCE(JSON_VALUE(profiles, '$.memberId'), '') <> ''
   out: personas_rows
 
 # Step 3: Parse JSON profiles field
@@ -144,8 +143,6 @@ plan:
 # Step 7: Write AWS data to S3 as Parquet
 - step: WriteParquet
   in: aws_ms_member
-  table_name: insight.ms_member
-  mapping_info: mapping_refresh
   prefix: "{io.s3.bucket}/ms_personas_{WORKSPACE_ENV}/par_month={params.run_par_month}/par_day={params.run_par_day}/par_hour={params.run_par_hour}/run_dt={params.run_dt}"
 
 # - step: WriteToS3Parquet
