@@ -47,7 +47,8 @@ SQL_FUNCTION_MAPPING = {
 # Data Type Conversion Functions
 # All return values compatible with BigQuery types
 DATA_TYPE_CONVERTERS = {
-    'STRING': lambda v: str(v) if v is not None and not isinstance(v, (dict, list)) else None,
+    # 'STRING': lambda v: str(v) if v is not None and not isinstance(v, (dict, list)) else None,
+    'STRING': lambda v: str(v) if v is not None else None,
     'INT64': lambda v: int(v) if v is not None else None,
     'INTEGER': lambda v: int(v) if v is not None else None,
     'FLOAT64': lambda v: float(v) if v is not None else None,
@@ -543,17 +544,16 @@ class FetchFromBigtableDoFn(DoFn):
 
                                         if isinstance(cell_value, str) and (cell_value.startswith('{') or cell_value.startswith('[')):
                                             try:
-                                                # cell_value = json.loads(cell_value)
+                                                cell_value = json.loads(cell_value)
                                                 LOGGER.info(f"[FetchFromBigtableDoFn] Multiple columns case: {personaId} , column_name: {column_name}, new_cell_value: {cell_value}")
                                             except json.JSONDecodeError:
                                                 pass
 
                                         family_dict[column_name] = cell_value
-
                                     except UnicodeDecodeError:
                                         family_dict[column_name] = latest_cell.value.hex() if isinstance(latest_cell.value, bytes) else str(latest_cell.value)
 
-                            result[family_name] = family_dict
+                            result[family_name] = json.dumps(family_dict)
                     else:
                         LOGGER.warning(f"[FetchFromBigtableDoFn] Family '{family_name}' not found")
                         result[family_name] = {}
@@ -1275,7 +1275,92 @@ class WriteParquetWithMappingDoFn(beam.DoFn):
                     'error': str(e)
                 }
 
+# 2025-12-18, Natcha S.
+class SQLSubmitDoFn(DoFn):
+    """
+    Submit SQL to BigQuery/BigLake table.
+    Triggered by window closing (e.g., every 5 minutes).
+    """
 
+    def __init__(
+        self,
+        project_id: str,
+        target_table: str,
+        lookback_minutes: int = 30,
+        query: str = None
+    ):
+        """
+        Initialize SQL submit.
+
+        Args:
+            project_id: GCP project ID
+            target_table: Target BigQuery/BigLake table
+            lookback_minutes: Query lookback window
+            query: SQL query template from config.
+        """
+        self.project_id = project_id
+        self.target_table = target_table
+        self.lookback_minutes = lookback_minutes
+        self.submit_query_template = query
+        self._client = None
+
+    def setup(self):
+        """Initialize BigQuery client once per worker."""
+        self._client = bigquery.Client(project=self.project_id)
+        LOGGER.info(f"[SQLSubmitDoFn] Initialized: {self.target_table}")
+
+    def process(self, trigger_element, window=DoFn.WindowParam):
+        """Execute MERGE query to sync data to Iceberg."""
+        window_start = datetime.fromtimestamp(window.start.micros / 1e6, tz=timezone.utc)
+        window_end = datetime.fromtimestamp(window.end.micros / 1e6, tz=timezone.utc)
+
+        LOGGER.info(f"[SQLSubmitDoFn] Triggered: window {window_start.isoformat()} - {window_end.isoformat()}")
+
+        # merge_query must be provided from config
+        if not self.submit_query_template:
+            LOGGER.error("[SQLSubmitDoFn] query not provided in config")
+            yield {
+                'window_end': window_end.isoformat(),
+                'status': 'failed',
+                'error': 'query not configured'
+            }
+            return
+
+        query = self.submit_query_template.format(
+            target_table=self.target_table,
+            lookback_minutes=self.lookback_minutes
+        )
+
+        LOGGER.info(f"[SQLSubmitDoFn] Triggered: query : {query}")
+        try:
+            job = self._client.query(query)
+            job.result()  # Wait for completion
+
+            rows_affected = job.num_dml_affected_rows or 0
+            bytes_processed = job.total_bytes_processed or 0
+            slot_ms = job.slot_millis or 0
+
+            LOGGER.info(
+                f"[SQLSubmitDoFn] SUCCESS: window={window_end.isoformat()}, "
+                f"rows={rows_affected}, bytes={bytes_processed / (1024*1024):.2f}MB"
+            )
+
+            yield {
+                'window_end': window_end.isoformat(),
+                'rows_affected': rows_affected,
+                'bytes_processed_mb': round(bytes_processed / (1024*1024), 2),
+                'slot_ms': slot_ms,
+                'status': 'success'
+            }
+
+        except Exception as e:
+            LOGGER.error(f"[SQLSubmitDoFn] FAILED: {e}")
+            yield {
+                'window_end': window_end.isoformat(),
+                'status': 'failed',
+                'error': str(e)
+            }
+ 
 
 
 __all__ = [
@@ -1298,6 +1383,7 @@ __all__ = [
     'ExtractWindowPathDoFn',
     'WritePartitionToParquetDoFn',
     'WriteParquetWithMappingDoFn',
+    'SQLSubmitDoFn',
     # Helper functions
     'build_pyarrow_schema_from_config',
     'build_cdc_schema',

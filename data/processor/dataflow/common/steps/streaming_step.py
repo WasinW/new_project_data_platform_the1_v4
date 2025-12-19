@@ -35,6 +35,7 @@ from dataflow_common.dofns.stream import (
     # AddWindowPathDoFn,
     # WriteParquetWithBeamFSDoFn,
     SyncToIcebergDoFn,
+    SQLSubmitDoFn,
     ExtractWindowPathDoFn,
     WritePartitionToParquetDoFn,
     build_cdc_schema,
@@ -893,6 +894,207 @@ class MergeToIcebergStreamingStep(BaseStep):
         )
 
         return logged
+    
+class MergeToBigQueryStreamingStep(BaseStep):
+    """
+    Periodically merge data from Native CDC table to Iceberg (BigLake) table.
+    
+    Uses PeriodicImpulse to trigger MERGE query at regular intervals.
+    This is INDEPENDENT of the CDC write - it runs on its own schedule.
+    
+    Architecture:
+        Native Table (CDC) --> MERGE Query --> Iceberg Table (BigLake)
+        
+    The MERGE query:
+    - Reads recent changes from Native table (using lookback_minutes)
+    - Upserts into Iceberg table based on primary key
+    
+    Config params:
+        native_table: Source Native BigQuery table with CDC data
+        iceberg_table: Target Iceberg (BigLake) table
+        lookback_minutes: How far back to look for changes (default: 30)
+        merge_interval_sec: How often to run MERGE (default: 300 = 5 min)
+        merge_query: MERGE SQL query template with placeholders:
+                     {native_table}, {iceberg_table}, {lookback_minutes}
+        
+    Example config:
+        - step: MergeToIcebergStreaming
+          id: write_iceberg_cdc
+          params:
+            native_table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+            iceberg_table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}_iceberg"
+            lookback_minutes: 30
+            merge_interval_sec: 300
+            merge_query: |
+              MERGE `{iceberg_table}` AS T
+              USING (
+                SELECT * FROM `{native_table}`
+                WHERE updated_date >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+              ) AS S
+              ON T.memberId = S.memberId
+              WHEN MATCHED THEN UPDATE SET ...
+              WHEN NOT MATCHED THEN INSERT ...
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        # Get params
+        params = self.spec.get("params", {})
+        native_table = params.get("native_table")
+        iceberg_table = params.get("iceberg_table")
+        lookback_minutes = int(params.get("lookback_minutes", 30))
+        merge_interval_sec = int(params.get("merge_interval_sec", 300))
+        merge_query = params.get("merge_query")
+        
+        project_id = self.config.io.bq.get('project')
+
+        LOGGER.info(f"[{self.step_id}] MergeToIcebergStreaming configured:")
+        LOGGER.info(f"[{self.step_id}]   Native table: {native_table}")
+        LOGGER.info(f"[{self.step_id}]   Iceberg table: {iceberg_table}")
+        LOGGER.info(f"[{self.step_id}]   Lookback: {lookback_minutes} minutes")
+        LOGGER.info(f"[{self.step_id}]   Merge interval: {merge_interval_sec} seconds")
+
+        if not merge_query:
+            LOGGER.error(f"[{self.step_id}] merge_query is required!")
+            raise ValueError("merge_query must be provided in config")
+
+        # Create periodic trigger (fires every merge_interval_sec)
+        periodic_trigger = (
+            pipeline
+            | f"{self.step_id}_PeriodicImpulse" >> PeriodicImpulse(
+                fire_interval=merge_interval_sec,
+                apply_windowing=True
+            )
+        )
+
+        # Apply fixed window (same as merge interval)
+        windowed = (
+            periodic_trigger
+            | f"{self.step_id}_Window" >> beam.WindowInto(
+                window.FixedWindows(merge_interval_sec),
+                trigger=trigger.AfterWatermark(),
+                accumulation_mode=trigger.AccumulationMode.DISCARDING
+            )
+        )
+
+        # Execute MERGE query on each window close
+        result = (
+            windowed
+            | f"{self.step_id}_MergeToIceberg" >> beam.ParDo(
+                SyncToIcebergDoFn(
+                    project_id=project_id,
+                    native_table=native_table,
+                    iceberg_table=iceberg_table,
+                    lookback_minutes=lookback_minutes,
+                    merge_query=merge_query
+                )
+            )
+        )
+
+        # Log results
+        logged = (
+            result
+            | f"{self.step_id}_LogResults" >> beam.Map(
+                lambda x: LOGGER.info(f"[{self.step_id}] Merge result: {x}") or x
+            )
+        )
+
+        return logged
+    
+# 2025-12-18, Natcha S.
+class SQLSubmitToTargetBQStep(BaseStep):
+    """
+    Periodically submit SQL query to BigQuery/BigLake table.
+    
+    Uses PeriodicImpulse to trigger query at regular intervals.
+    This is INDEPENDENT of the CDC write - it runs on its own schedule.
+    
+    Architecture:
+        Source BigQuery Table -> SQL query -> Target BigQuery Table
+    
+    Config params:
+        target_table: BigQuery/BigLake table
+        lookback_minutes: How far back to look for changes (default: 30)
+        submit_interval_sec: How often to submit query (default: 300 = 5 min)
+        query: SQL query
+        
+    Example config:
+        - step: SQLSubmitToTargetTable
+          id: write_to_native_bq
+          params:
+            target_table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+            lookback_minutes: 30
+            query_interval_sec: 300
+            query: |
+              MERGE `{target_table}` AS T
+              USING (
+                SELECT * FROM `{source_table}`
+                WHERE updated_date >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {lookback_minutes} MINUTE)
+              ) AS S
+              ON T.memberId = S.memberId
+              WHEN MATCHED THEN UPDATE SET ...
+              WHEN NOT MATCHED THEN INSERT ...
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        # Get params
+        params = self.spec.get("params", {})
+        target_table = params.get("target_table")
+        lookback_minutes = int(params.get("lookback_minutes", 30))
+        submit_interval_sec = int(params.get("submit_interval_sec", 300))
+        query = params.get("query")
+        
+        project_id = self.config.io.bq.get('project')
+
+        LOGGER.info(f"[{self.step_id}] SQLSubmitToTargetTable configured:")
+        LOGGER.info(f"[{self.step_id}]   Target table: {target_table}")
+        LOGGER.info(f"[{self.step_id}]   Lookback: {lookback_minutes} minutes")
+        LOGGER.info(f"[{self.step_id}]   Submit interval: {submit_interval_sec} seconds")
+
+        if not query:
+            LOGGER.error(f"[{self.step_id}] query is required!")
+            raise ValueError("query must be provided in config")
+
+        # Create periodic trigger (fires every submit_interval_sec)
+        periodic_trigger = (
+            pipeline
+            | f"{self.step_id}_PeriodicImpulse" >> PeriodicImpulse(
+                fire_interval=submit_interval_sec,
+                apply_windowing=True
+            )
+        )
+
+        # Apply fixed window (same as submit interval)
+        windowed = (
+            periodic_trigger
+            | f"{self.step_id}_Window" >> beam.WindowInto(
+                window.FixedWindows(submit_interval_sec),
+                trigger=trigger.AfterWatermark(),
+                accumulation_mode=trigger.AccumulationMode.DISCARDING
+            )
+        )
+
+        # Execut query on each window close
+        result = (
+            windowed
+            | f"{self.step_id}_SQLSubmit" >> beam.ParDo(
+                SQLSubmitDoFn(
+                    project_id=project_id,
+                    target_table=target_table,
+                    lookback_minutes=lookback_minutes,
+                    query=query
+                )
+            )
+        )
+
+        # Log results
+        logged = (
+            result
+            | f"{self.step_id}_LogResults" >> beam.Map(
+                lambda x: LOGGER.info(f"[{self.step_id}] Submit result: {x}") or x
+            )
+        )
+
+        return logged
 
 __all__ = [
     'RefreshMappingTableStep',
@@ -909,6 +1111,7 @@ __all__ = [
     'WriteToBigQueryCDCStep', # write to bigquery native with CDC support
     'WriteToBigLakeIcebergStreamingStep', # write to biglake iceberg with append mode
     'MergeToIcebergStreamingStep', # merge from native CDC to iceberg table
+    'SQLSubmitToTargetBQStep', # submit SQL to target table using BQ
 ]
 # NOTE -----------------
 # Step	                                Write Method	    Table Type	            CDC Support

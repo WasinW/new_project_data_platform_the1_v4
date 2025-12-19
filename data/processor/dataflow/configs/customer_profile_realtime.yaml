@@ -209,6 +209,24 @@ plan:
     triggering_frequency: 5
     num_storage_api_streams: 5
 
+# 2025-12-17, Natcha S.: Consent historical SQL statement
+# Step 8.1: SQLSubmitToTarget
+- step: SQLSubmitToTargetBQ
+  id: submit_ms_member_consents_history
+  params:
+    target_table: "{io.bq.project}.{io.bq.dataset}.ms_member_consents_history"
+    lookback_minutes: 30
+    submit_interval_sec: 300
+    query: |
+      INSERT INTO `{io.bq.project}.{io.bq.dataset}.ms_member_consents_history`
+      SELECT "mockup" as memberId
+        , "mockup" as companyCode
+        , "mockup" as consentVersion
+        , "mockup" as consentFlag
+        , DATETIME(CURRENT_TIMESTAMP(), "Asia/Bangkok") as consentDate
+        , CURRENT_DATE() processDate
+        , DATETIME(CURRENT_TIMESTAMP, "Asia/Bangkok") as loadTimestamp
+
 # Step 9: Write AWS data to S3 as Parquet
 - step: WriteToS3Parquet
   id: write_s3

@@ -46,7 +46,7 @@ from dataflow_common.steps.streaming_step import (
     WriteToBigQueryCDCStep,
     WriteToBigLakeIcebergStreamingStep,
     MergeToIcebergStreamingStep,
-    
+    SQLSubmitToTargetBQStep,
 )
 
 
@@ -80,4 +80,5 @@ __all__ = [
     "WriteToBigQueryCDCStep",
     "WriteToBigLakeIcebergStreamingStep",
     "MergeToIcebergStreamingStep",
+    "SQLSubmitToTargetBQStep",
 ]
