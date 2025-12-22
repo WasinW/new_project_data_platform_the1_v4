@@ -9,6 +9,7 @@ Used by:
 - Realtime pipeline (customer_profile_realtime)
 """
 import os
+import sys
 import json
 import unittest
 from pathlib import Path
@@ -16,6 +17,11 @@ from unittest.mock import MagicMock
 
 # Set environment variable before imports
 os.environ.setdefault("WORKSPACE_ENV", "dev")
+
+# Add testcase directory to path for imports
+testcase_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if testcase_dir not in sys.path:
+    sys.path.insert(0, testcase_dir)
 
 # Get paths
 DATAFLOW_DIR = Path(__file__).parent.parent.parent.parent

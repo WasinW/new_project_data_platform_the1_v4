@@ -26,11 +26,12 @@ os.environ.setdefault("WORKSPACE_ENV", "dev")
 
 # Add parent directories to path for imports
 test_dir = os.path.dirname(os.path.abspath(__file__))
+testcase_dir = test_dir  # testcase folder itself
 tests_dir = os.path.dirname(test_dir)
 dataflow_dir = os.path.dirname(tests_dir)
 scripts_dir = os.path.join(dataflow_dir, 'scripts')
 
-for p in [dataflow_dir, scripts_dir]:
+for p in [testcase_dir, dataflow_dir, scripts_dir]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
