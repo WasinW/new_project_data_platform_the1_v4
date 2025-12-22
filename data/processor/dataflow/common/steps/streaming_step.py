@@ -653,6 +653,9 @@ class WriteToBigQueryCDCStep(BaseStep):
                 # Note: DATE, TIME, DATETIME need to be STRING for CDC writes
                 unsupported_types = {'DATE', 'TIME', 'DATETIME'}
 
+                # Exclude CDC-specific fields - they will be added by build_cdc_schema
+                cdc_fields = {'row_mutation_info', '_CHANGE_TYPE', '_CHANGE_SEQUENCE_NUMBER', 'record'}
+
                 record_fields = [
                     {
                         'name': field.name,
@@ -660,8 +663,9 @@ class WriteToBigQueryCDCStep(BaseStep):
                         'mode': field.mode or 'NULLABLE',
                     }
                     for field in bq_schema
+                    if field.name not in cdc_fields  # Skip CDC wrapper fields
                 ]
-                
+
                 # Build CDC schema with wrapper
                 cdc_schema = build_cdc_schema(record_fields)
                 
@@ -746,6 +750,10 @@ class WriteToBigLakeIcebergStreamingStep(BaseStep):
             client = bq_client.Client()
             table_ref = client.get_table(table)
             # field_names_map = {f.name.lower(): f.name for f in table_ref.schema}
+
+            # Exclude CDC-specific fields that shouldn't be in non-CDC writes
+            cdc_fields = {'row_mutation_info', '_CHANGE_TYPE', '_CHANGE_SEQUENCE_NUMBER'}
+
             schema_param = {
                 'fields': [
                     {
@@ -755,6 +763,7 @@ class WriteToBigLakeIcebergStreamingStep(BaseStep):
                         , 'mode': 'NULLABLE'
                     }
                     for f in table_ref.schema
+                    if f.name not in cdc_fields  # Skip CDC fields for non-CDC writes
                 ]
             }
         LOGGER.info(f"[{self.step_id}] Writing to BigLake Iceberg schemas : {schema_param}")
