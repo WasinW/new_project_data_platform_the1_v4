@@ -853,7 +853,6 @@ class TransformSchemasDoFn(DoFn):
             sample_keys = list(gcp_output.keys())[:5]
             LOGGER.info(f"[TransformSchemasDoFn] GCP sample keys: {sample_keys}, output : {gcp_output}")
 
-        # Always yield outputs - null handling is done downstream in CDC DoFns
         yield beam.pvalue.TaggedOutput('aws', aws_output)
         yield beam.pvalue.TaggedOutput('gcp', gcp_output)
         # yield beam.pvalue.TaggedOutput(outputs[0], output)
@@ -907,19 +906,6 @@ class WriteToBigLakeDoFn(DoFn):
         Yields:
             Prepared record
         """
-        # Skip None or empty elements
-        if element is None:
-            LOGGER.warning("[WriteToBigLakeDoFn] Skipping None element")
-            return
-
-        if not isinstance(element, dict):
-            LOGGER.warning(f"[WriteToBigLakeDoFn] Skipping non-dict element: {type(element)}")
-            return
-
-        if not element:
-            LOGGER.warning("[WriteToBigLakeDoFn] Skipping empty dict element")
-            return
-
         output = {}
         for key, value in element.items():
             
@@ -954,21 +940,8 @@ class MapToCdcTableRowDoFn(beam.DoFn):
     def __init__(self, default_change_type: str = "UPSERT"):
         LOGGER.info(f"[MapToCdcTableRowDoFn] Initialized with default_change_type: {default_change_type}")
         self.default_change_type = default_change_type
-
+    
     def process(self, element):
-        # Skip None or empty elements - these would cause null row_mutation_info errors
-        if element is None:
-            LOGGER.warning("[MapToCdcTableRowDoFn] Skipping None element")
-            return
-
-        if not isinstance(element, dict):
-            LOGGER.warning(f"[MapToCdcTableRowDoFn] Skipping non-dict element: {type(element)}")
-            return
-
-        if not element:
-            LOGGER.warning("[MapToCdcTableRowDoFn] Skipping empty dict element")
-            return
-
         # Get CDC operation type from element or use default
         cdc_type = element.get('_CHANGE_TYPE', self.default_change_type)
         is_delete = element.get('is_delete', False)
