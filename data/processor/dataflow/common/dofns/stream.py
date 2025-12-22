@@ -853,16 +853,9 @@ class TransformSchemasDoFn(DoFn):
             sample_keys = list(gcp_output.keys())[:5]
             LOGGER.info(f"[TransformSchemasDoFn] GCP sample keys: {sample_keys}, output : {gcp_output}")
 
-        # Only yield non-empty outputs to prevent null row_mutation_info errors downstream
-        if aws_output:
-            yield beam.pvalue.TaggedOutput('aws', aws_output)
-        else:
-            LOGGER.warning(f"[TransformSchemasDoFn] Skipping empty AWS output for element")
-
-        if gcp_output:
-            yield beam.pvalue.TaggedOutput('gcp', gcp_output)
-        else:
-            LOGGER.warning(f"[TransformSchemasDoFn] Skipping empty GCP output for element")
+        # Always yield outputs - null handling is done downstream in CDC DoFns
+        yield beam.pvalue.TaggedOutput('aws', aws_output)
+        yield beam.pvalue.TaggedOutput('gcp', gcp_output)
         # yield beam.pvalue.TaggedOutput(outputs[0], output)
 
 
