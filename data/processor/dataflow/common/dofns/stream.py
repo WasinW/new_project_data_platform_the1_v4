@@ -897,27 +897,6 @@ class WriteToBigLakeDoFn(DoFn):
         LOGGER.info(f"[WriteToBigLakeDoFn] Initialized for table: {table_name}")
         self.table_name = table_name
 
-    def _sanitize_value(self, value):
-        """
-        Sanitize a value for BigQuery serialization.
-
-        Handles edge cases that can cause serialization failures:
-        - NaN/Inf float values -> None
-        """
-        import math
-
-        if value is None:
-            return None
-
-        # Handle float NaN and Inf
-        if isinstance(value, float):
-            if math.isnan(value) or math.isinf(value):
-                LOGGER.warning(f"[WriteToBigLakeDoFn] Sanitizing invalid float value: {value}")
-                return None
-            return value
-
-        return value
-
     def process(self, element):
         """
         Prepare element for BigLake write.
@@ -943,14 +922,12 @@ class WriteToBigLakeDoFn(DoFn):
 
         output = {}
         for key, value in element.items():
+            
             # LOGGER.info(f"[WriteToBigLakeDoFn] key type {key}: {type(value)}")
             if value is None:
                 output[key] = None
             elif isinstance(value, dict):
-                output[key] = json.dumps(value, ensure_ascii=False)
-            elif isinstance(value, float):
-                # Sanitize float values (NaN, Inf)
-                output[key] = self._sanitize_value(value)
+                output[key] = json.dumps(value,ensure_ascii=False)
             else:
                 output[key] = value
         LOGGER.info(f"[WriteToBigLakeDoFn] output: {output}")
@@ -961,7 +938,7 @@ class WriteToBigLakeDoFn(DoFn):
 class MapToCdcTableRowDoFn(beam.DoFn):
     """
     Format data for BigQuery CDC write using Storage Write API.
-
+    
     This DoFn wraps data in the required CDC format:
     {
         "row_mutation_info": {
@@ -970,60 +947,13 @@ class MapToCdcTableRowDoFn(beam.DoFn):
         },
         "record": { actual data fields }
     }
-
+    
     This is required when use_cdc_writes=True in WriteToBigQuery.
     """
-
+    
     def __init__(self, default_change_type: str = "UPSERT"):
         LOGGER.info(f"[MapToCdcTableRowDoFn] Initialized with default_change_type: {default_change_type}")
         self.default_change_type = default_change_type
-
-    def _sanitize_value(self, value):
-        """
-        Sanitize a value for BigQuery serialization.
-
-        Handles edge cases that can cause serialization failures:
-        - NaN/Inf float values -> None
-        - Non-serializable objects -> string representation
-        """
-        import math
-
-        if value is None:
-            return None
-
-        # Handle float NaN and Inf
-        if isinstance(value, float):
-            if math.isnan(value) or math.isinf(value):
-                LOGGER.warning(f"[MapToCdcTableRowDoFn] Sanitizing invalid float value: {value}")
-                return None
-            return value
-
-        # Handle nested dicts
-        if isinstance(value, dict):
-            return {k: self._sanitize_value(v) for k, v in value.items()}
-
-        # Handle lists
-        if isinstance(value, list):
-            return [self._sanitize_value(v) for v in value]
-
-        # Handle other serializable types
-        if isinstance(value, (str, int, bool)):
-            return value
-
-        # For any other type, convert to string to ensure serializability
-        try:
-            return str(value)
-        except Exception:
-            LOGGER.warning(f"[MapToCdcTableRowDoFn] Could not serialize value of type {type(value)}, using None")
-            return None
-
-    def _sanitize_record(self, record: dict) -> dict:
-        """
-        Sanitize all values in a record dict for BigQuery serialization.
-        """
-        if not record:
-            return record
-        return {k: self._sanitize_value(v) for k, v in record.items()}
 
     def process(self, element):
         # Skip None or empty elements - these would cause null row_mutation_info errors
@@ -1076,10 +1006,7 @@ class MapToCdcTableRowDoFn(beam.DoFn):
                     record['dateOfBirth'] = dt.isoformat()
             except:
                 pass
-
-        # Sanitize record values to prevent serialization errors (NaN, Inf, etc.)
-        record = self._sanitize_record(record)
-
+        
         # Format for CDC API: must have "row_mutation_info" and "record" fields
         cdc_row = {
             'row_mutation_info': {
