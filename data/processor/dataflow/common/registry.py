@@ -44,6 +44,7 @@ from dataflow_common.steps import (
     WriteToBigQueryCDCStep,
     WriteToBigLakeIcebergStreamingStep,
     MergeToIcebergStreamingStep,
+    SQLSubmitToTargetBQStep,
 )
 
 # Mapping from step type string in a plan to the corresponding class
@@ -76,6 +77,7 @@ STEP_REGISTRY: Dict[str, Type] = {
     "WriteToBigQueryCDC": WriteToBigQueryCDCStep,  # For BigLake CDC streaming writes
     "WriteToBigLakeIcebergStreaming": WriteToBigLakeIcebergStreamingStep,
     "MergeToIcebergStreaming": MergeToIcebergStreamingStep,
+    "SQLSubmitToTargetBQ": SQLSubmitToTargetBQStep,
 }
 
 __all__ = ["STEP_REGISTRY"]
