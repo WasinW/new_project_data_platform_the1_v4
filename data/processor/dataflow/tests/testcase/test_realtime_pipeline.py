@@ -7,7 +7,7 @@ Tests for the customer_profile_realtime pipeline.
 Test Types:
 1. Script Tests (Unit) - mock everything, test script entry point
 2. Config Tests (Integration) - test config-driven step creation (uses config_driven/)
-3. Transform Tests - test realtime-specific transforms (uses common/)
+3. Transform Tests - test realtime-specific transforms (uses testdata/)
 
 Pipeline Type: Streaming (Config-Driven)
 Uses: config.py, orchestrator.py, core.py
@@ -39,12 +39,11 @@ for p in [testcase_dir, dataflow_dir, scripts_dir]:
 DATAFLOW_DIR = Path(__file__).parent.parent.parent
 CONFIGS_DIR = DATAFLOW_DIR / "configs"
 
-# Try to import Apache Beam
-try:
-    from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
-    BEAM_AVAILABLE = True
-except ImportError:
-    BEAM_AVAILABLE = False
+# Try to import Apache Beam (deferred to avoid import errors in broken environments)
+# This is checked at test runtime, not module load time
+BEAM_AVAILABLE = False
+PipelineOptions = None
+StandardOptions = None
 
 
 # =============================================================================

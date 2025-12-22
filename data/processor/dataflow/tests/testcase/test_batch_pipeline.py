@@ -7,7 +7,7 @@ Tests for the customer_profile_batch_initial pipeline.
 Test Types:
 1. Script Tests (Unit) - mock everything, test script entry point
 2. Config Tests (Integration) - test config-driven step creation (uses config_driven/)
-3. Transform Tests - test batch-specific transforms (uses common/)
+3. Transform Tests - test batch-specific transforms (uses testdata/)
 
 Pipeline Type: Batch (Config-Driven)
 Uses: config.py, orchestrator.py, core.py
@@ -47,6 +47,14 @@ try:
     DATAFLOW_COMMON_AVAILABLE = True
 except ImportError:
     DATAFLOW_COMMON_AVAILABLE = False
+
+# Import fixtures from testdata module
+from testdata.fixtures import (
+    create_mock_config,
+    SAMPLE_MAPPING_ROWS,
+    SAMPLE_PERSONAS_RAW,
+    SAMPLE_MS_MEMBER_ROWS,
+)
 
 
 # =============================================================================
@@ -115,7 +123,6 @@ class TestBatchScriptMain(unittest.TestCase):
         """Test main function generates run_dt automatically."""
         print("\n[TEST] batch main - generates run_dt")
 
-        from common.fixtures import create_mock_config
         mock_config = create_mock_config(name="batch_pipeline", mode="batch", term="initial")
         mock_load_config.return_value = mock_config
 
@@ -136,7 +143,6 @@ class TestBatchScriptMain(unittest.TestCase):
         """Test main function sets batch mode (streaming=False)."""
         print("\n[TEST] batch main - sets batch mode")
 
-        from common.fixtures import create_mock_config
         mock_load_config.return_value = create_mock_config()
 
         mock_orchestrator = MagicMock()
@@ -171,7 +177,6 @@ class TestBatchScriptMain(unittest.TestCase):
         """Test main function generates partition params."""
         print("\n[TEST] batch main - generates partition params")
 
-        from common.fixtures import create_mock_config
         mock_config = create_mock_config()
         mock_load_config.return_value = mock_config
 
@@ -236,12 +241,6 @@ class TestBatchPipelineFlow(unittest.TestCase):
     def test_full_batch_transform_flow(self):
         """Test the full batch pipeline transform flow."""
         print("\n[TEST] Full batch transform flow")
-
-        from common.fixtures import (
-            SAMPLE_MAPPING_ROWS,
-            SAMPLE_PERSONAS_RAW,
-            SAMPLE_MS_MEMBER_ROWS
-        )
 
         # Step 1: Build mapping dict
         mapping_dict = create_mapping_dict(
