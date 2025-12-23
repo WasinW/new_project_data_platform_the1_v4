@@ -15,7 +15,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 import time
 import uuid
-import ast
 
 from functools import reduce
 from typing import Any, Dict, List, Optional
@@ -685,13 +684,14 @@ class TransformSchemasDoFn(DoFn):
         """
         try:
             LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  path:{path}, type={type(data)}, data={data}")
-            # LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  Get Value :{data.get(path.split('.')[0]) if isinstance(data, dict) else 'N/A'}")
 
             sub_data = data
             for key in path.split('.'):
                 LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  Current sub_data before key '{key}': {sub_data}")
                 if isinstance(sub_data, str):
-                    sub_data = ast.literal_eval(sub_data)
+                    # Use json.loads instead of ast.literal_eval because data comes from json.dumps()
+                    # json.loads handles JSON format (true/false/null) correctly
+                    sub_data = json.loads(sub_data)
 
                 if isinstance(sub_data, dict) and key in sub_data:
                     sub_data = sub_data.get(key)
@@ -699,11 +699,10 @@ class TransformSchemasDoFn(DoFn):
                 else:
                     LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  Key '{key}' not found in {sub_data}")
                     return None
-                
-            # value = reduce(operator.getitem, path.split('.'), data)
-            # LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  value:{value}")
+
             return sub_data
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
+            LOGGER.warning(f"[TransformSchemasDoFn] get_nested_value failed for path '{path}': {e}")
             return None
 
     def isSqlFunction(self, logic: str) -> bool:
