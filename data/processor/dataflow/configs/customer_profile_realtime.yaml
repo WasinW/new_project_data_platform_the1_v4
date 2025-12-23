@@ -79,7 +79,7 @@ plan:
 - step: RefreshMappingTable
   id: mapping_refresh
   params:
-    fire_interval: 60
+    fire_interval: 30
     mapping_table: "{io.bq.project}.{io.bq.dataset}.mapping_reconcile"
     query: |
       SELECT 
@@ -209,23 +209,85 @@ plan:
     triggering_frequency: 5
     num_storage_api_streams: 5
 
-# 2025-12-17, Natcha S.: Consent historical SQL statement
-# Step 8.1: SQLSubmitToTarget
-- step: SQLSubmitToTargetBQ
-  id: submit_ms_member_consents_history
-  params:
-    target_table: "{io.bq.project}.{io.bq.dataset}.ms_member_consents_history"
-    lookback_minutes: 30
-    submit_interval_sec: 300
-    query: |
-      INSERT INTO `{io.bq.project}.{io.bq.dataset}.ms_member_consents_history`
-      SELECT "mockup" as memberId
-        , "mockup" as companyCode
-        , "mockup" as consentVersion
-        , "mockup" as consentFlag
-        , DATETIME(CURRENT_TIMESTAMP(), "Asia/Bangkok") as consentDate
-        , CURRENT_DATE() processDate
-        , DATETIME(CURRENT_TIMESTAMP, "Asia/Bangkok") as loadTimestamp
+# # 2025-12-17, Natcha S.: Consent historical SQL statement
+# # Step 8.1: SQL historical consents
+# - step: SQLSubmitToTargetBQ
+#   id: submit_ms_member_consents_history
+#   params:
+#     target_table: "{io.bq.project}.{io.bq.dataset}.ms_member_consents_history"
+#     lookback_minutes: 30
+#     submit_interval_sec: 300 # micro batch instead of daily batch to avoid out of memory
+#     query: |
+#       CREATE TEMP FUNCTION CUSTOM_JSON_EXTRACT(json JSON, json_path STRING) RETURNS STRING
+#       LANGUAGE js AS """ 
+#       var obj = json;
+#       const keys = json_path.split(".");
+
+#       let currentLevel = obj;
+#       for (key of keys) {{
+#         if (Object.hasOwn(currentLevel, key)) {{
+#           currentLevel = currentLevel[key];
+#         }}
+#         else {{
+#             return null;
+#         }}
+#       }}
+
+#       if (typeof currentLevel === 'object') {{
+#         return JSON.stringify(currentLevel);
+#       }}
+
+#       return currentLevel;
+#       """;
+
+#       MERGE `{io.bq.project}.{io.bq.dataset}.ms_member_consents_history` as trgt_hist
+#       USING (
+#         WITH raw AS (
+#           SELECT personasId
+#             , memberId
+#             , PARSE_JSON(consents) as consents_json
+#             , processDate
+#           FROM `{io.bq.project}.{io.bq.dataset}.events_consents`
+#           WHERE COALESCE(loadTimestamp, CURRENT_TIMESTAMP()) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 MINUTE)
+#           )
+
+#         SELECT DISTINCT
+#             trgt.memberId
+#           , trgt.companyCode
+#           , trgt.consentVersion
+#           , trgt.consentFlag
+#           , trgt.consentDate
+#           , trgt.processDate
+#           , trgt.loadTimestamp
+
+#         FROM (
+#           SELECT 
+#               raw.memberId
+#             , companyCode
+#             , CUSTOM_JSON_EXTRACT(raw.consents_json, companyCode||".consentVersion") as consentVersion
+#             , CUSTOM_JSON_EXTRACT(raw.consents_json, companyCode||".consentFlag") as consentFlag
+#             , DATETIME(
+#                 TIMESTAMP_MILLIS(
+#                     CAST(CUSTOM_JSON_EXTRACT(raw.consents_json, companyCode||".consentDate") as INT64)
+#                   )
+#                 , "Asia/Bangkok") as consentDate
+#             , raw.processDate
+#             , CURRENT_TIMESTAMP() as loadTimestamp
+
+#           FROM raw, UNNEST(JSON_KEYS(raw.consents_json, 1)) as companyCode
+#           ) trgt
+
+#         WHERE trgt.consentFlag IS NOT NULL -- Filter out internal partner
+#       ) src_hist
+
+#       ON src_hist.memberId = trgt_hist.memberId
+#         AND src_hist.companyCode = trgt_hist.companyCode
+#         AND src_hist.consentVersion = trgt_hist.consentVersion
+#         AND src_hist.consentDate = trgt_hist.consentDate
+
+#       WHEN NOT MATCHED THEN
+#         INSERT (memberId, companyCode, consentVersion, consentFlag, consentDate, processDate, loadTimestamp)
+#         VALUES (src_hist.memberId, src_hist.companyCode, src_hist.consentVersion, src_hist.consentFlag, src_hist.consentDate, src_hist.processDate, src_hist.loadTimestamp)
 
 # Step 9: Write AWS data to S3 as Parquet
 - step: WriteToS3Parquet
