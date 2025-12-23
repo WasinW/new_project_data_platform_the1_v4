@@ -1001,9 +1001,10 @@ class MapToCdcTableRowDoFn(beam.DoFn):
     This is required when use_cdc_writes=True in WriteToBigQuery.
     """
     
-    def __init__(self, default_change_type: str = "UPSERT"):
+    def __init__(self, default_change_type: str = "UPSERT",record_fields: Optional[List[str]] = None):
         LOGGER.info(f"[MapToCdcTableRowDoFn] Initialized with default_change_type: {default_change_type}")
         self.default_change_type = default_change_type
+        self.record_fields = record_fields
 
     def _sanitize_value(self, value):
         """
@@ -1095,6 +1096,10 @@ class MapToCdcTableRowDoFn(beam.DoFn):
         record.pop('_CHANGE_TYPE', None)
         record.pop('_CHANGE_SEQUENCE_NUMBER', None)
         
+        for field in self.record_fields or []:
+            if field.name not in record:
+                record[field.name] = record.get(field.name, None)
+
         # Convert date fields to proper format if needed
         if record.get('dateOfBirth'):
             try:

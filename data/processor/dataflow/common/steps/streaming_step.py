@@ -693,7 +693,7 @@ class WriteToBigQueryCDCStep(BaseStep):
         cdc_formatted = (
             pcoll
             | f"{self.step_id}_MapToCDCFormat" >> beam.ParDo(
-                MapToCdcTableRowDoFn(default_change_type=change_type)
+                MapToCdcTableRowDoFn(default_change_type=change_type,record_fields=record_fields)
             )
         )
 

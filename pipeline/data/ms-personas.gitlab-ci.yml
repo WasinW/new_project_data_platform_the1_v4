@@ -207,28 +207,28 @@ ms-personas:deploy-tables:nonprod:
   when: manual
   <<: *table_rules
 
-ms-personas:deploy-tables:prod:
-  stage: deploy-prod
-  tags:
-  - $RUNNER_TAG_PROD
-  image: google/cloud-sdk:alpine
-  variables:
-    WORKSPACE_ENV: prod
-    PROJECT_ID: $GCP_PRD_PROJECT_ID
-    DATASET_ID: insight
-    GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
-  script:
-  - !reference [ .ms-personas-gcp-prepare, script ]
-  - cd $INFRASTRUCTURE_RUN_PATH
-  # - chmod +x schemas/deploy_tables.sh
-  # - ./schemas/deploy_tables.sh $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
-  - python3 schemas/deploy.py $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
-  after_script:
-  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
-  needs:
-  - ms-personas:terraform:apply:prod
-  when: manual
-  <<: *table_rules
+# ms-personas:deploy-tables:prod:
+#   stage: deploy-prod
+#   tags:
+#   - $RUNNER_TAG_PROD
+#   image: google/cloud-sdk:alpine
+#   variables:
+#     WORKSPACE_ENV: prod
+#     PROJECT_ID: $GCP_PRD_PROJECT_ID
+#     DATASET_ID: insight
+#     GOOGLE_APPLICATION_CREDENTIALS_PATH: 'google-application-credentials.json'
+#   script:
+#   - !reference [ .ms-personas-gcp-prepare, script ]
+#   - cd $INFRASTRUCTURE_RUN_PATH
+#   # - chmod +x schemas/deploy_tables.sh
+#   # - ./schemas/deploy_tables.sh $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
+#   - python3 schemas/deploy.py $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
+#   after_script:
+#   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+#   needs:
+#   - ms-personas:terraform:apply:prod
+#   when: manual
+#   <<: *table_rules
 
 # ============================================
 # PART 2B: DATAFLOW_COMMON CHANGES (Build & Deploy)
