@@ -15,6 +15,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 import time
 import uuid
+import ast
 
 from functools import reduce
 from typing import Any, Dict, List, Optional
@@ -40,8 +41,10 @@ TZ_BANGKOK = timezone(timedelta(hours=7))
 SQL_FUNCTION_MAPPING = {
     'CURRENT_DATE()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d'),
     # 'CURRENT_DATETIME()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
-    # 'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).isoformat(), # datetime object format %Y-%m-%d %H:%M:%S.%f+00:00
-    'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f UTC"), # BQ timestamp format
+    # 'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).isoformat(), # ISO 8601 (%Y-%m-%dT%H:%M:%S.%f+00:00)
+    # 'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f UTC"), # BQ timestamp format
+    # 'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc),
+    'CURRENT_TIMESTAMP()': None,
     'NOW()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
     'UUID()': lambda: str(uuid.uuid4()),
 }
@@ -683,23 +686,25 @@ class TransformSchemasDoFn(DoFn):
             Value at path or None
         """
         try:
-            LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  path:{path}, type={type(data)}, data={data}")
+            LOGGER.debug(f"[TransformSchemasDoFn] get_nested_value:  path:{path}, type={type(data)}, data={data}")
+            # LOGGER.debug(f"[TransformSchemasDoFn] get_nested_value:  Get Value :{data.get(path.split('.')[0]) if isinstance(data, dict) else 'N/A'}")
 
             sub_data = data
             for key in path.split('.'):
-                LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  Current sub_data before key '{key}': {sub_data}")
+                LOGGER.debug(f"[TransformSchemasDoFn] get_nested_value:  Current sub_data before key '{key}': {sub_data}")
                 if isinstance(sub_data, str):
-                    # Use json.loads instead of ast.literal_eval because data comes from json.dumps()
-                    # json.loads handles JSON format (true/false/null) correctly
+                    # sub_data = ast.literal_eval(sub_data)
                     sub_data = json.loads(sub_data)
 
                 if isinstance(sub_data, dict) and key in sub_data:
                     sub_data = sub_data.get(key)
-                    LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  sub_data after key '{key}': {sub_data}")
+                    LOGGER.debug(f"[TransformSchemasDoFn] get_nested_value:  sub_data after key '{key}': {sub_data}")
                 else:
-                    LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  Key '{key}' not found in {sub_data}")
+                    LOGGER.debug(f"[TransformSchemasDoFn] get_nested_value:  Key '{key}' not found in {sub_data}")
                     return None
-
+                
+            # value = reduce(operator.getitem, path.split('.'), data)
+            # LOGGER.debug(f"[TransformSchemasDoFn] get_nested_value:  value:{value}")
             return sub_data
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
             LOGGER.warning(f"[TransformSchemasDoFn] get_nested_value failed for path '{path}': {e}")
@@ -732,7 +737,7 @@ class TransformSchemasDoFn(DoFn):
         if logic is None:
             return None
         func = SQL_FUNCTION_MAPPING.get(logic.upper().strip())
-        # LOGGER.info(f"[TransformSchemasDoFn] sql_function: logic={logic}, func={func}")
+        # LOGGER.debug(f"[TransformSchemasDoFn] sql_function: logic={logic}, func={func}")
         if func:
             return func()
         return None
@@ -760,14 +765,14 @@ class TransformSchemasDoFn(DoFn):
         """
         result = {}
 
-        LOGGER.info(f"[TransformSchemasDoFn] transform_message : Check_param : message_dict: {message_dict} , target: {target} , table_name: {table_name} , mapping_dict: {mapping_dict} ")
-        # LOGGER.info(f"[TransformSchemasDoFn] transform_message called with target={target}, table_name={table_name} ,mapping_dict:{mapping_dict}")
-        # LOGGER.info(f"[TransformSchemasDoFn] type mapping_dict['{table_name}']: {type(mapping_dict.get(table_name, {}))}")
-        # LOGGER.info(f"[TransformSchemasDoFn] values mapping_dict['{table_name}']: {mapping_dict.get(table_name, {})}")
-        LOGGER.info(f"[TransformSchemasDoFn] values mapping_dict['{table_name}']['{target}']: {mapping_dict.get(table_name, {}).get(target, {})}")
+        LOGGER.debug(f"[TransformSchemasDoFn] transform_message : Check_param : message_dict: {message_dict} , target: {target} , table_name: {table_name} , mapping_dict: {mapping_dict} ")
+        # LOGGER.debug(f"[TransformSchemasDoFn] transform_message called with target={target}, table_name={table_name} ,mapping_dict:{mapping_dict}")
+        # LOGGER.debug(f"[TransformSchemasDoFn] type mapping_dict['{table_name}']: {type(mapping_dict.get(table_name, {}))}")
+        # LOGGER.debug(f"[TransformSchemasDoFn] values mapping_dict['{table_name}']: {mapping_dict.get(table_name, {})}")
+        LOGGER.debug(f"[TransformSchemasDoFn] values mapping_dict['{table_name}']['{target}']: {mapping_dict.get(table_name, {}).get(target, {})}")
 
         specific_mapping = mapping_dict.get(table_name, {}).get(target, {})
-        LOGGER.info(f"[TransformSchemasDoFn] message_dict: {message_dict} , mapping_dict : {mapping_dict} , specific_mapping : {specific_mapping}")
+        LOGGER.debug(f"[TransformSchemasDoFn] message_dict: {message_dict} , mapping_dict : {mapping_dict} , specific_mapping : {specific_mapping}")
 
         # if not specific_mapping:
         #     LOGGER.warning(f"[TransformSchemasDoFn] No mapping found for table={table_name}, target={target}")
@@ -776,13 +781,13 @@ class TransformSchemasDoFn(DoFn):
         #         LOGGER.warning(f"[TransformSchemasDoFn] Available targets for {table_name}: {list(mapping_dict[table_name].keys())}")
         #     return result
 
-        # LOGGER.info(f"[TransformSchemasDoFn] Found {len(specific_mapping)} fields in mapping")
+        # LOGGER.debug(f"[TransformSchemasDoFn] Found {len(specific_mapping)} fields in mapping")
 
         for new_key, mapping_info in specific_mapping.items():
             try:
                 # Handle both old format (string) and new format (dict)
-                # LOGGER.info(f"[TransformSchemasDoFn] mapping_info: {mapping_info}")
-                LOGGER.info(f"[TransformSchemasDoFn] new_key : {new_key} , mapping_info: {mapping_info}")
+                # LOGGER.debug(f"[TransformSchemasDoFn] mapping_info: {mapping_info}")
+                LOGGER.debug(f"[TransformSchemasDoFn] new_key : {new_key} , mapping_info: {mapping_info}")
 
                 if isinstance(mapping_info, str):
                     # OLD FORMAT: mapping_info is just the path/logic string (backward compatibility)
@@ -791,7 +796,7 @@ class TransformSchemasDoFn(DoFn):
                     else:
                         value = self.get_nested_value(message_dict, mapping_info)
                     result[new_key] = value
-                    LOGGER.info(f"[TransformSchemasDoFn] (old format) {new_key}={value}")
+                    LOGGER.debug(f"[TransformSchemasDoFn] (old format) {new_key}={value}")
                 else:
                     # NEW FORMAT: mapping_info is dict with type, value, data_type
                     # gcp_output = self.transform_message(element, mapping_dict, target='gcp', table_name=table_name)
@@ -803,24 +808,24 @@ class TransformSchemasDoFn(DoFn):
                     if mapping_type == 'logic':
                         # SQL function
                         raw_value = self.sql_function(mapping_value)
-                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: logic '{mapping_value}' -> {raw_value}")
+                        LOGGER.debug(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: logic '{mapping_value}' -> {raw_value}")
                     elif mapping_type == 'path':
                         # Extract from nested dict
                         raw_value = self.get_nested_value(message_dict, mapping_value)
-                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: path '{mapping_value}' -> {raw_value}")
+                        LOGGER.debug(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: path '{mapping_value}' -> {raw_value}")
                     elif mapping_type == 'constant':
                         # Fixed value
                         raw_value = mapping_value
-                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: constant -> {raw_value}")
+                        LOGGER.debug(f"[TransformSchemasDoFn] Get_Values_Newkey : {new_key}: constant -> {raw_value}")
                     else:
                         # Unknown type, treat as path
                         raw_value = self.get_nested_value(message_dict, mapping_value) if mapping_value else None
-                        LOGGER.info(f"[TransformSchemasDoFn] Get_Values_Newkey : Unknown mapping type '{mapping_type}' for {new_key}")
+                        LOGGER.debug(f"[TransformSchemasDoFn] Get_Values_Newkey : Unknown mapping type '{mapping_type}' for {new_key}")
 
                     # Convert to target data type
                     if raw_value is not None and data_type:
                         try:
-                            LOGGER.info(f"[TransformSchemasDoFn] Convert Data Type: '{raw_value}' for {data_type}")
+                            LOGGER.debug(f"[TransformSchemasDoFn] Convert Data Type: '{raw_value}' for {data_type}")
                             converted_value = convert_value_to_type(raw_value, data_type)
                             result[new_key] = converted_value
                         except ValueError as e:
@@ -833,8 +838,8 @@ class TransformSchemasDoFn(DoFn):
                 LOGGER.error(f"[TransformSchemasDoFn] Error processing field {new_key}: {e}")
                 raise  # Re-raise error as user requested
 
-        # LOGGER.info(f"[TransformSchemasDoFn] Transformed {len(result)} fields")
-        LOGGER.info(f"[TransformSchemasDoFn] result: {result}")
+        # LOGGER.debug(f"[TransformSchemasDoFn] Transformed {len(result)} fields")
+        LOGGER.debug(f"[TransformSchemasDoFn] result: {result}")
         return result
 
     def process(self, element, mapping_info, table_name: str = 'ms_member'):
@@ -949,6 +954,19 @@ class WriteToBigLakeDoFn(DoFn):
         Yields:
             Prepared record
         """
+        # Skip None or empty elements
+        if element is None:
+            LOGGER.warning("[WriteToBigLakeDoFn] Skipping None element")
+            return
+
+        if not isinstance(element, dict):
+            LOGGER.warning(f"[WriteToBigLakeDoFn] Skipping non-dict element: {type(element)}")
+            return
+
+        if not element:
+            LOGGER.warning("[WriteToBigLakeDoFn] Skipping empty dict element")
+            return
+
         output = {}
         for key, value in element.items():
             
