@@ -693,13 +693,44 @@ class WriteToBigQueryCDCStep(BaseStep):
         cdc_formatted = (
             pcoll
             | f"{self.step_id}_MapToCDCFormat" >> beam.ParDo(
-                MapToCdcTableRowDoFn(default_change_type=change_type,record_fields=record_fields)
+                MapToCdcTableRowDoFn(default_change_type=change_type, record_fields=record_fields)
             )
+        )
+
+        # Step 1.5: CRITICAL - Filter out any invalid CDC rows to prevent null row_mutation_info errors
+        step_id = self.step_id  # Capture for closure
+
+        def is_valid_cdc_row(element):
+            """Validate CDC row has required structure."""
+            if element is None:
+                LOGGER.warning(f"[{step_id}] Filtering out None element")
+                return False
+            if not isinstance(element, dict):
+                LOGGER.warning(f"[{step_id}] Filtering out non-dict element: {type(element)}")
+                return False
+            if 'row_mutation_info' not in element or element['row_mutation_info'] is None:
+                LOGGER.error(f"[{step_id}] Filtering out element with missing/null row_mutation_info: {element}")
+                return False
+            rmi = element['row_mutation_info']
+            if not isinstance(rmi, dict):
+                LOGGER.error(f"[{step_id}] Filtering out element with invalid row_mutation_info type: {type(rmi)}")
+                return False
+            if 'mutation_type' not in rmi or rmi['mutation_type'] is None:
+                LOGGER.error(f"[{step_id}] Filtering out element with missing/null mutation_type")
+                return False
+            if 'change_sequence_number' not in rmi or rmi['change_sequence_number'] is None:
+                LOGGER.error(f"[{step_id}] Filtering out element with missing/null change_sequence_number")
+                return False
+            return True
+
+        cdc_validated = (
+            cdc_formatted
+            | f"{self.step_id}_ValidateCDC" >> beam.Filter(is_valid_cdc_row)
         )
 
         # Step 2: Write to BigQuery using Storage Write API with CDC support
         result = (
-            cdc_formatted
+            cdc_validated
             | f"{self.step_id}_WriteBQCDC" >> bigquery.WriteToBigQuery(
                 table=table,
                 schema=cdc_schema,

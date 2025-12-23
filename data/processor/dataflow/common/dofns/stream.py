@@ -1066,64 +1066,84 @@ class MapToCdcTableRowDoFn(beam.DoFn):
             LOGGER.warning("[MapToCdcTableRowDoFn] Skipping empty dict element")
             return
 
+        try:
+            # Get CDC operation type from element or use default
+            cdc_type = element.get('_CHANGE_TYPE', self.default_change_type)
+            is_delete = element.get('is_delete', False)
 
-        # Get CDC operation type from element or use default
-        cdc_type = element.get('_CHANGE_TYPE', self.default_change_type)
-        is_delete = element.get('is_delete', False)
-        
-        # Determine mutation type
-        if is_delete:
-            mutation_type = 'DELETE'
-        elif cdc_type == 'DELETE':
-            mutation_type = 'DELETE'
-        else:
-            mutation_type = 'UPSERT'  # INSERT or UPDATE both use UPSERT
-        
-        # Generate sequence number (timestamp-based for ordering)
-        # Use updated_date if available, otherwise current time
-        if element.get('updated_date'):
-            if isinstance(element['updated_date'], datetime):
-                seq_num = str(int(element['updated_date'].timestamp() * 1000000))
+            # Determine mutation type
+            if is_delete:
+                mutation_type = 'DELETE'
+            elif cdc_type == 'DELETE':
+                mutation_type = 'DELETE'
+            else:
+                mutation_type = 'UPSERT'  # INSERT or UPDATE both use UPSERT
+
+            # Generate sequence number (timestamp-based for ordering)
+            # Use updated_date if available, otherwise current time
+            if element.get('updated_date'):
+                if isinstance(element['updated_date'], datetime):
+                    seq_num = str(int(element['updated_date'].timestamp() * 1000000))
+                else:
+                    seq_num = str(int(time.time() * 1000000))
             else:
                 seq_num = str(int(time.time() * 1000000))
-        else:
-            seq_num = str(int(time.time() * 1000000))
-        
-        # Clean up internal fields from record
-        record = dict(element)
-        record.pop('cdc_type', None)
-        record.pop('is_delete', None)
-        record.pop('_CHANGE_TYPE', None)
-        record.pop('_CHANGE_SEQUENCE_NUMBER', None)
-        
-        # Fill missing fields from table schema with None to prevent schema mismatch
-        for field in self.record_fields or []:
-            field_name = field['name'] if isinstance(field, dict) else field.name
-            if field_name not in record:
-                record[field_name] = None
 
-        # Convert date fields to proper format if needed
-        if record.get('dateOfBirth'):
-            try:
-                if isinstance(record['dateOfBirth'], str):
-                    dt = datetime.strptime(record['dateOfBirth'], '%Y-%m-%d').date()
-                    record['dateOfBirth'] = dt.isoformat()
-            except:
-                pass
-        # Sanitize record values to prevent serialization errors (NaN, Inf, etc.)
-        record = self._sanitize_record(record)
-        # Format for CDC API: must have "row_mutation_info" and "record" fields
-        cdc_row = {
-            'row_mutation_info': {
-                'mutation_type': mutation_type,
-                'change_sequence_number': seq_num
-            },
-            'record': record
-        }
-        
-        LOGGER.info(f"MapToCdcTableRowDoFn output: mutation_type={mutation_type}, seq={seq_num}")
-        LOGGER.info(f"MapToCdcTableRowDoFn output: cdc_row={cdc_row}")
-        yield cdc_row
+            # Clean up internal fields from record
+            record = dict(element)
+            record.pop('cdc_type', None)
+            record.pop('is_delete', None)
+            record.pop('_CHANGE_TYPE', None)
+            record.pop('_CHANGE_SEQUENCE_NUMBER', None)
+
+            # Fill missing fields from table schema with None to prevent schema mismatch
+            for field in self.record_fields or []:
+                field_name = field['name'] if isinstance(field, dict) else field.name
+                if field_name not in record:
+                    record[field_name] = None
+
+            # Convert date fields to proper format if needed
+            if record.get('dateOfBirth'):
+                try:
+                    if isinstance(record['dateOfBirth'], str):
+                        dt = datetime.strptime(record['dateOfBirth'], '%Y-%m-%d').date()
+                        record['dateOfBirth'] = dt.isoformat()
+                except:
+                    pass
+
+            # Sanitize record values to prevent serialization errors (NaN, Inf, etc.)
+            record = self._sanitize_record(record)
+
+            # Format for CDC API: must have "row_mutation_info" and "record" fields
+            cdc_row = {
+                'row_mutation_info': {
+                    'mutation_type': mutation_type,
+                    'change_sequence_number': seq_num
+                },
+                'record': record
+            }
+
+            # CRITICAL: Final validation before yield - ensure row_mutation_info is not None
+            if cdc_row.get('row_mutation_info') is None:
+                LOGGER.error(f"[MapToCdcTableRowDoFn] CRITICAL: row_mutation_info is None! element={element}")
+                return
+
+            if cdc_row['row_mutation_info'].get('mutation_type') is None:
+                LOGGER.error(f"[MapToCdcTableRowDoFn] CRITICAL: mutation_type is None! element={element}")
+                return
+
+            if cdc_row['row_mutation_info'].get('change_sequence_number') is None:
+                LOGGER.error(f"[MapToCdcTableRowDoFn] CRITICAL: change_sequence_number is None! element={element}")
+                return
+
+            LOGGER.debug(f"MapToCdcTableRowDoFn output: mutation_type={mutation_type}, seq={seq_num}")
+            yield cdc_row
+
+        except Exception as e:
+            LOGGER.error(f"[MapToCdcTableRowDoFn] Exception processing element: {e}")
+            LOGGER.error(f"[MapToCdcTableRowDoFn] Problematic element: {element}")
+            # Do NOT yield anything - skip this element to prevent null row_mutation_info
+            return
 
 
 
