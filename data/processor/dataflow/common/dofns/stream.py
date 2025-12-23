@@ -15,6 +15,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 import time
 import uuid
+import ast
 
 from functools import reduce
 from typing import Any, Dict, List, Optional
@@ -39,7 +40,9 @@ TZ_BANGKOK = timezone(timedelta(hours=7))
 # Returns string format for all types (BigQuery compatible)
 SQL_FUNCTION_MAPPING = {
     'CURRENT_DATE()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d'),
-    'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+    # 'CURRENT_DATETIME()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+    # 'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).isoformat(), # datetime object format %Y-%m-%d %H:%M:%S.%f+00:00
+    'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f UTC"), # BQ timestamp format
     'NOW()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
     'UUID()': lambda: str(uuid.uuid4()),
 }
@@ -586,8 +589,13 @@ class FilterEmptyPKDoFn(DoFn):
             Element if memberId is valid
         """
         try:
-            LOGGER.info(f"[FilterEmptyPKDoFn] element: {element}")
+            LOGGER.info(f"[FilterEmptyPKDoFn] element: {element} , type: {type(element)} ")
+            if not isinstance(element, dict):
+                element = json.loads(element)
+
             profiles = element.get('profiles', {})
+            if not isinstance(profiles, dict):
+                profiles = json.loads(profiles)
             member_id = profiles.get('memberId')
 
             if member_id and str(member_id).strip():
@@ -676,8 +684,25 @@ class TransformSchemasDoFn(DoFn):
             Value at path or None
         """
         try:
-            LOGGER.info(f"[TransformSchemasDoFn] get_nested_value: data={data}, path={path}")
-            return reduce(operator.getitem, path.split('.'), data)
+            LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  path:{path}, type={type(data)}, data={data}")
+            # LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  Get Value :{data.get(path.split('.')[0]) if isinstance(data, dict) else 'N/A'}")
+
+            sub_data = data
+            for key in path.split('.'):
+                LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  Current sub_data before key '{key}': {sub_data}")
+                if isinstance(sub_data, str):
+                    sub_data = ast.literal_eval(sub_data)
+
+                if isinstance(sub_data, dict) and key in sub_data:
+                    sub_data = sub_data.get(key)
+                    LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  sub_data after key '{key}': {sub_data}")
+                else:
+                    LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  Key '{key}' not found in {sub_data}")
+                    return None
+                
+            # value = reduce(operator.getitem, path.split('.'), data)
+            # LOGGER.info(f"[TransformSchemasDoFn] get_nested_value:  value:{value}")
+            return sub_data
         except (KeyError, TypeError):
             return None
 
@@ -896,6 +921,25 @@ class WriteToBigLakeDoFn(DoFn):
         LOGGER.info(f"[WriteToBigLakeDoFn] Initialized for table: {table_name}")
         self.table_name = table_name
 
+    def _sanitize_value(self, value):
+        """
+        Sanitize a value for BigQuery serialization.
+        Handles edge cases that can cause serialization failures:
+        - NaN/Inf float values -> None
+        """
+        import math
+
+        if value is None:
+            return None
+
+        # Handle float NaN and Inf
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                LOGGER.warning(f"[WriteToBigLakeDoFn] Sanitizing invalid float value: {value}")
+                return None
+            return value
+
+        return value
     def process(self, element):
         """
         Prepare element for BigLake write.
@@ -914,6 +958,9 @@ class WriteToBigLakeDoFn(DoFn):
                 output[key] = None
             elif isinstance(value, dict):
                 output[key] = json.dumps(value,ensure_ascii=False)
+            elif isinstance(value, float):
+                # Sanitize float values (NaN, Inf)
+                output[key] = self._sanitize_value(value)
             else:
                 output[key] = value
         LOGGER.info(f"[WriteToBigLakeDoFn] output: {output}")
@@ -940,8 +987,68 @@ class MapToCdcTableRowDoFn(beam.DoFn):
     def __init__(self, default_change_type: str = "UPSERT"):
         LOGGER.info(f"[MapToCdcTableRowDoFn] Initialized with default_change_type: {default_change_type}")
         self.default_change_type = default_change_type
+
+    def _sanitize_value(self, value):
+        """
+        Sanitize a value for BigQuery serialization.
+        Handles edge cases that can cause serialization failures:
+        - NaN/Inf float values -> None
+        - Non-serializable objects -> string representation
+        """
+        import math
+
+        if value is None:
+            return None
+
+        # Handle float NaN and Inf
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                LOGGER.warning(f"[MapToCdcTableRowDoFn] Sanitizing invalid float value: {value}")
+                return None
+            return value
+
+        # Handle nested dicts
+        if isinstance(value, dict):
+            return {k: self._sanitize_value(v) for k, v in value.items()}
+
+        # Handle lists
+        if isinstance(value, list):
+            return [self._sanitize_value(v) for v in value]
+
+        # Handle other serializable types
+        if isinstance(value, (str, int, bool)):
+            return value
+
+        # For any other type, convert to string to ensure serializability
+        try:
+            return str(value)
+        except Exception:
+            LOGGER.warning(f"[MapToCdcTableRowDoFn] Could not serialize value of type {type(value)}, using None")
+            return None
+
+    def _sanitize_record(self, record: dict) -> dict:
+        """
+        Sanitize all values in a record dict for BigQuery serialization.
+        """
+        if not record:
+            return record
+        return {k: self._sanitize_value(v) for k, v in record.items()}
     
     def process(self, element):
+        # Skip None or empty elements - these would cause null row_mutation_info errors
+        if element is None:
+            LOGGER.warning("[MapToCdcTableRowDoFn] Skipping None element")
+            return
+
+        if not isinstance(element, dict):
+            LOGGER.warning(f"[MapToCdcTableRowDoFn] Skipping non-dict element: {type(element)}")
+            return
+
+        if not element:
+            LOGGER.warning("[MapToCdcTableRowDoFn] Skipping empty dict element")
+            return
+
+
         # Get CDC operation type from element or use default
         cdc_type = element.get('_CHANGE_TYPE', self.default_change_type)
         is_delete = element.get('is_delete', False)
@@ -979,7 +1086,8 @@ class MapToCdcTableRowDoFn(beam.DoFn):
                     record['dateOfBirth'] = dt.isoformat()
             except:
                 pass
-        
+        # Sanitize record values to prevent serialization errors (NaN, Inf, etc.)
+        record = self._sanitize_record(record)
         # Format for CDC API: must have "row_mutation_info" and "record" fields
         cdc_row = {
             'row_mutation_info': {
