@@ -653,7 +653,7 @@ class WriteToBigQueryCDCStep(BaseStep):
         num_storage_api_streams = params.get("num_storage_api_streams", 5)
         schema_param = params.get("schema")
         dlq_table = params.get("dlq_table")  # DLQ table path
-        pipeline_name = params.get("pipeline_name", self.config.get("pipeline_name", "unknown"))
+        pipeline_name = params.get("pipeline_name") or getattr(self.config, 'pipeline_name', 'unknown')
 
         LOGGER.info(f"[{self.step_id}] params: {params}")
         LOGGER.info(f"[{self.step_id}] input_key: {input_key}")
