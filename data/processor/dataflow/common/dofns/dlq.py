@@ -269,3 +269,10 @@ class WriteDLQToBigQuery(beam.PTransform):
                 create_disposition=beam.io.BigQueryDisposition.CREATE_NEVER,
             )
         )
+
+__all__ = [
+    'create_dlq_record',
+    'DLQOutputMixin',
+    'apply_with_dlq',
+    'SyncToIcebergDoFn',
+]

@@ -30,6 +30,13 @@ from dataflow_common.dofns.stream import (
     # WriteParquetWithBeamFSDoFn,
 )
 
+from dataflow_common.dofns.dlq import (
+    create_dlq_record,
+    DLQOutputMixin,
+    apply_with_dlq,
+    SyncToIcebergDoFn,
+)
+
 # =============================================================================
 # COMMON DoFns (shared between batch and streaming)
 # =============================================================================
@@ -58,4 +65,9 @@ __all__ = [
     # 'AddWindowPathDoFn',
     # 'WriteParquetWithBeamFSDoFn',
     # Common DoFns (add here as they are created)
+    'create_dlq_record',
+    'DLQOutputMixin',
+    'apply_with_dlq',
+    'SyncToIcebergDoFn',
+
 ]
