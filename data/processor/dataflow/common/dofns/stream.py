@@ -28,7 +28,10 @@ import pyarrow.parquet as pq
 import apache_beam as beam
 from apache_beam import DoFn
 from apache_beam.io.filesystems import FileSystems
+from apache_beam.pvalue import TaggedOutput
 from google.cloud import bigtable, bigquery
+
+from dataflow_common.dofns.dlq import DLQOutputMixin, SUCCESS_TAG, DLQ_TAG
 
 
 LOGGER = logging.getLogger(__name__)
@@ -985,10 +988,10 @@ class WriteToBigLakeDoFn(DoFn):
         yield output
 
 
-class MapToCdcTableRowDoFn(beam.DoFn):
+class MapToCdcTableRowDoFn(DLQOutputMixin, beam.DoFn):
     """
     Format data for BigQuery CDC write using Storage Write API.
-    
+
     This DoFn wraps data in the required CDC format:
     {
         "row_mutation_info": {
@@ -997,14 +1000,26 @@ class MapToCdcTableRowDoFn(beam.DoFn):
         },
         "record": { actual data fields }
     }
-    
+
     This is required when use_cdc_writes=True in WriteToBigQuery.
+
+    Supports DLQ (Dead Letter Queue) via DLQOutputMixin:
+    - Success records: yield self.success(cdc_row)
+    - Failed records: yield self.to_dlq(element, error, step_name)
+
+    Use with apply_with_dlq() to get separate success/dlq PCollections.
     """
-    
-    def __init__(self, default_change_type: str = "UPSERT", record_fields: Optional[List[dict]] = None):
+
+    def __init__(
+        self,
+        default_change_type: str = "UPSERT",
+        record_fields: Optional[List[dict]] = None,
+        pipeline_name: str = "unknown"
+    ):
         LOGGER.info(f"[MapToCdcTableRowDoFn] Initialized with default_change_type: {default_change_type}")
         self.default_change_type = default_change_type
         self.record_fields = record_fields
+        self.pipeline_name = pipeline_name  # Required for DLQOutputMixin
 
     def _sanitize_value(self, value):
         """
@@ -1053,17 +1068,20 @@ class MapToCdcTableRowDoFn(beam.DoFn):
         return {k: self._sanitize_value(v) for k, v in record.items()}
     
     def process(self, element):
-        # Skip None or empty elements - these would cause null row_mutation_info errors
+        # Skip None or empty elements - send to DLQ
         if element is None:
-            LOGGER.warning("[MapToCdcTableRowDoFn] Skipping None element")
+            LOGGER.warning("[MapToCdcTableRowDoFn] Element is None, sending to DLQ")
+            yield self.to_dlq(element, ValueError("Element is None"), 'MapToCdcTableRowDoFn')
             return
 
         if not isinstance(element, dict):
-            LOGGER.warning(f"[MapToCdcTableRowDoFn] Skipping non-dict element: {type(element)}")
+            LOGGER.warning(f"[MapToCdcTableRowDoFn] Element is not dict: {type(element)}, sending to DLQ")
+            yield self.to_dlq(element, TypeError(f"Element is not dict: {type(element)}"), 'MapToCdcTableRowDoFn')
             return
 
         if not element:
-            LOGGER.warning("[MapToCdcTableRowDoFn] Skipping empty dict element")
+            LOGGER.warning("[MapToCdcTableRowDoFn] Element is empty dict, sending to DLQ")
+            yield self.to_dlq(element, ValueError("Element is empty dict"), 'MapToCdcTableRowDoFn')
             return
 
         try:
@@ -1123,27 +1141,25 @@ class MapToCdcTableRowDoFn(beam.DoFn):
                 'record': record
             }
 
-            # CRITICAL: Final validation before yield - ensure row_mutation_info is not None
+            # CRITICAL: Final validation before yield - send invalid records to DLQ
             if cdc_row.get('row_mutation_info') is None:
-                LOGGER.error(f"[MapToCdcTableRowDoFn] CRITICAL: row_mutation_info is None! element={element}")
+                yield self.to_dlq(element, ValueError("row_mutation_info is None"), 'MapToCdcTableRowDoFn')
                 return
 
             if cdc_row['row_mutation_info'].get('mutation_type') is None:
-                LOGGER.error(f"[MapToCdcTableRowDoFn] CRITICAL: mutation_type is None! element={element}")
+                yield self.to_dlq(element, ValueError("mutation_type is None"), 'MapToCdcTableRowDoFn')
                 return
 
             if cdc_row['row_mutation_info'].get('change_sequence_number') is None:
-                LOGGER.error(f"[MapToCdcTableRowDoFn] CRITICAL: change_sequence_number is None! element={element}")
+                yield self.to_dlq(element, ValueError("change_sequence_number is None"), 'MapToCdcTableRowDoFn')
                 return
 
             LOGGER.debug(f"MapToCdcTableRowDoFn output: mutation_type={mutation_type}, seq={seq_num}")
-            yield cdc_row
+            yield self.success(cdc_row)
 
         except Exception as e:
             LOGGER.error(f"[MapToCdcTableRowDoFn] Exception processing element: {e}")
-            LOGGER.error(f"[MapToCdcTableRowDoFn] Problematic element: {element}")
-            # Do NOT yield anything - skip this element to prevent null row_mutation_info
-            return
+            yield self.to_dlq(element, e, 'MapToCdcTableRowDoFn')
 
 
 

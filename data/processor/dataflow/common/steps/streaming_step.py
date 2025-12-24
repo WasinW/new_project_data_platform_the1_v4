@@ -41,6 +41,12 @@ from dataflow_common.dofns.stream import (
     build_cdc_schema,
     build_pyarrow_schema_from_config,
 )
+from dataflow_common.dofns.dlq import (
+    apply_with_dlq,
+    WriteDLQToBigQuery,
+    SUCCESS_TAG,
+    DLQ_TAG,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -588,17 +594,17 @@ class WriteToS3ParquetStep(BaseStep):
 class WriteToBigQueryCDCStep(BaseStep):
     """
     Write to Native BigQuery table with CDC support using Storage Write API.
-    
+
     This step supports TRUE CDC UPSERT using Beam's use_cdc_writes parameter
     (available in Beam 2.69.0+).
-    
+
     Architecture:
         Native table support Beam write with Storage Write API CDC.
-        
+
         Options:
         1. native > biglake: write to native table with CDC, merge to BigLake Iceberg
         2. native only: write to native table with CDC support
-    
+
     Config params:
         table: BigQuery table path (project.dataset.table)
         input: Input PCollection name from state
@@ -607,12 +613,19 @@ class WriteToBigQueryCDCStep(BaseStep):
         triggering_frequency: Seconds between commits (default: 5)
         num_storage_api_streams: Number of parallel streams (default: 5)
         schema: (Optional) BigQuery schema - if not provided, will fetch from table
-    
+        dlq_table: (Optional) DLQ table path for failed records (project.dataset.table)
+        pipeline_name: (Optional) Pipeline name for DLQ tracking
+
     CDC Requirements:
         - Table must exist beforehand
         - Records will be wrapped in {row_mutation_info, record} format
         - Uses Storage Write API with use_cdc_writes=True
-        
+
+    DLQ Support:
+        - Failed records are sent to DLQ table instead of being dropped
+        - DLQ records include error context for debugging
+        - Returns {'success': pcoll, 'dlq': pcoll} if dlq_table is configured
+
     Example config:
         - step: WriteToBigQueryCDC
           id: write_bq_cdc
@@ -623,6 +636,8 @@ class WriteToBigQueryCDCStep(BaseStep):
             change_type: "UPSERT"
             triggering_frequency: 5
             num_storage_api_streams: 5
+            dlq_table: "{io.bq.project}.{io.bq.dataset}.pipeline_dlq"
+            pipeline_name: "customer-profile-realtime"
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
@@ -637,9 +652,12 @@ class WriteToBigQueryCDCStep(BaseStep):
         triggering_frequency = params.get("triggering_frequency", 5)
         num_storage_api_streams = params.get("num_storage_api_streams", 5)
         schema_param = params.get("schema")
+        dlq_table = params.get("dlq_table")  # DLQ table path
+        pipeline_name = params.get("pipeline_name", self.config.get("pipeline_name", "unknown"))
 
         LOGGER.info(f"[{self.step_id}] params: {params}")
         LOGGER.info(f"[{self.step_id}] input_key: {input_key}")
+        LOGGER.info(f"[{self.step_id}] DLQ enabled: {dlq_table is not None}")
 
         # Get schema from table if not provided
         if not schema_param:
@@ -661,22 +679,23 @@ class WriteToBigQueryCDCStep(BaseStep):
                     }
                     for field in bq_schema
                 ]
-                
+
                 # Build CDC schema with wrapper
                 cdc_schema = build_cdc_schema(record_fields)
-                
+
                 LOGGER.info(f"[{self.step_id}] Schema fetched: {len(bq_schema)} fields")
 
                 # Log type conversions
                 converted = [f.name for f in bq_schema if f.field_type in unsupported_types]
                 if converted:
                     LOGGER.warning(f"[{self.step_id}] Converted DATE/TIME/DATETIME -> STRING: {converted}")
-                    
+
             except Exception as e:
                 LOGGER.error(f"[{self.step_id}] Failed to fetch schema: {e}")
                 raise ValueError(f"Could not fetch schema from table {table}. Please provide schema in config.")
         else:
             # If schema provided, wrap it in CDC format
+            record_fields = None  # Not needed when schema is provided
             if isinstance(schema_param, dict) and 'fields' in schema_param:
                 # Check if already CDC format
                 field_names = [f['name'] for f in schema_param['fields']]
@@ -689,48 +708,23 @@ class WriteToBigQueryCDCStep(BaseStep):
 
         pcoll = self.state[input_key]
 
-        # Step 1: Format data for CDC (wrap in {row_mutation_info, record})
-        cdc_formatted = (
-            pcoll
-            | f"{self.step_id}_MapToCDCFormat" >> beam.ParDo(
-                MapToCdcTableRowDoFn(default_change_type=change_type, record_fields=record_fields)
-            )
+        # Step 1: Format data for CDC with DLQ support
+        cdc_do_fn = MapToCdcTableRowDoFn(
+            default_change_type=change_type,
+            record_fields=record_fields,
+            pipeline_name=pipeline_name
         )
 
-        # Step 1.5: CRITICAL - Filter out any invalid CDC rows to prevent null row_mutation_info errors
-        step_id = self.step_id  # Capture for closure
-
-        def is_valid_cdc_row(element):
-            """Validate CDC row has required structure."""
-            if element is None:
-                LOGGER.warning(f"[{step_id}] Filtering out None element")
-                return False
-            if not isinstance(element, dict):
-                LOGGER.warning(f"[{step_id}] Filtering out non-dict element: {type(element)}")
-                return False
-            if 'row_mutation_info' not in element or element['row_mutation_info'] is None:
-                LOGGER.error(f"[{step_id}] Filtering out element with missing/null row_mutation_info: {element}")
-                return False
-            rmi = element['row_mutation_info']
-            if not isinstance(rmi, dict):
-                LOGGER.error(f"[{step_id}] Filtering out element with invalid row_mutation_info type: {type(rmi)}")
-                return False
-            if 'mutation_type' not in rmi or rmi['mutation_type'] is None:
-                LOGGER.error(f"[{step_id}] Filtering out element with missing/null mutation_type")
-                return False
-            if 'change_sequence_number' not in rmi or rmi['change_sequence_number'] is None:
-                LOGGER.error(f"[{step_id}] Filtering out element with missing/null change_sequence_number")
-                return False
-            return True
-
-        cdc_validated = (
-            cdc_formatted
-            | f"{self.step_id}_ValidateCDC" >> beam.Filter(is_valid_cdc_row)
+        # Use apply_with_dlq to get both success and DLQ outputs
+        cdc_success, cdc_dlq = apply_with_dlq(
+            pcoll,
+            cdc_do_fn,
+            step_name=f"{self.step_id}_MapToCDCFormat"
         )
 
-        # Step 2: Write to BigQuery using Storage Write API with CDC support
+        # Step 2: Write success records to BigQuery using Storage Write API with CDC support
         result = (
-            cdc_validated
+            cdc_success
             | f"{self.step_id}_WriteBQCDC" >> bigquery.WriteToBigQuery(
                 table=table,
                 schema=cdc_schema,
@@ -749,7 +743,19 @@ class WriteToBigQueryCDCStep(BaseStep):
             )
         )
 
+        # Step 3: Write DLQ records to DLQ table if configured
+        if dlq_table:
+            LOGGER.info(f"[{self.step_id}] Writing DLQ to: {dlq_table}")
+            cdc_dlq | f"{self.step_id}_WriteDLQ" >> WriteDLQToBigQuery(
+                table=dlq_table,
+                pipeline_name=pipeline_name
+            )
+
         LOGGER.info(f"[{self.step_id}] BigQuery CDC write configured with UPSERT support")
+
+        # Return both success and dlq for orchestrator to track
+        if dlq_table:
+            return {'success': result, 'dlq': cdc_dlq}
         return result
     
 class WriteToBigLakeIcebergStreamingStep(BaseStep):
