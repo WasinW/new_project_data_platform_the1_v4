@@ -214,7 +214,7 @@ def apply_with_dlq(
     results = (
         pcoll
         | f'{step_name}_Process' >> beam.ParDo(do_fn)
-            .with_outputs(DLQ_TAG, main=SUCCESS_TAG)
+            .with_outputs(SUCCESS_TAG, DLQ_TAG)
     )
 
     return results[SUCCESS_TAG], results[DLQ_TAG]
