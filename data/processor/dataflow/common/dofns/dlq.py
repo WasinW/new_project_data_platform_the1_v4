@@ -271,8 +271,10 @@ class WriteDLQToBigQuery(beam.PTransform):
         )
 
 __all__ = [
+    'SUCCESS_TAG',
+    'DLQ_TAG',
     'create_dlq_record',
     'DLQOutputMixin',
     'apply_with_dlq',
-    'SyncToIcebergDoFn',
+    'WriteDLQToBigQuery',
 ]

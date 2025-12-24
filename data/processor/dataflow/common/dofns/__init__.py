@@ -31,10 +31,12 @@ from dataflow_common.dofns.stream import (
 )
 
 from dataflow_common.dofns.dlq import (
+    SUCCESS_TAG,
+    DLQ_TAG,
     create_dlq_record,
     DLQOutputMixin,
     apply_with_dlq,
-    SyncToIcebergDoFn,
+    WriteDLQToBigQuery,
 )
 
 # =============================================================================
@@ -64,10 +66,11 @@ __all__ = [
     # 'AddCDCMetadataDoFn',
     # 'AddWindowPathDoFn',
     # 'WriteParquetWithBeamFSDoFn',
-    # Common DoFns (add here as they are created)
+    # DLQ DoFns
+    'SUCCESS_TAG',
+    'DLQ_TAG',
     'create_dlq_record',
     'DLQOutputMixin',
     'apply_with_dlq',
-    'SyncToIcebergDoFn',
-
+    'WriteDLQToBigQuery',
 ]
