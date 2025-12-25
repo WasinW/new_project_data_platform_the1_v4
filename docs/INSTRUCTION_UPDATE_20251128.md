@@ -1010,27 +1010,20 @@ CREATE TABLE pipeline_dlq (
 │   │       │                   │                                      │   │
 │   │       │                   ▼                                      │   │
 │   │       │            ┌─────────────┐                              │   │
-│   │       └───────────►│orchestrator │  core.py, registry.py        │   │
-│   │                    │   .py       │  (build steps from YAML)     │   │
+│   │       └───────────►│orchestrator │  registry.py                 │   │
+│   │                    │   .py       │  (lookup step by name)       │   │
 │   │                    └──────┬──────┘                              │   │
 │   │                           │                                      │   │
 │   │                           ▼                                      │   │
 │   │                    ┌─────────────┐                              │   │
-│   │                    │   Steps     │  batch_step.py               │   │
-│   │                    │  (wrappers) │  streaming_step.py           │   │
-│   │                    └──────┬──────┘                              │   │
-│   │                           │                                      │   │
-│   │                           ▼                                      │   │
-│   │                    ┌─────────────┐                              │   │
-│   │                    │   DoFns     │  dofns/stream.py             │   │
-│   │                    │ transforms/ │  transforms/, connectors/    │   │
+│   │                    │ Steps/DoFns │  steps/, dofns/              │   │
 │   │                    └─────────────┘                              │   │
 │   └─────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 │   Problems:                                                              │
 │   • 3 components to maintain (script + YAML + common)                   │
-│   • orchestrator.py, config.py, core.py add complexity                  │
-│   • Step wrappers add indirection layer                                 │
+│   • orchestrator.py, config.py add indirection                          │
+│   • YAML config requires registry lookup                                │
 │   • Debugging harder due to abstraction layers                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1039,38 +1032,42 @@ CREATE TABLE pipeline_dlq (
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        TARGET: Direct Script                             │
+│                        TARGET: Direct Import                             │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
-│   Airflow DAGs (optional - can trigger directly)                        │
+│   Airflow DAGs (optional)                                               │
 │        │                                                                 │
 │        ▼                                                                 │
 │   ┌─────────────────────────────────────────────────────────────────┐   │
 │   │  Dataflow Script  +  Dataflow Common                             │   │
 │   │  (scripts/*.py)       (common/)                                  │   │
 │   │       │                   │                                      │   │
-│   │       │    ┌──────────────┼──────────────┐                      │   │
-│   │       │    │              │              │                      │   │
-│   │       ▼    ▼              ▼              ▼                      │   │
-│   │   ┌─────────────┐  ┌───────────┐  ┌─────────────┐              │   │
-│   │   │   DoFns     │  │transforms/│  │ connectors/ │              │   │
-│   │   │dofns/stream │  │mapping.py │  │ bigtable.py │              │   │
-│   │   │   .py       │  │schema.py  │  │ pubsub.py   │              │   │
-│   │   └─────────────┘  └───────────┘  └─────────────┘              │   │
+│   │       │    ┌──────────────┴──────────────┐                      │   │
+│   │       │    │                             │                      │   │
+│   │       ▼    ▼                             ▼                      │   │
+│   │   ┌─────────────┐                 ┌─────────────┐              │   │
+│   │   │   Steps     │                 │   DoFns     │              │   │
+│   │   │  steps/     │                 │  dofns/     │              │   │
+│   │   │             │                 │             │              │   │
+│   │   │ • Import    │                 │ • Import    │              │   │
+│   │   │   directly  │                 │   directly  │              │   │
+│   │   │   in script │                 │   in script │              │   │
+│   │   └─────────────┘                 └─────────────┘              │   │
 │   │                                                                  │   │
 │   │   Script contains:                                               │   │
 │   │   • Pipeline configuration (hardcoded or argparse)              │   │
-│   │   • Schema definitions (PyArrow, BigQuery)                      │   │
-│   │   • Pipeline flow logic (direct Beam API)                       │   │
-│   │   • Import DoFns/transforms from dataflow_common                │   │
+│   │   • Schema definitions                                          │   │
+│   │   • Direct import: from dataflow_common.steps import ...        │   │
+│   │   • Direct import: from dataflow_common.dofns import ...        │   │
+│   │   • Pipeline flow using Beam API + imported Steps/DoFns        │   │
 │   └─────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 │   Benefits:                                                              │
 │   • Only 2 components (script + common modules)                         │
 │   • No YAML config parsing                                              │
 │   • No orchestrator/registry indirection                                │
+│   • Direct import - clear dependencies                                  │
 │   • Easier debugging - all logic visible in script                      │
-│   • Direct Beam API usage                                               │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1079,43 +1076,61 @@ CREATE TABLE pipeline_dlq (
 **Working Example:** `scripts/ms_member_realtime_pipeline_full_scripts.py`
 
 This script demonstrates the target pattern:
-- All configuration hardcoded in script
-- Direct import of DoFns: `from dataflow_common.dofns.stream import ...`
-- Direct Beam pipeline construction without orchestrator
-- Schema definitions in script
+- Configuration in script (hardcoded or argparse)
+- Direct import: `from dataflow_common.dofns.stream import ...`
+- Direct import: `from dataflow_common.steps import ...`
+- Pipeline flow using imported Steps/DoFns
 
 ### Files to Deprecate (After Refactoring)
 
 | File | Status | Reason |
 |------|--------|--------|
-| `orchestrator.py` | 🔴 Deprecate | No longer needed - logic moves to script |
-| `core.py` (BaseStep) | 🔴 Deprecate | Step wrapper pattern not needed |
+| `orchestrator.py` | 🔴 Deprecate | Script imports Steps/DoFns directly |
 | `config.py` | 🔴 Deprecate | No YAML config to load |
-| `registry.py` | 🔴 Deprecate | No step lookup needed |
-| `steps/batch_step.py` | 🔴 Deprecate | Step wrappers not needed |
-| `steps/streaming_step.py` | 🔴 Deprecate | Step wrappers not needed |
+| `registry.py` | 🔴 Deprecate | No step name lookup needed |
+| `core.py` | 🔴 Deprecate | BaseStep not needed when importing directly |
 | `configs/*.yaml` | 🔴 Deprecate | Config in script directly |
 
-### Files to Keep (Reusable Modules)
+### Files to Keep (Import Directly in Scripts)
 
 | File | Status | Usage |
 |------|--------|-------|
-| `dofns/stream.py` | ✅ Keep | Import DoFns directly in scripts |
-| `dofns/dlq.py` | ✅ Keep | DLQ support |
+| `steps/batch_step.py` | ✅ Keep | `from dataflow_common.steps import ReadBQQueryStep, ...` |
+| `steps/streaming_step.py` | ✅ Keep | `from dataflow_common.steps import WriteToBigQueryCDCStep, ...` |
+| `dofns/stream.py` | ✅ Keep | `from dataflow_common.dofns.stream import TransformSchemasDoFn, ...` |
+| `dofns/dlq.py` | ✅ Keep | `from dataflow_common.dofns.dlq import apply_with_dlq, ...` |
 | `dofns/common.py` | ✅ Keep | Common DoFn utilities |
-| `transforms/mapping.py` | ✅ Keep | Field mapping functions |
-| `transforms/schema.py` | ✅ Keep | Schema transformation |
-| `transforms/coalesce.py` | ✅ Keep | Value coalescing |
 | `connectors/bigtable.py` | ✅ Keep | BigTable connector |
 | `connectors/pubsub.py` | ✅ Keep | Pub/Sub connector |
 
+### Future Enhancement: Consolidate transforms/ → dofns/
+
+```
+CURRENT:                          FUTURE:
+├── dofns/                        ├── dofns/
+│   ├── stream.py                 │   ├── stream.py
+│   ├── dlq.py                    │   ├── dlq.py
+│   └── common.py                 │   ├── common.py
+├── transforms/          ──►      │   ├── mapping.py      (moved)
+│   ├── mapping.py                │   ├── schema.py       (moved)
+│   ├── schema.py                 │   └── coalesce.py     (moved)
+│   └── coalesce.py               │
+                                  └── (transforms/ removed)
+
+Benefits:
+• Single pattern: all processing logic in dofns/
+• Easier to understand module structure
+• Lean and consistent
+```
+
 ### Migration Steps
 
-1. **Phase 1**: Create new scripts following `full_scripts.py` pattern
+1. **Phase 1**: Create new scripts using direct import pattern
 2. **Phase 2**: Test new scripts in STG environment
 3. **Phase 3**: Update DAGs to use new scripts
-4. **Phase 4**: Deprecate old config-driven files
-5. **Phase 5**: Update unit tests for new pattern
+4. **Phase 4**: Remove orchestrator.py, config.py, registry.py, core.py
+5. **Phase 5**: Move transforms/ functions into dofns/
+6. **Phase 6**: Update unit tests for new pattern
 
 ### Example: New Script Pattern
 
@@ -1125,17 +1140,23 @@ This script demonstrates the target pattern:
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 
-# Import directly from dataflow_common modules
+# Direct import Steps from dataflow_common
+from dataflow_common.steps import (
+    ReadFromPubSubStep,
+    WriteToBigQueryCDCStep,
+    WriteToS3ParquetStep,
+)
+
+# Direct import DoFns from dataflow_common
 from dataflow_common.dofns.stream import (
     MappingRefreshDoFn,
     ExtractPersonasDoFn,
     FetchFromBigtableDoFn,
     TransformSchemasDoFn,
-    MapToCdcTableRowDoFn,
 )
 from dataflow_common.dofns.dlq import apply_with_dlq, WriteDLQToBigQuery
 
-# Configuration directly in script
+# Configuration directly in script (no YAML)
 PROJECT_ID = "the1-insight-stg"
 SUBSCRIPTION = f"projects/{PROJECT_ID}/subscriptions/..."
 NATIVE_TABLE = f"{PROJECT_ID}.insight.ms_personas"
@@ -1147,12 +1168,12 @@ def run_pipeline():
     options = PipelineOptions([...])
 
     with beam.Pipeline(options=options) as p:
-        # Direct Beam API - no orchestrator
+        # Use Steps and DoFns directly - no orchestrator
         messages = p | beam.io.ReadFromPubSub(subscription=SUBSCRIPTION)
 
         personas = messages | beam.ParDo(ExtractPersonasDoFn())
 
-        # ... rest of pipeline using direct Beam API
+        # ... rest of pipeline using imported Steps/DoFns
 
 if __name__ == '__main__':
     run_pipeline()
@@ -1168,7 +1189,7 @@ if __name__ == '__main__':
 | 2025-12-06 | 2.0 | Complete implementation, all steps working |
 | 2025-12-25 | 2.1 | Added critical BigQuery write patterns documentation |
 | 2025-12-25 | 2.2 | Added DLQ support documentation, updated step counts (10 batch, 15 streaming) |
-| 2025-12-25 | 2.3 | Added Section 13: Architecture Simplification TODO (refactoring plan) |
+| 2025-12-25 | 2.3 | Added Section 13: Architecture Simplification TODO (direct import pattern, transforms→dofns consolidation) |
 
 ---
 
