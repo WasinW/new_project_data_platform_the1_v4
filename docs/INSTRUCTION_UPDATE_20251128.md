@@ -714,16 +714,21 @@ data/processor/dataflow/common/
 │
 └── tests/
     └── testcase/
-        ├── test_config.py
-        ├── test_connectors.py
-        ├── test_steps.py
-        ├── test_transforms.py
-        └── test_orchestrator.py
+        ├── __init__.py
+        ├── test_config.py           # Config loading tests
+        ├── test_connectors.py       # BigQuery, Parquet connectors
+        ├── test_dofns.py            # DoFn class tests
+        ├── test_orchestrator.py     # Orchestrator tests
+        ├── test_steps.py            # Batch step tests
+        ├── test_streaming_steps.py  # Streaming step tests
+        ├── test_realtime_steps.py   # Realtime pipeline tests
+        ├── test_sql_functions.py    # SQL function tests
+        └── test_transforms.py       # Transform function tests
 ```
 
 ### ✅ Step Registry (Complete)
 
-**Batch Steps (11):**
+**Batch Steps (10):**
 | Step Name | Description |
 |-----------|-------------|
 | `ReadBQQuery` | Read from BigQuery SQL query |
@@ -735,10 +740,9 @@ data/processor/dataflow/common/
 | `CoalesceByMapping` | Coalesce new/old records |
 | `NormalizeToSchema` | Normalize to PyArrow schema |
 | `WriteParquet` | Write Parquet to S3/GCS |
-| `WriteToBigQuery` | Write to BigQuery table |
-| `WriteGCS` | Write text/JSON to GCS |
+| `RefreshMappingBatch` | Refresh mapping for batch (single trigger) |
 
-**Streaming Steps (13):**
+**Streaming Steps (15):**
 | Step Name | Description |
 |-----------|-------------|
 | `RefreshMappingTable` | Periodic mapping refresh from BQ |
@@ -747,13 +751,15 @@ data/processor/dataflow/common/
 | `FetchFromBigtable` | Fetch data from BigTable |
 | `FilterEmptyPK` | Filter records with empty primary key |
 | `FilterEmptyFamily` | Filter records with empty family |
+| `FilterNullField` | Filter records with null/empty field values |
 | `TransformSchemas` | Transform to AWS/GCP schemas (dual output) |
 | `FullfillSchemas` | Fill all schema fields |
 | `WriteToBigQueryStreaming` | Write to BQ (append mode) |
 | `WriteToS3Parquet` | Write windowed Parquet to S3 |
-| `WriteToBigQueryCDC` | Write to BQ with CDC/UPSERT |
-| `WriteToBigLakeIcebergStreaming` | Write to BigLake Iceberg |
+| `WriteToBigQueryCDC` | Write to Native BQ with CDC/UPSERT (DLQ supported) |
+| `WriteToBigLakeIcebergStreaming` | Write to BigLake Iceberg (append only) |
 | `MergeToIcebergStreaming` | Periodic MERGE to Iceberg table |
+| `SQLSubmitToTargetBQ` | Periodic SQL submission to BigQuery |
 
 ### ✅ DoFn Classes in dofns/stream.py
 
@@ -889,17 +895,109 @@ WHEN NOT MATCHED THEN INSERT ...
 
 ---
 
-## 12. Version History
+## 12. Dead Letter Queue (DLQ) Support
+
+### Overview
+
+DLQ captures failed records for later analysis and reprocessing without stopping the pipeline.
+
+**Location**: `dofns/dlq.py`
+
+### DLQ Components
+
+| Component | Purpose |
+|-----------|---------|
+| `DLQOutputMixin` | Mixin class for DoFns to add DLQ support |
+| `apply_with_dlq()` | Helper function to apply DoFn with DLQ handling |
+| `create_dlq_record()` | Create standardized DLQ record |
+| `WriteDLQToBigQuery` | PTransform to write DLQ to BigQuery |
+| `SUCCESS_TAG` | Tag constant for successful records |
+| `DLQ_TAG` | Tag constant for DLQ records |
+
+### Usage Pattern
+
+```python
+from dataflow_common.dofns.dlq import (
+    apply_with_dlq,
+    DLQOutputMixin,
+    WriteDLQToBigQuery,
+)
+
+# Option 1: Use apply_with_dlq helper
+success, dlq = apply_with_dlq(
+    pcoll,
+    MyDoFn(pipeline_name='my-pipeline'),
+    step_name='ProcessData'
+)
+success | 'WriteSuccess' >> WriteToBigQuery(main_table)
+dlq | 'WriteDLQ' >> WriteDLQToBigQuery(dlq_table, pipeline_name='my-pipeline')
+
+# Option 2: Use DLQOutputMixin in custom DoFn
+class MyDoFn(DLQOutputMixin, DoFn):
+    def __init__(self, pipeline_name='unknown'):
+        self.pipeline_name = pipeline_name
+
+    def process(self, element):
+        try:
+            result = self.transform(element)
+            yield self.success(result)
+        except Exception as e:
+            yield self.to_dlq(element, e, 'MyDoFn')
+```
+
+### Steps with DLQ Support
+
+| Step | DLQ Support | Notes |
+|------|-------------|-------|
+| `WriteToBigQueryCDCStep` | ✅ Yes | Configure `dlq_table` param |
+| Others | ❌ No | Can be added via `apply_with_dlq()` |
+
+### DLQ Config Example
+
+```yaml
+- step: WriteToBigQueryCDC
+  id: write_bq_cdc
+  params:
+    table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+    input: gcp
+    primary_key: ["memberId"]
+    change_type: "UPSERT"
+    dlq_table: "{io.bq.project}.{io.bq.dataset}.pipeline_dlq"
+    pipeline_name: "customer-profile-realtime"
+```
+
+### DLQ Record Schema
+
+```sql
+CREATE TABLE pipeline_dlq (
+    error_timestamp TIMESTAMP,
+    error_message STRING,
+    error_type STRING,
+    pipeline_name STRING,
+    step_name STRING,
+    original_data STRING,
+    source_message_id STRING,
+    trace_id STRING,
+    retry_count INT64,
+    last_retry_timestamp TIMESTAMP,
+    extra_context STRING
+);
+```
+
+---
+
+## 13. Version History
 
 | Date | Version | Changes |
 |------|---------|---------|
 | 2025-11-28 | 1.0 | Initial refactor instruction |
 | 2025-12-06 | 2.0 | Complete implementation, all steps working |
 | 2025-12-25 | 2.1 | Added critical BigQuery write patterns documentation |
+| 2025-12-25 | 2.2 | Added DLQ support documentation, updated step counts (10 batch, 15 streaming) |
 
 ---
 
-**Document Version**: 2.1
+**Document Version**: 2.2
 **Last Updated**: 2025-12-25
 **Status:** Production Ready - All Components Implemented & Tested
 **Branch:** `feature/agent_helper_restructure`

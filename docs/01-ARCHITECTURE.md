@@ -164,7 +164,7 @@ class Orchestrator:
 
 ```python
 STEP_REGISTRY = {
-    # Batch steps (11 total)
+    # Batch steps (10 total)
     "ReadBQQuery": ReadBQQueryStep,
     "BuildMappingDict": BuildMappingDictStep,
     "ParseJson": ParseJsonStep,
@@ -174,23 +174,24 @@ STEP_REGISTRY = {
     "CoalesceByMapping": CoalesceByMappingStep,
     "NormalizeToSchema": NormalizeToSchemaStep,
     "WriteParquet": WriteParquetStep,
-    "WriteToBigQuery": WriteToBigQueryStep,
-    "WriteGCS": WriteGCSStep,
+    "RefreshMappingBatch": RefreshMappingBatchStep,
 
-    # Streaming steps (13 total)
+    # Streaming steps (15 total)
     "RefreshMappingTable": RefreshMappingTableStep,
     "ReadFromPubSub": ReadFromPubSubStep,
     "ExtractPersonas": ExtractPersonasStep,
     "FetchFromBigtable": FetchFromBigtableStep,
     "FilterEmptyPK": FilterEmptyPKStep,
     "FilterEmptyFamily": FilterEmptyFamilyStep,
+    "FilterNullField": FilterNullFieldStep,           # Filter null/empty fields
     "TransformSchemas": TransformSchemasStep,
     "FullfillSchemas": FullfillSchemasStep,
     "WriteToBigQueryStreaming": WriteToBigQueryStreamingStep,
     "WriteToS3Parquet": WriteToS3ParquetStep,
-    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,
+    "WriteToBigQueryCDC": WriteToBigQueryCDCStep,     # Native BQ with CDC (UPSERT)
     "WriteToBigLakeIcebergStreaming": WriteToBigLakeIcebergStreamingStep,
     "MergeToIcebergStreaming": MergeToIcebergStreamingStep,
+    "SQLSubmitToTargetBQ": SQLSubmitToTargetBQStep,   # Periodic SQL submission
 }
 ```
 
@@ -565,6 +566,60 @@ gcp_data = result.gcp
 # Store in state
 self.state['aws'] = aws_data
 self.state['gcp'] = gcp_data
+```
+
+### 7. Dead Letter Queue (DLQ) Pattern
+
+**Purpose**: Handle failed records without stopping the pipeline
+
+**Location**: `dofns/dlq.py`
+
+```python
+from dataflow_common.dofns.dlq import (
+    apply_with_dlq,
+    DLQOutputMixin,
+    WriteDLQToBigQuery,
+    SUCCESS_TAG,
+    DLQ_TAG,
+)
+
+# Option 1: Use apply_with_dlq helper
+success, dlq = apply_with_dlq(
+    pcoll,
+    MyDoFn(pipeline_name='my-pipeline'),
+    step_name='ProcessData'
+)
+success | 'WriteSuccess' >> WriteToBigQuery(main_table)
+dlq | 'WriteDLQ' >> WriteDLQToBigQuery(dlq_table)
+
+# Option 2: Use DLQOutputMixin in DoFn
+class MyDoFn(DLQOutputMixin, DoFn):
+    def __init__(self, pipeline_name='unknown'):
+        self.pipeline_name = pipeline_name
+
+    def process(self, element):
+        try:
+            result = self.transform(element)
+            yield self.success(result)
+        except Exception as e:
+            yield self.to_dlq(element, e, 'MyDoFn')
+```
+
+**DLQ Record Schema**:
+```python
+{
+    'error_timestamp': 'TIMESTAMP',
+    'error_message': 'STRING',
+    'error_type': 'STRING',
+    'pipeline_name': 'STRING',
+    'step_name': 'STRING',
+    'original_data': 'STRING',
+    'source_message_id': 'STRING',
+    'trace_id': 'STRING',
+    'retry_count': 'INT64',
+    'last_retry_timestamp': 'TIMESTAMP',
+    'extra_context': 'STRING',
+}
 ```
 
 ---

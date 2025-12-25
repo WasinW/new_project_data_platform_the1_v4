@@ -49,12 +49,17 @@
 ### Location
 
 ```
-data/processor/dataflow/tests/unit/
+data/processor/dataflow/common/tests/testcase/
 ├── __init__.py
-├── test_dags.py              # DAG tests
-├── test_config.py            # Config tests
+├── test_config.py            # Config loading tests
+├── test_connectors.py        # BigQuery, Parquet connectors
+├── test_dofns.py             # DoFn class tests
 ├── test_orchestrator.py      # Orchestrator tests
-└── test_dataflow_pipeline.py # Pipeline tests
+├── test_steps.py             # Batch step tests
+├── test_streaming_steps.py   # Streaming step tests
+├── test_realtime_steps.py    # Realtime pipeline tests
+├── test_sql_functions.py     # SQL function tests
+└── test_transforms.py        # Transform function tests
 ```
 
 ### Testing DAGs
@@ -307,27 +312,31 @@ class TestMsMemberShortSTG:
 ### Run All Tests
 
 ```bash
-# Run all unit tests
-pytest data/processor/dataflow/tests/unit/ -v
+# Run all unit tests (from common directory)
+cd data/processor/dataflow/common
+python -m pytest tests/testcase/ -v
 
-# Run all integration tests
-pytest data/processor/dataflow/tests/integration/ -v
-
-# Run all tests
-pytest data/processor/dataflow/tests/ -v
+# Or run from project root
+pytest data/processor/dataflow/common/tests/testcase/ -v
 ```
 
 ### Run Specific Tests
 
 ```bash
 # Run single test file
-pytest tests/unit/test_dags.py -v
+pytest tests/testcase/test_config.py -v
 
 # Run single test function
-pytest tests/unit/test_dags.py::test_dag_loaded -v
+pytest tests/testcase/test_config.py::test_load_config -v
 
 # Run tests matching pattern
-pytest -k "dag" -v
+pytest -k "streaming" -v
+
+# Run DoFn tests only
+pytest tests/testcase/test_dofns.py -v
+
+# Run streaming step tests
+pytest tests/testcase/test_streaming_steps.py -v
 ```
 
 ### Run with Options

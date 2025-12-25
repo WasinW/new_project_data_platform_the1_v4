@@ -540,6 +540,103 @@ TransformSchemas
 
 ---
 
+## Dead Letter Queue (DLQ) Support
+
+### Overview
+
+DLQ captures failed records for later analysis and reprocessing without stopping the pipeline.
+
+**Location**: `dofns/dlq.py`
+
+### DLQ Components
+
+| Component | Purpose |
+|-----------|---------|
+| `DLQOutputMixin` | Mixin class for DoFns to add DLQ support |
+| `apply_with_dlq()` | Helper function to apply DoFn with DLQ handling |
+| `create_dlq_record()` | Create standardized DLQ record |
+| `WriteDLQToBigQuery` | PTransform to write DLQ to BigQuery |
+
+### Usage with WriteToBigQueryCDCStep
+
+```yaml
+# Config with DLQ enabled
+- step: WriteToBigQueryCDC
+  id: write_bq_cdc
+  params:
+    table: "{io.bq.project}.{io.bq.dataset}.{io.bq.table}"
+    input: gcp
+    primary_key: ["memberId"]
+    change_type: "UPSERT"
+    dlq_table: "{io.bq.project}.{io.bq.dataset}.pipeline_dlq"
+    pipeline_name: "customer-profile-realtime"
+```
+
+### DLQ Record Schema
+
+```sql
+CREATE TABLE pipeline_dlq (
+    error_timestamp TIMESTAMP,
+    error_message STRING,
+    error_type STRING,
+    pipeline_name STRING,
+    step_name STRING,
+    original_data STRING,
+    source_message_id STRING,
+    trace_id STRING,
+    retry_count INT64,
+    last_retry_timestamp TIMESTAMP,
+    extra_context STRING
+);
+```
+
+---
+
+## BigQuery Write Patterns (CRITICAL)
+
+### Step-to-Table Type Mapping
+
+| Step | Write Method | Table Type | CDC Support |
+|------|-------------|------------|-------------|
+| `WriteToBigQueryCDCStep` | Storage Write API + CDC | **Native ONLY** | ✅ Yes |
+| `WriteToBigQueryStreamingStep` | Storage Write API (Append) | Native | ❌ No |
+| `WriteToBigLakeIcebergStreamingStep` | Storage Write API (Append) | BigLake Iceberg | ❌ No |
+| `MergeToIcebergStreamingStep` | SQL MERGE | BigLake Iceberg | ✅ via MERGE |
+| `SQLSubmitToTargetBQStep` | Periodic SQL | Any | ✅ via SQL |
+
+### ⚠️ WARNING
+
+**CDC writes (`use_cdc_writes=True`) ONLY work with Native BigQuery tables!**
+
+BigLake Iceberg tables do NOT support CDC via Storage Write API. Use `MergeToIcebergStreamingStep` instead.
+
+### Pattern: Native CDC → Iceberg Sync
+
+```yaml
+# Step 1: Write to Native table with CDC
+- step: WriteToBigQueryCDC
+  params:
+    table: "{io.bq.project}.{io.bq.dataset}.ms_personas"
+    primary_key: ["memberId"]
+    change_type: "UPSERT"
+
+# Step 2: Periodically MERGE to Iceberg
+- step: MergeToIcebergStreaming
+  params:
+    native_table: "{io.bq.project}.{io.bq.dataset}.ms_personas"
+    iceberg_table: "{io.bq.project}.{io.bq.dataset}.ms_personas_iceberg"
+    merge_interval_sec: 300
+    lookback_minutes: 30
+    merge_query: |
+      MERGE `{iceberg_table}` T
+      USING (SELECT * FROM `{native_table}` WHERE ...) S
+      ON T.memberId = S.memberId
+      WHEN MATCHED THEN UPDATE SET ...
+      WHEN NOT MATCHED THEN INSERT ...
+```
+
+---
+
 ## Monitoring & Operations
 
 ### Start Streaming Job
