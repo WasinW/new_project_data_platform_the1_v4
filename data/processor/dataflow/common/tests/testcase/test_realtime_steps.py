@@ -628,11 +628,17 @@ class TestMapToCdcTableRowDoFn(unittest.TestCase):
         self.assertEqual(len(results), 1)
         result = results[0]
 
-        self.assertIn("row_mutation_info", result)
-        self.assertIn("record", result)
-        self.assertEqual(result["row_mutation_info"]["mutation_type"], "UPSERT")
-        self.assertEqual(result["record"]["memberId"], "M123")
-        print(f"   [OK] UPSERT format: {result['row_mutation_info']}")
+        # Handle TaggedOutput from DLQOutputMixin
+        if hasattr(result, 'value'):
+            cdc_row = result.value
+        else:
+            cdc_row = result
+
+        self.assertIn("row_mutation_info", cdc_row)
+        self.assertIn("record", cdc_row)
+        self.assertEqual(cdc_row["row_mutation_info"]["mutation_type"], "UPSERT")
+        self.assertEqual(cdc_row["record"]["memberId"], "M123")
+        print(f"   [OK] UPSERT format: {cdc_row['row_mutation_info']}")
 
     def test_delete_format(self):
         """Test DELETE CDC format"""
@@ -650,8 +656,14 @@ class TestMapToCdcTableRowDoFn(unittest.TestCase):
         self.assertEqual(len(results), 1)
         result = results[0]
 
-        self.assertEqual(result["row_mutation_info"]["mutation_type"], "DELETE")
-        print(f"   [OK] DELETE format: {result['row_mutation_info']}")
+        # Handle TaggedOutput from DLQOutputMixin
+        if hasattr(result, 'value'):
+            cdc_row = result.value
+        else:
+            cdc_row = result
+
+        self.assertEqual(cdc_row["row_mutation_info"]["mutation_type"], "DELETE")
+        print(f"   [OK] DELETE format: {cdc_row['row_mutation_info']}")
 
 
 class TestConvertValueToType(unittest.TestCase):
