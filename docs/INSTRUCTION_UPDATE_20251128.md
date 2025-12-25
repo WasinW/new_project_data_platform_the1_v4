@@ -986,7 +986,181 @@ CREATE TABLE pipeline_dlq (
 
 ---
 
-## 13. Version History
+## 13. TODO: Architecture Simplification (Future Refactoring)
+
+### Current Architecture (3 Components)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        CURRENT: Config-Driven                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   Airflow DAGs                                                          │
+│        │                                                                 │
+│        ▼                                                                 │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  Dataflow Script  +  Config YAML  +  Dataflow Common            │   │
+│   │  (scripts/*.py)     (configs/*.yaml)   (common/)                │   │
+│   │       │                   │                 │                    │   │
+│   │       │                   ▼                 │                    │   │
+│   │       │            ┌─────────────┐         │                    │   │
+│   │       │            │ config.py   │◄────────┘                    │   │
+│   │       │            │ (load YAML) │                              │   │
+│   │       │            └──────┬──────┘                              │   │
+│   │       │                   │                                      │   │
+│   │       │                   ▼                                      │   │
+│   │       │            ┌─────────────┐                              │   │
+│   │       └───────────►│orchestrator │  core.py, registry.py        │   │
+│   │                    │   .py       │  (build steps from YAML)     │   │
+│   │                    └──────┬──────┘                              │   │
+│   │                           │                                      │   │
+│   │                           ▼                                      │   │
+│   │                    ┌─────────────┐                              │   │
+│   │                    │   Steps     │  batch_step.py               │   │
+│   │                    │  (wrappers) │  streaming_step.py           │   │
+│   │                    └──────┬──────┘                              │   │
+│   │                           │                                      │   │
+│   │                           ▼                                      │   │
+│   │                    ┌─────────────┐                              │   │
+│   │                    │   DoFns     │  dofns/stream.py             │   │
+│   │                    │ transforms/ │  transforms/, connectors/    │   │
+│   │                    └─────────────┘                              │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│   Problems:                                                              │
+│   • 3 components to maintain (script + YAML + common)                   │
+│   • orchestrator.py, config.py, core.py add complexity                  │
+│   • Step wrappers add indirection layer                                 │
+│   • Debugging harder due to abstraction layers                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Target Architecture (2 Components)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        TARGET: Direct Script                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   Airflow DAGs (optional - can trigger directly)                        │
+│        │                                                                 │
+│        ▼                                                                 │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │  Dataflow Script  +  Dataflow Common                             │   │
+│   │  (scripts/*.py)       (common/)                                  │   │
+│   │       │                   │                                      │   │
+│   │       │    ┌──────────────┼──────────────┐                      │   │
+│   │       │    │              │              │                      │   │
+│   │       ▼    ▼              ▼              ▼                      │   │
+│   │   ┌─────────────┐  ┌───────────┐  ┌─────────────┐              │   │
+│   │   │   DoFns     │  │transforms/│  │ connectors/ │              │   │
+│   │   │dofns/stream │  │mapping.py │  │ bigtable.py │              │   │
+│   │   │   .py       │  │schema.py  │  │ pubsub.py   │              │   │
+│   │   └─────────────┘  └───────────┘  └─────────────┘              │   │
+│   │                                                                  │   │
+│   │   Script contains:                                               │   │
+│   │   • Pipeline configuration (hardcoded or argparse)              │   │
+│   │   • Schema definitions (PyArrow, BigQuery)                      │   │
+│   │   • Pipeline flow logic (direct Beam API)                       │   │
+│   │   • Import DoFns/transforms from dataflow_common                │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│   Benefits:                                                              │
+│   • Only 2 components (script + common modules)                         │
+│   • No YAML config parsing                                              │
+│   • No orchestrator/registry indirection                                │
+│   • Easier debugging - all logic visible in script                      │
+│   • Direct Beam API usage                                               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Reference Implementation
+
+**Working Example:** `scripts/ms_member_realtime_pipeline_full_scripts.py`
+
+This script demonstrates the target pattern:
+- All configuration hardcoded in script
+- Direct import of DoFns: `from dataflow_common.dofns.stream import ...`
+- Direct Beam pipeline construction without orchestrator
+- Schema definitions in script
+
+### Files to Deprecate (After Refactoring)
+
+| File | Status | Reason |
+|------|--------|--------|
+| `orchestrator.py` | 🔴 Deprecate | No longer needed - logic moves to script |
+| `core.py` (BaseStep) | 🔴 Deprecate | Step wrapper pattern not needed |
+| `config.py` | 🔴 Deprecate | No YAML config to load |
+| `registry.py` | 🔴 Deprecate | No step lookup needed |
+| `steps/batch_step.py` | 🔴 Deprecate | Step wrappers not needed |
+| `steps/streaming_step.py` | 🔴 Deprecate | Step wrappers not needed |
+| `configs/*.yaml` | 🔴 Deprecate | Config in script directly |
+
+### Files to Keep (Reusable Modules)
+
+| File | Status | Usage |
+|------|--------|-------|
+| `dofns/stream.py` | ✅ Keep | Import DoFns directly in scripts |
+| `dofns/dlq.py` | ✅ Keep | DLQ support |
+| `dofns/common.py` | ✅ Keep | Common DoFn utilities |
+| `transforms/mapping.py` | ✅ Keep | Field mapping functions |
+| `transforms/schema.py` | ✅ Keep | Schema transformation |
+| `transforms/coalesce.py` | ✅ Keep | Value coalescing |
+| `connectors/bigtable.py` | ✅ Keep | BigTable connector |
+| `connectors/pubsub.py` | ✅ Keep | Pub/Sub connector |
+
+### Migration Steps
+
+1. **Phase 1**: Create new scripts following `full_scripts.py` pattern
+2. **Phase 2**: Test new scripts in STG environment
+3. **Phase 3**: Update DAGs to use new scripts
+4. **Phase 4**: Deprecate old config-driven files
+5. **Phase 5**: Update unit tests for new pattern
+
+### Example: New Script Pattern
+
+```python
+# scripts/customer_profile_realtime_pipeline.py (NEW PATTERN)
+
+import apache_beam as beam
+from apache_beam.options.pipeline_options import PipelineOptions
+
+# Import directly from dataflow_common modules
+from dataflow_common.dofns.stream import (
+    MappingRefreshDoFn,
+    ExtractPersonasDoFn,
+    FetchFromBigtableDoFn,
+    TransformSchemasDoFn,
+    MapToCdcTableRowDoFn,
+)
+from dataflow_common.dofns.dlq import apply_with_dlq, WriteDLQToBigQuery
+
+# Configuration directly in script
+PROJECT_ID = "the1-insight-stg"
+SUBSCRIPTION = f"projects/{PROJECT_ID}/subscriptions/..."
+NATIVE_TABLE = f"{PROJECT_ID}.insight.ms_personas"
+
+# Schema definitions in script
+CDC_SCHEMA = {...}
+
+def run_pipeline():
+    options = PipelineOptions([...])
+
+    with beam.Pipeline(options=options) as p:
+        # Direct Beam API - no orchestrator
+        messages = p | beam.io.ReadFromPubSub(subscription=SUBSCRIPTION)
+
+        personas = messages | beam.ParDo(ExtractPersonasDoFn())
+
+        # ... rest of pipeline using direct Beam API
+
+if __name__ == '__main__':
+    run_pipeline()
+```
+
+---
+
+## 14. Version History
 
 | Date | Version | Changes |
 |------|---------|---------|
@@ -994,10 +1168,11 @@ CREATE TABLE pipeline_dlq (
 | 2025-12-06 | 2.0 | Complete implementation, all steps working |
 | 2025-12-25 | 2.1 | Added critical BigQuery write patterns documentation |
 | 2025-12-25 | 2.2 | Added DLQ support documentation, updated step counts (10 batch, 15 streaming) |
+| 2025-12-25 | 2.3 | Added Section 13: Architecture Simplification TODO (refactoring plan) |
 
 ---
 
-**Document Version**: 2.2
+**Document Version**: 2.3
 **Last Updated**: 2025-12-25
 **Status:** Production Ready - All Components Implemented & Tested
 **Branch:** `feature/agent_helper_restructure`
