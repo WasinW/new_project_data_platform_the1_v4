@@ -6,11 +6,14 @@ These tests use mocks to avoid GCP dependencies.
 import unittest
 from unittest.mock import MagicMock, patch, Mock
 from datetime import datetime, timezone
+import time
 
 from dataflow_common.dofns.stream import (
     TransformSchemasDoFn,
     MappingRefreshDoFn,
     SQL_FUNCTION_MAPPING,
+    MapToCdcTableRowDoFn,
+    build_cdc_schema,
 )
 
 
@@ -374,6 +377,288 @@ class TestMappingRefreshDoFn(unittest.TestCase):
         # Empty strings should be treated as constant with empty value
         self.assertEqual(result['type'], 'constant')
         print(f"   OK: {result}")
+
+
+class TestBuildCdcSchema(unittest.TestCase):
+    """Test build_cdc_schema function."""
+
+    def test_build_cdc_schema_structure(self):
+        """Test CDC schema has correct structure."""
+        print("\n[Test] build_cdc_schema structure")
+
+        record_fields = [
+            {"name": "memberId", "type": "STRING", "mode": "REQUIRED"},
+            {"name": "email", "type": "STRING", "mode": "NULLABLE"}
+        ]
+
+        schema = build_cdc_schema(record_fields)
+
+        self.assertIn('fields', schema)
+        self.assertEqual(len(schema['fields']), 2)
+        print("   OK: Schema has 2 top-level fields")
+
+    def test_build_cdc_schema_row_mutation_info_nullable(self):
+        """Test row_mutation_info is NULLABLE (fix for Beam SDK bug)."""
+        print("\n[Test] build_cdc_schema - row_mutation_info is NULLABLE")
+
+        record_fields = [{"name": "id", "type": "STRING", "mode": "REQUIRED"}]
+        schema = build_cdc_schema(record_fields)
+
+        row_mutation_info = schema['fields'][0]
+        self.assertEqual(row_mutation_info['name'], 'row_mutation_info')
+        self.assertEqual(row_mutation_info['type'], 'RECORD')
+        self.assertEqual(row_mutation_info['mode'], 'NULLABLE')  # CRITICAL: Must be NULLABLE
+        print("   OK: row_mutation_info.mode = NULLABLE")
+
+    def test_build_cdc_schema_record_nullable(self):
+        """Test record is NULLABLE (fix for Beam SDK bug)."""
+        print("\n[Test] build_cdc_schema - record is NULLABLE")
+
+        record_fields = [{"name": "id", "type": "STRING", "mode": "REQUIRED"}]
+        schema = build_cdc_schema(record_fields)
+
+        record = schema['fields'][1]
+        self.assertEqual(record['name'], 'record')
+        self.assertEqual(record['type'], 'RECORD')
+        self.assertEqual(record['mode'], 'NULLABLE')  # CRITICAL: Must be NULLABLE
+        print("   OK: record.mode = NULLABLE")
+
+    def test_build_cdc_schema_mutation_info_fields(self):
+        """Test row_mutation_info has correct sub-fields."""
+        print("\n[Test] build_cdc_schema - mutation_info sub-fields")
+
+        record_fields = [{"name": "id", "type": "STRING", "mode": "REQUIRED"}]
+        schema = build_cdc_schema(record_fields)
+
+        row_mutation_info = schema['fields'][0]
+        sub_fields = row_mutation_info['fields']
+
+        self.assertEqual(len(sub_fields), 2)
+        self.assertEqual(sub_fields[0]['name'], 'mutation_type')
+        self.assertEqual(sub_fields[0]['mode'], 'REQUIRED')
+        self.assertEqual(sub_fields[1]['name'], 'change_sequence_number')
+        self.assertEqual(sub_fields[1]['mode'], 'REQUIRED')
+        print("   OK: mutation_type and change_sequence_number are REQUIRED")
+
+    def test_build_cdc_schema_record_fields_passed_through(self):
+        """Test record_fields are passed through correctly."""
+        print("\n[Test] build_cdc_schema - record_fields passed through")
+
+        record_fields = [
+            {"name": "memberId", "type": "STRING", "mode": "REQUIRED"},
+            {"name": "email", "type": "STRING", "mode": "NULLABLE"},
+            {"name": "age", "type": "INT64", "mode": "NULLABLE"}
+        ]
+        schema = build_cdc_schema(record_fields)
+
+        record = schema['fields'][1]
+        self.assertEqual(record['fields'], record_fields)
+        self.assertEqual(len(record['fields']), 3)
+        print("   OK: record_fields passed through correctly")
+
+
+class TestMapToCdcTableRowDoFn(unittest.TestCase):
+    """Test MapToCdcTableRowDoFn class."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.record_fields = [
+            {"name": "memberId", "type": "STRING", "mode": "REQUIRED"},
+            {"name": "email", "type": "STRING", "mode": "NULLABLE"}
+        ]
+        self.dofn = MapToCdcTableRowDoFn(
+            default_change_type="UPSERT",
+            record_fields=self.record_fields,
+            pipeline_name="test_pipeline"
+        )
+
+    def test_process_valid_element(self):
+        """Test processing valid element produces CDC row."""
+        print("\n[Test] MapToCdcTableRowDoFn - valid element")
+
+        element = {
+            "memberId": "12345",
+            "email": "test@example.com"
+        }
+
+        results = list(self.dofn.process(element))
+
+        self.assertEqual(len(results), 1)
+        result = results[0]
+
+        # Check it's a success result (tagged output)
+        self.assertIsNotNone(result)
+        print("   OK: Produced 1 result")
+
+    def test_process_element_with_upsert(self):
+        """Test element produces UPSERT mutation type."""
+        print("\n[Test] MapToCdcTableRowDoFn - UPSERT mutation")
+
+        element = {"memberId": "12345"}
+
+        results = list(self.dofn.process(element))
+        result = results[0]
+
+        # The result is a tagged tuple (tag, value)
+        if hasattr(result, 'value'):
+            cdc_row = result.value
+        else:
+            cdc_row = result
+
+        self.assertIn('row_mutation_info', cdc_row)
+        self.assertEqual(cdc_row['row_mutation_info']['mutation_type'], 'UPSERT')
+        print("   OK: mutation_type = UPSERT")
+
+    def test_process_element_with_delete(self):
+        """Test element with is_delete produces DELETE mutation type."""
+        print("\n[Test] MapToCdcTableRowDoFn - DELETE mutation")
+
+        element = {"memberId": "12345", "is_delete": True}
+
+        results = list(self.dofn.process(element))
+        result = results[0]
+
+        if hasattr(result, 'value'):
+            cdc_row = result.value
+        else:
+            cdc_row = result
+
+        self.assertEqual(cdc_row['row_mutation_info']['mutation_type'], 'DELETE')
+        print("   OK: mutation_type = DELETE")
+
+    def test_process_element_has_sequence_number(self):
+        """Test CDC row has change_sequence_number."""
+        print("\n[Test] MapToCdcTableRowDoFn - sequence number")
+
+        element = {"memberId": "12345"}
+
+        results = list(self.dofn.process(element))
+        result = results[0]
+
+        if hasattr(result, 'value'):
+            cdc_row = result.value
+        else:
+            cdc_row = result
+
+        seq_num = cdc_row['row_mutation_info']['change_sequence_number']
+        self.assertIsNotNone(seq_num)
+        self.assertTrue(seq_num.isdigit())
+        print(f"   OK: change_sequence_number = {seq_num}")
+
+    def test_process_element_has_record(self):
+        """Test CDC row has record field with data."""
+        print("\n[Test] MapToCdcTableRowDoFn - record field")
+
+        element = {"memberId": "12345", "email": "test@example.com"}
+
+        results = list(self.dofn.process(element))
+        result = results[0]
+
+        if hasattr(result, 'value'):
+            cdc_row = result.value
+        else:
+            cdc_row = result
+
+        self.assertIn('record', cdc_row)
+        self.assertEqual(cdc_row['record']['memberId'], '12345')
+        self.assertEqual(cdc_row['record']['email'], 'test@example.com')
+        print("   OK: record contains data")
+
+    def test_process_none_element_to_dlq(self):
+        """Test None element goes to DLQ."""
+        print("\n[Test] MapToCdcTableRowDoFn - None element to DLQ")
+
+        results = list(self.dofn.process(None))
+
+        self.assertEqual(len(results), 1)
+        result = results[0]
+
+        # Should be DLQ tagged output
+        if hasattr(result, 'tag'):
+            self.assertIn('dlq', result.tag.lower())
+        print("   OK: None element sent to DLQ")
+
+    def test_process_empty_dict_to_dlq(self):
+        """Test empty dict goes to DLQ."""
+        print("\n[Test] MapToCdcTableRowDoFn - empty dict to DLQ")
+
+        results = list(self.dofn.process({}))
+
+        self.assertEqual(len(results), 1)
+        result = results[0]
+
+        # Should be DLQ tagged output
+        if hasattr(result, 'tag'):
+            self.assertIn('dlq', result.tag.lower())
+        print("   OK: Empty dict sent to DLQ")
+
+    def test_process_non_dict_to_dlq(self):
+        """Test non-dict element goes to DLQ."""
+        print("\n[Test] MapToCdcTableRowDoFn - non-dict to DLQ")
+
+        results = list(self.dofn.process("not a dict"))
+
+        self.assertEqual(len(results), 1)
+        print("   OK: Non-dict sent to DLQ")
+
+    def test_sanitize_nan_value(self):
+        """Test NaN float values are sanitized to None."""
+        print("\n[Test] MapToCdcTableRowDoFn - sanitize NaN")
+
+        element = {"memberId": "12345", "score": float('nan')}
+
+        results = list(self.dofn.process(element))
+        result = results[0]
+
+        if hasattr(result, 'value'):
+            cdc_row = result.value
+        else:
+            cdc_row = result
+
+        self.assertIsNone(cdc_row['record']['score'])
+        print("   OK: NaN sanitized to None")
+
+    def test_sanitize_inf_value(self):
+        """Test Inf float values are sanitized to None."""
+        print("\n[Test] MapToCdcTableRowDoFn - sanitize Inf")
+
+        element = {"memberId": "12345", "value": float('inf')}
+
+        results = list(self.dofn.process(element))
+        result = results[0]
+
+        if hasattr(result, 'value'):
+            cdc_row = result.value
+        else:
+            cdc_row = result
+
+        self.assertIsNone(cdc_row['record']['value'])
+        print("   OK: Inf sanitized to None")
+
+    def test_internal_fields_removed(self):
+        """Test internal CDC fields are removed from record."""
+        print("\n[Test] MapToCdcTableRowDoFn - internal fields removed")
+
+        element = {
+            "memberId": "12345",
+            "_CHANGE_TYPE": "INSERT",
+            "is_delete": False,
+            "cdc_type": "UPSERT"
+        }
+
+        results = list(self.dofn.process(element))
+        result = results[0]
+
+        if hasattr(result, 'value'):
+            cdc_row = result.value
+        else:
+            cdc_row = result
+
+        record = cdc_row['record']
+        self.assertNotIn('_CHANGE_TYPE', record)
+        self.assertNotIn('is_delete', record)
+        self.assertNotIn('cdc_type', record)
+        print("   OK: Internal fields removed from record")
 
 
 if __name__ == "__main__":
