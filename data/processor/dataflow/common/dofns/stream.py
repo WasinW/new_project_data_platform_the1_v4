@@ -45,9 +45,8 @@ SQL_FUNCTION_MAPPING = {
     'CURRENT_DATE()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d'),
     # 'CURRENT_DATETIME()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
     # 'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).isoformat(), # ISO 8601 (%Y-%m-%dT%H:%M:%S.%f+00:00)
-    # 'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f UTC"), # BQ timestamp format
-    # 'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc),
-    'CURRENT_TIMESTAMP()': None,
+    # Returns BigQuery-compatible TIMESTAMP string format
+    'CURRENT_TIMESTAMP()': lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"),
     'NOW()': lambda: datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
     'UUID()': lambda: str(uuid.uuid4()),
 }
@@ -1026,6 +1025,8 @@ class MapToCdcTableRowDoFn(DLQOutputMixin, beam.DoFn):
         Sanitize a value for BigQuery serialization.
         Handles edge cases that can cause serialization failures:
         - NaN/Inf float values -> None
+        - bytes -> decoded string
+        - datetime -> ISO format string
         - Non-serializable objects -> string representation
         """
         import math
@@ -1040,9 +1041,25 @@ class MapToCdcTableRowDoFn(DLQOutputMixin, beam.DoFn):
                 return None
             return value
 
-        # Handle nested dicts
+        # Handle bytes - decode to string
+        if isinstance(value, bytes):
+            try:
+                return value.decode('utf-8')
+            except UnicodeDecodeError:
+                LOGGER.warning(f"[MapToCdcTableRowDoFn] bytes decode failed, using hex representation")
+                return value.hex()
+
+        # Handle datetime objects - convert to ISO string
+        if isinstance(value, datetime):
+            return value.isoformat()
+
+        # Handle nested dicts - also filter out None keys
         if isinstance(value, dict):
-            return {k: self._sanitize_value(v) for k, v in value.items()}
+            return {
+                k: self._sanitize_value(v)
+                for k, v in value.items()
+                if k is not None  # Filter out None keys which cause serialization issues
+            }
 
         # Handle lists
         if isinstance(value, list):
@@ -1054,7 +1071,9 @@ class MapToCdcTableRowDoFn(DLQOutputMixin, beam.DoFn):
 
         # For any other type, convert to string to ensure serializability
         try:
-            return str(value)
+            result = str(value)
+            LOGGER.debug(f"[MapToCdcTableRowDoFn] Converted {type(value).__name__} to string")
+            return result
         except Exception:
             LOGGER.warning(f"[MapToCdcTableRowDoFn] Could not serialize value of type {type(value)}, using None")
             return None
@@ -1062,10 +1081,15 @@ class MapToCdcTableRowDoFn(DLQOutputMixin, beam.DoFn):
     def _sanitize_record(self, record: dict) -> dict:
         """
         Sanitize all values in a record dict for BigQuery serialization.
+        Also removes None keys which could cause issues.
         """
         if not record:
             return record
-        return {k: self._sanitize_value(v) for k, v in record.items()}
+        return {
+            k: self._sanitize_value(v)
+            for k, v in record.items()
+            if k is not None  # Filter out None keys
+        }
     
     def process(self, element):
         # Skip None or empty elements - send to DLQ
@@ -1152,6 +1176,20 @@ class MapToCdcTableRowDoFn(DLQOutputMixin, beam.DoFn):
 
             if cdc_row['row_mutation_info'].get('change_sequence_number') is None:
                 yield self.to_dlq(element, ValueError("change_sequence_number is None"), 'MapToCdcTableRowDoFn')
+                return
+
+            # CRITICAL: Validate JSON serialization before yield
+            # This catches any non-serializable values that would cause BigQuery write to fail
+            try:
+                json.dumps(cdc_row, default=str, ensure_ascii=False)
+            except (TypeError, ValueError, OverflowError) as json_error:
+                LOGGER.error(f"[MapToCdcTableRowDoFn] JSON serialization failed: {json_error}")
+                yield self.to_dlq(
+                    element,
+                    ValueError(f"JSON serialization failed: {json_error}"),
+                    'MapToCdcTableRowDoFn',
+                    extra_context={'cdc_row_keys': list(cdc_row.get('record', {}).keys())}
+                )
                 return
 
             LOGGER.debug(f"MapToCdcTableRowDoFn output: mutation_type={mutation_type}, seq={seq_num}")
