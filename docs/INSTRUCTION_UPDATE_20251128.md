@@ -1081,69 +1081,372 @@ This script demonstrates the target pattern:
 - Direct import: `from dataflow_common.steps import ...`
 - Pipeline flow using imported Steps/DoFns
 
-### Files Status After Refactoring
-
-**⚠️ IMPORTANT: Cannot delete core infrastructure files due to dependency chain!**
+### Current Dependency Analysis
 
 ```
-Dependency Chain (Dockerfile build requires all):
-Dockerfile → registry.py → steps/ → core.py → config.py
-                                         ↓
-                              (BaseStep, PipelineConfig)
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    CURRENT DEPENDENCY CHAIN                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Dockerfile (build verification)                                        │
+│       │                                                                  │
+│       ▼                                                                  │
+│  registry.py ─────────────────────────────────────────┐                 │
+│       │                                               │                 │
+│       │ imports                                       │                 │
+│       ▼                                               ▼                 │
+│  steps/__init__.py ──────────────────────────► steps/batch_step.py     │
+│       │                                        steps/streaming_step.py │
+│       │ imports                                       │                 │
+│       ▼                                               │ imports         │
+│  core.py (BaseStep) ◄─────────────────────────────────┘                 │
+│       │                                                                  │
+│       │ imports (type hint)                                             │
+│       ▼                                                                  │
+│  config.py (PipelineConfig, IOConfig, etc.)                             │
+│       │                                                                  │
+│       │ also used by                                                    │
+│       ▼                                                                  │
+│  connectors/__init__.py, connectors/bigtable.py                         │
+│  transforms/schema.py                                                    │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Files to KEEP (Required for Build/Import)
+**Key Files Analysis:**
 
-| File | Status | Reason |
+| File | What it contains | Who uses it |
+|------|-----------------|-------------|
+| `config.py` | `PipelineConfig`, `IOConfig`, `load_config()` | core.py, connectors/, transforms/ |
+| `core.py` | `BaseStep` abstract class | steps/batch_step.py, steps/streaming_step.py |
+| `registry.py` | `STEP_REGISTRY` dict | Dockerfile, orchestrator.py |
+| `orchestrator.py` | `Orchestrator` class | Old scripts (ms_member_short_pipeline.py) |
+
+---
+
+### Refactoring Options
+
+#### Option B: Move BaseStep → Delete core.py (Intermediate Step)
+
+**Goal:** Remove `core.py` by moving `BaseStep` to `steps/__init__.py`
+
+**Changes Required:**
+
+```python
+# BEFORE: core.py
+from dataflow_common.config import PipelineConfig
+
+class BaseStep(ABC):
+    def __init__(self, *, spec: Dict, config: PipelineConfig, state: Dict):
+        self.spec = spec
+        self.config = config
+        self.state = state
+
+# AFTER: steps/__init__.py (move BaseStep here)
+from dataflow_common.config import PipelineConfig  # Still need config.py
+
+class BaseStep(ABC):
+    def __init__(self, *, spec: Dict, config: PipelineConfig, state: Dict):
+        ...
+```
+
+**Files to Modify for Option B:**
+
+| File | Change |
+|------|--------|
+| `steps/__init__.py` | Add BaseStep class (copy from core.py) |
+| `steps/batch_step.py` | `from dataflow_common.core import BaseStep` → `from . import BaseStep` |
+| `steps/streaming_step.py` | `from dataflow_common.core import BaseStep` → `from . import BaseStep` |
+| `core.py` | 🗑️ DELETE |
+
+**Result:** `core.py` removed, but `config.py` still needed
+
+---
+
+#### Option C: Full Refactor - Config in Dataflow Script (Final Goal) ⭐
+
+**Goal:**
+- Delete `config.py`, `core.py`, `orchestrator.py`
+- Steps/DoFns receive params directly (not PipelineConfig)
+- Config controlled in dataflow script
+
+**Current Step Pattern (uses PipelineConfig):**
+
+```python
+# streaming_step.py - CURRENT ❌
+class WriteToBigQueryCDCStep(BaseStep):
+    def execute(self, pipeline):
+        project_id = self.config.io.bq.get('project')  # ← Uses PipelineConfig
+        table = self.spec.get('table')
+        input_pcoll = self.state[self.spec['params']['input']]
+        ...
+```
+
+**New Step Pattern (params directly):**
+
+```python
+# streaming_step.py - NEW ✅
+class WriteToBigQueryCDCStep(beam.PTransform):
+    def __init__(self, table: str, primary_key: List[str], **kwargs):
+        self.table = table
+        self.primary_key = primary_key
+
+    def expand(self, pcoll):
+        return pcoll | WriteToBigQuery(
+            table=self.table,
+            primary_key=self.primary_key,
+            ...
+        )
+```
+
+**Usage Comparison:**
+
+```python
+# BEFORE (orchestrator pattern) ❌
+config = load_config('configs/ms_member_realtime.yaml')
+orchestrator = Orchestrator(config)
+orchestrator.run(pipeline)
+
+# AFTER (direct pattern) ✅
+PROJECT_ID = "the1-insight-stg"
+TABLE = f"{PROJECT_ID}.insight.ms_personas"
+
+messages = p | ReadFromPubSub(subscription=SUBSCRIPTION)
+transformed = messages | beam.ParDo(TransformSchemasDoFn(mapping_dict))
+transformed | WriteToBigQueryCDCStep(table=TABLE, primary_key=['memberId'])
+```
+
+---
+
+### Detailed Migration Guide for Option C
+
+#### Phase 1: Analyze self.config Usage in Steps
+
+**batch_step.py - Uses self.config (10 locations):**
+
+```python
+# Line 210: key_field = self.spec.get("key_field") or self.config.params.pk
+# Line 290: pk_field = self.config.params.pk
+# Line 329: self.config.schema
+# Line 333: formats = self.config.formats
+# Line 385: refined_prefix = self.config.io.s3.get("refined_prefix")
+# Line 386: run_dt = self.config.params.run_dt
+# Line 389-390: self.config.io.s3, self.config.params.__dict__
+# Line 407: num_shards = self.config.io.s3.get("num_shards", 2)
+# Line 414-415: project = self.config.io.bq.get("project"), dataset
+# Line 490: project_id=self.config.io.bq.get('project')
+```
+
+**streaming_step.py - Uses self.config (4 locations):**
+
+```python
+# Line 81: project_id=self.config.io.bq.get('project')
+# Line 880: project_id = self.config.io.bq.get('project')
+# Line 985: project_id = self.config.io.bq.get('project')
+# Line 1083: project_id = self.config.io.bq.get('project')
+```
+
+#### Phase 2: Refactor Pattern for Each Step
+
+```python
+# ============================================================
+# BEFORE: Step uses BaseStep + self.config
+# ============================================================
+from dataflow_common.core import BaseStep
+
+class WriteToBigQueryCDCStep(BaseStep):
+    def __init__(self, *, spec: Dict, config: PipelineConfig, state: Dict):
+        super().__init__(spec=spec, config=config, state=state)
+
+    def execute(self, pipeline):
+        table = self.spec.get('table')
+        project_id = self.config.io.bq.get('project')  # ❌
+        primary_key = self.spec.get('primary_key', ['memberId'])
+        input_pcoll = self.state[self.spec['params']['input']]  # ❌
+        return input_pcoll | WriteToBigQuery(...)
+
+# ============================================================
+# AFTER: Step is PTransform, receives params directly
+# ============================================================
+import apache_beam as beam
+
+class WriteToBigQueryCDCStep(beam.PTransform):
+    """Write to BigQuery Native table with CDC/UPSERT.
+
+    Args:
+        table: Full table path (project.dataset.table)
+        primary_key: List of primary key columns
+        dlq_table: Optional DLQ table path
+    """
+    def __init__(self, table: str, primary_key: List[str],
+                 dlq_table: str = None):
+        self.table = table
+        self.primary_key = primary_key
+        self.dlq_table = dlq_table
+
+    def expand(self, pcoll):
+        return pcoll | WriteToBigQuery(
+            table=self.table,
+            method='STORAGE_WRITE_API',
+            use_cdc_writes=True,
+            primary_key=self.primary_key,
+        )
+```
+
+#### Phase 3: Update steps/__init__.py
+
+```python
+# BEFORE
+from dataflow_common.core import BaseStep  # ❌ Remove this
+
+# AFTER
+# No BaseStep import - steps are now PTransforms
+from dataflow_common.steps.batch_step import (
+    ReadBQQueryStep,
+    WriteParquetStep,
+    ...
+)
+from dataflow_common.steps.streaming_step import (
+    WriteToBigQueryCDCStep,
+    ...
+)
+```
+
+#### Phase 4: Update registry.py
+
+```python
+# BEFORE
+from dataflow_common.steps import (
+    BaseStep,  # ❌ Remove
+    ReadBQQueryStep,
+    ...
+)
+
+# AFTER
+from dataflow_common.steps import (
+    ReadBQQueryStep,  # Keep for Dockerfile verification
+    WriteToBigQueryCDCStep,
+    ...
+)
+```
+
+#### Phase 5: Update Dockerfile
+
+```dockerfile
+# BEFORE
+RUN python -c "\
+from dataflow_common.config import load_config; \
+from dataflow_common.orchestrator import Orchestrator; \
+from dataflow_common.registry import STEP_REGISTRY; \
+..."
+
+# AFTER (simpler verification)
+RUN python -c "\
+from dataflow_common.steps import WriteToBigQueryCDCStep, WriteParquetStep; \
+from dataflow_common.dofns.stream import TransformSchemasDoFn; \
+from dataflow_common.dofns.dlq import apply_with_dlq; \
+print('✅ All imports successful'); \
+"
+```
+
+#### Phase 6: Fix connectors/ and transforms/ Dependencies
+
+**Files that import from config.py:**
+
+```
+connectors/__init__.py    → PipelineConfig (type hint only)
+connectors/bigtable.py    → PipelineConfig (type hint only)
+transforms/schema.py      → SchemaSpec, BigQuerySchemaSpec, FormatSpec
+```
+
+**Solution Options:**
+
+1. **Replace with Dict** if only used as type hints
+2. **Create minimal types.py** with just dataclass definitions (no load_config)
+
+```python
+# types.py (new file - minimal type definitions)
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+
+@dataclass
+class SchemaSpec:
+    project: str
+    dataset: str
+    table: str
+
+# ... only what's actually needed
+```
+
+---
+
+### Files to Delete After Option C
+
+| File | Action | Reason |
 |------|--------|--------|
-| `registry.py` | ✅ Keep | Used in Dockerfile for build verification |
-| `core.py` | ✅ Keep | Steps inherit from BaseStep |
-| `config.py` | ✅ Keep | core.py imports PipelineConfig |
-| `steps/batch_step.py` | ✅ Keep | `from dataflow_common.steps import ...` |
-| `steps/streaming_step.py` | ✅ Keep | `from dataflow_common.steps import ...` |
-| `dofns/stream.py` | ✅ Keep | `from dataflow_common.dofns.stream import ...` |
-| `dofns/dlq.py` | ✅ Keep | DLQ support |
-| `dofns/common.py` | ✅ Keep | Common DoFn utilities |
-| `connectors/*` | ✅ Keep | BigTable, PubSub connectors |
+| `config.py` | 🗑️ DELETE | Config now in scripts, types moved to types.py |
+| `core.py` | 🗑️ DELETE | BaseStep no longer needed |
+| `orchestrator.py` | 🗑️ DELETE | No longer used |
+| `configs/*.yaml` | 🗑️ DELETE | Config now in scripts |
 
-#### Files to STOP USING (Keep but Don't Use in New Scripts)
+---
 
-| File | Status | Note |
-|------|--------|------|
-| `orchestrator.py` | 🟡 Keep but stop using | New scripts import Steps/DoFns directly |
-| `configs/*.yaml` | 🟡 Keep but stop using | Config hardcoded in script |
-
-**Key Principle**: We DON'T DELETE files, we just STOP USING the orchestrator pattern.
-New scripts import Steps/DoFns directly instead of using orchestrator + YAML config.
-
-### Future Enhancement: Consolidate transforms/ → dofns/
+### Final Target Structure (After Option C)
 
 ```
-CURRENT:                          FUTURE:
-├── dofns/                        ├── dofns/
-│   ├── stream.py                 │   ├── stream.py
-│   ├── dlq.py                    │   ├── dlq.py
-│   └── common.py                 │   ├── common.py
-├── transforms/          ──►      │   ├── mapping.py      (moved)
-│   ├── mapping.py                │   ├── schema.py       (moved)
-│   ├── schema.py                 │   └── coalesce.py     (moved)
-│   └── coalesce.py               │
-                                  └── (transforms/ removed)
-
-Benefits:
-• Single pattern: all processing logic in dofns/
-• Easier to understand module structure
-• Lean and consistent
+common/
+├── __init__.py
+├── types.py                  # NEW: Minimal type definitions (if needed)
+├── steps/
+│   ├── __init__.py          # Export all PTransform steps
+│   ├── batch_step.py        # PTransform classes (no PipelineConfig)
+│   └── streaming_step.py    # PTransform classes (no PipelineConfig)
+├── dofns/
+│   ├── __init__.py
+│   ├── stream.py            # DoFn classes (already good)
+│   ├── dlq.py               # DLQ support
+│   └── common.py            # Common utilities
+├── connectors/
+│   ├── __init__.py          # Updated: no PipelineConfig
+│   ├── bigtable.py          # Updated: no PipelineConfig
+│   └── pubsub.py
+├── transforms/
+│   ├── __init__.py
+│   ├── mapping.py
+│   ├── schema.py            # Updated: use types.py or Dict
+│   └── coalesce.py
+├── registry.py              # 🟡 Optional: keep for backward compat
+│
+│   ─────── DELETED ───────
+│   config.py                # 🗑️ DELETED
+│   core.py                  # 🗑️ DELETED
+│   orchestrator.py          # 🗑️ DELETED
 ```
 
-### Migration Steps
+---
 
-1. **Phase 1**: Create new scripts using direct import pattern
-2. **Phase 2**: Test new scripts in STG environment
-3. **Phase 3**: Update DAGs to use new scripts
-4. **Phase 4**: Remove orchestrator.py, config.py, registry.py, core.py
-5. **Phase 5**: Move transforms/ functions into dofns/
-6. **Phase 6**: Update unit tests for new pattern
+### Migration Checklist
+
+**Option B (Intermediate):**
+- [ ] Move `BaseStep` from `core.py` to `steps/__init__.py`
+- [ ] Update imports in `batch_step.py` and `streaming_step.py`
+- [ ] Delete `core.py`
+- [ ] Test build
+
+**Option C (Full Refactor):**
+- [ ] Phase 1: Refactor `streaming_step.py` (15 steps → PTransform)
+- [ ] Phase 2: Refactor `batch_step.py` (10 steps → PTransform)
+- [ ] Phase 3: Update `steps/__init__.py` (remove BaseStep)
+- [ ] Phase 4: Update `registry.py` (remove BaseStep import)
+- [ ] Phase 5: Create `types.py` if needed
+- [ ] Phase 6: Fix `connectors/` imports
+- [ ] Phase 7: Fix `transforms/schema.py` imports
+- [ ] Phase 8: Update `Dockerfile` verification
+- [ ] Phase 9: Delete `core.py`
+- [ ] Phase 10: Delete `orchestrator.py`
+- [ ] Phase 11: Delete `config.py`
+- [ ] Phase 12: Delete `configs/*.yaml`
+- [ ] Phase 13: Update unit tests
+- [ ] Phase 14: Test in STG environment
 
 ### Example: New Script Pattern
 
@@ -1202,11 +1505,12 @@ if __name__ == '__main__':
 | 2025-12-06 | 2.0 | Complete implementation, all steps working |
 | 2025-12-25 | 2.1 | Added critical BigQuery write patterns documentation |
 | 2025-12-25 | 2.2 | Added DLQ support documentation, updated step counts (10 batch, 15 streaming) |
-| 2025-12-25 | 2.3 | Added Section 13: Architecture Simplification TODO (direct import pattern, transforms→dofns consolidation) |
+| 2025-12-25 | 2.3 | Added Section 13: Architecture Simplification TODO |
+| 2025-12-25 | 2.4 | Detailed refactoring guide: Option B (move BaseStep), Option C (full refactor to PTransform) |
 
 ---
 
-**Document Version**: 2.3
+**Document Version**: 2.4
 **Last Updated**: 2025-12-25
 **Status:** Production Ready - All Components Implemented & Tested
 **Branch:** `feature/agent_helper_restructure`
