@@ -1334,19 +1334,26 @@ class ExtractWindowPathDoFn(DoFn):
 def build_cdc_schema(record_fields: List[Dict]) -> Dict:
     """
     Build CDC schema with row_mutation_info wrapper.
-    
+
     Args:
         record_fields: List of field definitions for the actual data
-        
+
     Returns:
         BigQuery schema dict with CDC wrapper structure
+
+    Note:
+        row_mutation_info and record use mode=NULLABLE to avoid Beam SDK bug
+        where BigQueryUtils.toBeamValue throws IllegalArgumentException during
+        finishBundle response parsing. The data still contains valid values,
+        but BigQuery response doesn't include these CDC fields after processing.
+        See: https://www.mail-archive.com/user@beam.apache.org/msg09317.html
     """
     return {
         'fields': [
             {
                 "name": "row_mutation_info",
                 "type": "RECORD",
-                "mode": "REQUIRED",
+                "mode": "NULLABLE",  # NULLABLE to avoid Beam SDK response parsing error
                 "fields": [
                     {"name": "mutation_type", "type": "STRING", "mode": "REQUIRED"},
                     {"name": "change_sequence_number", "type": "STRING", "mode": "REQUIRED"}
@@ -1355,7 +1362,7 @@ def build_cdc_schema(record_fields: List[Dict]) -> Dict:
             {
                 "name": "record",
                 "type": "RECORD",
-                "mode": "REQUIRED",
+                "mode": "NULLABLE",  # NULLABLE to avoid Beam SDK response parsing error
                 "fields": record_fields
             }
         ]

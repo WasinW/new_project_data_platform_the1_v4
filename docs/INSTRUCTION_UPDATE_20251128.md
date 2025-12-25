@@ -897,52 +897,56 @@ WHEN NOT MATCHED THEN INSERT ...
 
 #### Issue: `IllegalArgumentException: Received null value for non-nullable field "row_mutation_info"`
 
-**Status**: Beam SDK Bug (Not Fixed as of 2.70.0)
+**Status**: ✅ FIXED via schema workaround
 
 **Error Location**:
 ```
 Caused by: java.lang.IllegalArgumentException: Received null value for non-nullable field "row_mutation_info"
     at org.apache.beam.sdk.io.gcp.bigquery.BigQueryUtils.toBeamValue(BigQueryUtils.java:733)
-    at org.apache.beam.sdk.io.gcp.bigquery.BigQueryUtils.lambda$toBeamRow$6(BigQueryUtils.java:693)
-    ...
     at org.apache.beam.sdk.io.gcp.bigquery.StorageApiWriteUnshardedRecords$WriteRecordsDoFn.finishBundle
 ```
 
 **Root Cause**:
-1. Your code sends valid CDC rows with `row_mutation_info` (REQUIRED field)
+1. Code sends valid CDC rows with `row_mutation_info`
 2. BigQuery processes and **consumes** the CDC fields during write
-3. During `finishBundle`, when retries/failures occur, Beam SDK receives responses from BigQuery
-4. Beam tries to parse responses using the original schema (expects `row_mutation_info` as REQUIRED)
+3. During `finishBundle`, when retries occur, Beam SDK receives responses from BigQuery
+4. Beam tries to parse responses using original schema (expects `row_mutation_info` as REQUIRED)
 5. But BigQuery response doesn't contain `row_mutation_info` → **Error**
 
-**Why PROD Only (High Volume)**:
-- Higher volume = more transient failures/retries = more response parsing
-- STG works because low volume = fewer retries = error path rarely executed
-- Error rate ~0.017% (50/300k elements) = only happens during retry scenarios
+**Solution**: Use `mode: "NULLABLE"` for `row_mutation_info` and `record` in CDC schema
 
-**Important Facts**:
-- ✅ **Data is written correctly** to BigQuery
-- ✅ **CDC operations (UPSERT) work correctly**
-- ❌ Error is "noise" from Beam SDK internal response parsing
-- ❌ Appears in Job log (not Worker log)
-
-**Your Code is Correct**: `MapToCdcTableRowDoFn` (lines 1168-1179) validates:
 ```python
-# CRITICAL: Final validation before yield
-if cdc_row.get('row_mutation_info') is None:
-    yield self.to_dlq(element, ValueError("row_mutation_info is None"), ...)
-    return
+# build_cdc_schema() in dofns/stream.py
+def build_cdc_schema(record_fields: List[Dict]) -> Dict:
+    return {
+        'fields': [
+            {
+                "name": "row_mutation_info",
+                "type": "RECORD",
+                "mode": "NULLABLE",  # ← MUST be NULLABLE, not REQUIRED
+                "fields": [
+                    {"name": "mutation_type", "type": "STRING", "mode": "REQUIRED"},
+                    {"name": "change_sequence_number", "type": "STRING", "mode": "REQUIRED"}
+                ]
+            },
+            {
+                "name": "record",
+                "type": "RECORD",
+                "mode": "NULLABLE",  # ← MUST be NULLABLE, not REQUIRED
+                "fields": record_fields
+            }
+        ]
+    }
 ```
 
-**Recommendations**:
-1. **No code changes needed** - Your code is correct
-2. **Accept error rate** - 0.017% is acceptable noise for this SDK bug
-3. **Monitor but don't act** - Watch for significant increase in error rate
-4. **Track Beam releases** - Check future versions for fix
+**Why This Works**:
+- Beam SDK checks `fieldType.getNullable()` before throwing error
+- If schema says NULLABLE → returns null instead of throwing exception
+- Data still contains valid `row_mutation_info` → CDC works correctly
+- Only affects response parsing, not data writes
 
 **Related Issues**:
 - [Mail Archive: IllegalArgumentException with useBeamSchema](https://www.mail-archive.com/user@beam.apache.org/msg09317.html)
-- Issue #31422 is different (IllegalStateException, not IllegalArgumentException)
 
 ---
 
@@ -1559,10 +1563,11 @@ if __name__ == '__main__':
 | 2025-12-25 | 2.3 | Added Section 13: Architecture Simplification TODO |
 | 2025-12-25 | 2.4 | Detailed refactoring guide: Option B (move BaseStep), Option C (full refactor to PTransform) |
 | 2025-12-25 | 2.5 | Added Known Issues: CDC row_mutation_info null error (Beam SDK bug) |
+| 2025-12-25 | 2.6 | Fixed CDC error: use NULLABLE mode for row_mutation_info and record |
 
 ---
 
-**Document Version**: 2.5
+**Document Version**: 2.6
 **Last Updated**: 2025-12-25
 **Status:** Production Ready - All Components Implemented & Tested
 **Branch:** `feature/agent_helper_restructure`
