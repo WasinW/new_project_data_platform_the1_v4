@@ -814,16 +814,92 @@ python scripts/customer_profile_short_pipeline.py \
 
 ---
 
-## 11. Version History
+## 11. BigQuery Write Patterns (CRITICAL)
+
+### IMPORTANT: Understanding Write Methods
+
+This section is critical for avoiding common mistakes with BigQuery writes.
+
+| Write Method | API | CDC/Upsert Support | Table Type | Use Case |
+|--------------|-----|-------------------|------------|----------|
+| `STREAMING_INSERTS` | Legacy Streaming | No | Native | Simple append |
+| `STORAGE_WRITE_API` | Storage Write API | **Yes*** | **Native ONLY** | High throughput, CDC |
+| SQL `MERGE` | Query Job | N/A | Native + Iceberg | Upsert via SQL |
+
+### WARNING: CDC writes (use_cdc_writes=True) only work with Native BigQuery tables!
+
+**BigLake Iceberg tables do NOT support CDC writes via Storage Write API.**
+
+### Pattern 1: Append-Only (Native or Iceberg)
+
+```python
+# For simple append operations - works with both Native and Iceberg
+pcoll | WriteToBigQuery(
+    table="project.dataset.table",
+    method='STORAGE_WRITE_API',
+    write_disposition='WRITE_APPEND',
+    use_at_least_once=True,  # For exactly-once delivery
+)
+```
+
+### Pattern 2: CDC Upsert (Native Tables ONLY)
+
+```python
+# CDC with upsert - ONLY for Native BigQuery tables!
+# DO NOT USE WITH BIGLAKE ICEBERG TABLES - IT WILL FAIL!
+pcoll | WriteToBigQuery(
+    table="project.dataset.native_table",  # Must be native table
+    method='STORAGE_WRITE_API',
+    use_cdc_writes=True,      # Enable CDC
+    primary_key=['member_id'], # Primary key for upsert
+    write_disposition='WRITE_APPEND',
+)
+```
+
+### Pattern 3: Upsert for Iceberg Tables (SQL MERGE)
+
+For BigLake Iceberg tables, use SQL MERGE instead of Storage Write API:
+
+```python
+# Write to staging table first
+pcoll | WriteToBigQuery(
+    table="project.dataset.staging_table",
+    method='STORAGE_WRITE_API',
+    write_disposition='WRITE_TRUNCATE',
+)
+
+# Then run MERGE statement (via MergeToIcebergStreamingStep)
+merge_sql = """
+MERGE `project.dataset.iceberg_table` T
+USING `project.dataset.staging_table` S
+ON T.member_id = S.member_id
+WHEN MATCHED THEN UPDATE SET ...
+WHEN NOT MATCHED THEN INSERT ...
+"""
+```
+
+### Step-to-Table Type Mapping
+
+| Step | Write Method | Table Type | CDC Support |
+|------|-------------|------------|-------------|
+| `WriteToBigQueryCDCStep` | Storage Write API + CDC | **Native ONLY** | Yes |
+| `WriteToBigQueryStreamingStep` | Storage Write API (Append) | Native | No |
+| `WriteToBigLakeIcebergStreamingStep` | Storage Write API (Append) | BigLake Iceberg | No |
+| `MergeToIcebergStreamingStep` | SQL MERGE | BigLake Iceberg | Yes (via SQL) |
+
+---
+
+## 12. Version History
 
 | Date | Version | Changes |
 |------|---------|---------|
 | 2025-11-28 | 1.0 | Initial refactor instruction |
 | 2025-12-06 | 2.0 | Complete implementation, all steps working |
+| 2025-12-25 | 2.1 | Added critical BigQuery write patterns documentation |
 
 ---
 
-**Document Version**: 2.0
-**Last Updated**: 2025-12-06
-**Status:** ✅ Production Ready - All Components Implemented & Tested
+**Document Version**: 2.1
+**Last Updated**: 2025-12-25
+**Status:** Production Ready - All Components Implemented & Tested
 **Branch:** `feature/agent_helper_restructure`
