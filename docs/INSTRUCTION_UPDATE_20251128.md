@@ -1081,27 +1081,40 @@ This script demonstrates the target pattern:
 - Direct import: `from dataflow_common.steps import ...`
 - Pipeline flow using imported Steps/DoFns
 
-### Files to Deprecate (After Refactoring)
+### Files Status After Refactoring
+
+**⚠️ IMPORTANT: Cannot delete core infrastructure files due to dependency chain!**
+
+```
+Dependency Chain (Dockerfile build requires all):
+Dockerfile → registry.py → steps/ → core.py → config.py
+                                         ↓
+                              (BaseStep, PipelineConfig)
+```
+
+#### Files to KEEP (Required for Build/Import)
 
 | File | Status | Reason |
 |------|--------|--------|
-| `orchestrator.py` | 🔴 Deprecate | Script imports Steps/DoFns directly |
-| `config.py` | 🔴 Deprecate | No YAML config to load |
-| `registry.py` | 🔴 Deprecate | No step name lookup needed |
-| `core.py` | 🔴 Deprecate | BaseStep not needed when importing directly |
-| `configs/*.yaml` | 🔴 Deprecate | Config in script directly |
-
-### Files to Keep (Import Directly in Scripts)
-
-| File | Status | Usage |
-|------|--------|-------|
-| `steps/batch_step.py` | ✅ Keep | `from dataflow_common.steps import ReadBQQueryStep, ...` |
-| `steps/streaming_step.py` | ✅ Keep | `from dataflow_common.steps import WriteToBigQueryCDCStep, ...` |
-| `dofns/stream.py` | ✅ Keep | `from dataflow_common.dofns.stream import TransformSchemasDoFn, ...` |
-| `dofns/dlq.py` | ✅ Keep | `from dataflow_common.dofns.dlq import apply_with_dlq, ...` |
+| `registry.py` | ✅ Keep | Used in Dockerfile for build verification |
+| `core.py` | ✅ Keep | Steps inherit from BaseStep |
+| `config.py` | ✅ Keep | core.py imports PipelineConfig |
+| `steps/batch_step.py` | ✅ Keep | `from dataflow_common.steps import ...` |
+| `steps/streaming_step.py` | ✅ Keep | `from dataflow_common.steps import ...` |
+| `dofns/stream.py` | ✅ Keep | `from dataflow_common.dofns.stream import ...` |
+| `dofns/dlq.py` | ✅ Keep | DLQ support |
 | `dofns/common.py` | ✅ Keep | Common DoFn utilities |
-| `connectors/bigtable.py` | ✅ Keep | BigTable connector |
-| `connectors/pubsub.py` | ✅ Keep | Pub/Sub connector |
+| `connectors/*` | ✅ Keep | BigTable, PubSub connectors |
+
+#### Files to STOP USING (Keep but Don't Use in New Scripts)
+
+| File | Status | Note |
+|------|--------|------|
+| `orchestrator.py` | 🟡 Keep but stop using | New scripts import Steps/DoFns directly |
+| `configs/*.yaml` | 🟡 Keep but stop using | Config hardcoded in script |
+
+**Key Principle**: We DON'T DELETE files, we just STOP USING the orchestrator pattern.
+New scripts import Steps/DoFns directly instead of using orchestrator + YAML config.
 
 ### Future Enhancement: Consolidate transforms/ → dofns/
 
