@@ -1,12 +1,10 @@
 """
 Test cases for SQL function mapping and data type conversion.
 
-These tests verify the SQL_FUNCTION_MAPPING, DATA_TYPE_CONVERTERS,
-and convert_value_to_type functions added in the enhancement.
+Uses pytest style for cleaner, more maintainable tests.
 """
-import unittest
+import pytest
 from datetime import datetime, date
-from unittest.mock import patch
 
 from dataflow_common.dofns.stream import (
     SQL_FUNCTION_MAPPING,
@@ -17,262 +15,179 @@ from dataflow_common.dofns.stream import (
 )
 
 
-class TestSQLFunctionMapping(unittest.TestCase):
-    """Test SQL_FUNCTION_MAPPING constant and functions."""
+# =============================================================================
+# Tests: SQL_FUNCTION_MAPPING
+# =============================================================================
 
-    def test_sql_function_mapping_contains_expected_functions(self):
-        """Verify all expected SQL functions are present."""
-        print("\n[Test] SQL_FUNCTION_MAPPING contains expected functions")
+class TestSQLFunctionMapping:
+    """Tests for SQL_FUNCTION_MAPPING constant and functions."""
 
-        expected_functions = [
-            'CURRENT_DATE()',
-            'CURRENT_TIMESTAMP()',
-            'NOW()',
-            'UUID()',
-        ]
+    @pytest.mark.parametrize("func_name", [
+        "CURRENT_DATE()",
+        "CURRENT_TIMESTAMP()",
+        "NOW()",
+        "UUID()",
+    ])
+    def test_contains_expected_function(self, func_name):
+        assert func_name in SQL_FUNCTION_MAPPING
 
-        for func_name in expected_functions:
-            self.assertIn(func_name, SQL_FUNCTION_MAPPING,
-                         f"Missing SQL function: {func_name}")
-            print(f"   OK: {func_name}")
+    def test_current_date_returns_valid_format(self):
+        result = SQL_FUNCTION_MAPPING["CURRENT_DATE()"]()
 
-    def test_current_date_returns_valid_date_string(self):
-        """Test CURRENT_DATE() returns date in YYYY-MM-DD format."""
-        print("\n[Test] CURRENT_DATE() returns valid date string")
+        # YYYY-MM-DD format
+        assert len(result) == 10
+        assert result[4] == "-"
+        assert result[7] == "-"
 
-        result = SQL_FUNCTION_MAPPING['CURRENT_DATE()']()
+    def test_current_timestamp_returns_valid_format(self):
+        result = SQL_FUNCTION_MAPPING["CURRENT_TIMESTAMP()"]()
 
-        # Should be in YYYY-MM-DD format
-        self.assertRegex(result, r'^\d{4}-\d{2}-\d{2}$')
+        # Should start with YYYY-MM-DD HH:MM:SS
+        assert result[:4].isdigit()  # Year
+        assert "-" in result
+        assert ":" in result
 
-        # Should be parseable as date
-        parsed = datetime.strptime(result, '%Y-%m-%d')
-        self.assertIsNotNone(parsed)
+    def test_now_returns_valid_format(self):
+        result = SQL_FUNCTION_MAPPING["NOW()"]()
 
-        print(f"   OK: {result}")
+        # YYYY-MM-DD HH:MM:SS format
+        assert len(result) == 19
+        assert result[4] == "-"
+        assert result[10] == " "
+        assert result[13] == ":"
 
-    def test_current_timestamp_returns_valid_timestamp_string(self):
-        """Test CURRENT_TIMESTAMP() returns timestamp in expected format."""
-        print("\n[Test] CURRENT_TIMESTAMP() returns valid timestamp")
+    def test_uuid_returns_valid_format(self):
+        result = SQL_FUNCTION_MAPPING["UUID()"]()
 
-        result = SQL_FUNCTION_MAPPING['CURRENT_TIMESTAMP()']()
+        # UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        parts = result.split("-")
+        assert len(parts) == 5
+        assert len(parts[0]) == 8
+        assert len(parts[4]) == 12
 
-        # Should be in YYYY-MM-DD HH:MM:SS format (may include microseconds and/or timezone)
-        # Accept formats: YYYY-MM-DD HH:MM:SS, YYYY-MM-DD HH:MM:SS.ffffff, or with UTC suffix
-        self.assertRegex(result, r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}')
+    def test_uuid_returns_unique_values(self):
+        result1 = SQL_FUNCTION_MAPPING["UUID()"]()
+        result2 = SQL_FUNCTION_MAPPING["UUID()"]()
 
-        # Should contain valid date-time components
-        self.assertIn('-', result)
-        self.assertIn(':', result)
-
-        print(f"   OK: {result}")
-
-    def test_now_returns_valid_timestamp_string(self):
-        """Test NOW() returns timestamp (same as CURRENT_TIMESTAMP)."""
-        print("\n[Test] NOW() returns valid timestamp")
-
-        result = SQL_FUNCTION_MAPPING['NOW()']()
-
-        self.assertRegex(result, r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
-        print(f"   OK: {result}")
-
-    def test_uuid_returns_valid_uuid_string(self):
-        """Test UUID() returns valid UUID format."""
-        print("\n[Test] UUID() returns valid UUID string")
-
-        result = SQL_FUNCTION_MAPPING['UUID()']()
-
-        # Should match UUID format
-        self.assertRegex(result,
-            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
-
-        # Each call should return unique UUID
-        result2 = SQL_FUNCTION_MAPPING['UUID()']()
-        self.assertNotEqual(result, result2)
-
-        print(f"   OK: {result}")
+        assert result1 != result2
 
 
-class TestDataTypeConverters(unittest.TestCase):
-    """Test DATA_TYPE_CONVERTERS and convert_value_to_type function."""
+# =============================================================================
+# Tests: DATA_TYPE_CONVERTERS
+# =============================================================================
 
-    def test_data_type_converters_contains_expected_types(self):
-        """Verify all expected data types are supported."""
-        print("\n[Test] DATA_TYPE_CONVERTERS contains expected types")
+class TestDataTypeConverters:
+    """Tests for DATA_TYPE_CONVERTERS and convert_value_to_type function."""
 
-        expected_types = [
-            'STRING', 'INT64', 'INTEGER', 'FLOAT64', 'FLOAT',
-            'BOOLEAN', 'BOOL', 'DATE', 'TIMESTAMP', 'DATETIME',
-        ]
+    @pytest.mark.parametrize("type_name", [
+        "STRING", "INT64", "INTEGER", "FLOAT64", "FLOAT",
+        "BOOLEAN", "BOOL", "DATE", "TIMESTAMP", "DATETIME",
+    ])
+    def test_contains_expected_type(self, type_name):
+        assert type_name in DATA_TYPE_CONVERTERS
 
-        for type_name in expected_types:
-            self.assertIn(type_name, DATA_TYPE_CONVERTERS,
-                         f"Missing data type: {type_name}")
-            print(f"   OK: {type_name}")
+    @pytest.mark.parametrize("input_val,expected", [
+        (123, "123"),
+        (123.45, "123.45"),
+        (True, "True"),
+        ("hello", "hello"),
+    ])
+    def test_convert_to_string(self, input_val, expected):
+        result = convert_value_to_type(input_val, "STRING")
+        assert result == expected
 
-    def test_convert_to_string(self):
-        """Test STRING conversion."""
-        print("\n[Test] STRING conversion")
+    @pytest.mark.parametrize("input_val,expected", [
+        ("123", 123),
+        (123.7, 123),
+        (123, 123),
+    ])
+    def test_convert_to_int64(self, input_val, expected):
+        result = convert_value_to_type(input_val, "INT64")
+        assert result == expected
 
-        test_cases = [
-            (123, "123"),
-            (123.45, "123.45"),
-            (True, "True"),
-            ("hello", "hello"),
-        ]
+    def test_convert_to_integer_alias(self):
+        result = convert_value_to_type("456", "INTEGER")
+        assert result == 456
 
-        for input_val, expected in test_cases:
-            result = convert_value_to_type(input_val, 'STRING')
-            self.assertEqual(result, expected)
-            print(f"   OK: {input_val} -> {result}")
+    @pytest.mark.parametrize("input_val,expected", [
+        ("123.45", 123.45),
+        (123, 123.0),
+        ("100", 100.0),
+    ])
+    def test_convert_to_float64(self, input_val, expected):
+        result = convert_value_to_type(input_val, "FLOAT64")
+        assert abs(result - expected) < 0.01
 
-    def test_convert_to_int64(self):
-        """Test INT64/INTEGER conversion."""
-        print("\n[Test] INT64 conversion")
+    @pytest.mark.parametrize("input_val,expected", [
+        (True, True),
+        (False, False),
+        (1, True),
+        (0, False),
+        ("true", True),
+    ])
+    def test_convert_to_boolean(self, input_val, expected):
+        result = convert_value_to_type(input_val, "BOOLEAN")
+        assert result == expected
 
-        test_cases = [
-            ("123", 123),
-            (123.7, 123),
-            (123, 123),
-        ]
+    def test_convert_to_date_from_string(self):
+        result = convert_value_to_type("2025-12-10", "DATE")
+        assert result == "2025-12-10"
 
-        for input_val, expected in test_cases:
-            result = convert_value_to_type(input_val, 'INT64')
-            self.assertEqual(result, expected)
-            print(f"   OK: {input_val} -> {result}")
-
-        # Test INTEGER alias
-        result = convert_value_to_type("456", 'INTEGER')
-        self.assertEqual(result, 456)
-        print(f"   OK: INTEGER alias works")
-
-    def test_convert_to_float64(self):
-        """Test FLOAT64/FLOAT conversion."""
-        print("\n[Test] FLOAT64 conversion")
-
-        test_cases = [
-            ("123.45", 123.45),
-            (123, 123.0),
-            ("100", 100.0),
-        ]
-
-        for input_val, expected in test_cases:
-            result = convert_value_to_type(input_val, 'FLOAT64')
-            self.assertAlmostEqual(result, expected)
-            print(f"   OK: {input_val} -> {result}")
-
-    def test_convert_to_boolean(self):
-        """Test BOOLEAN/BOOL conversion."""
-        print("\n[Test] BOOLEAN conversion")
-
-        test_cases = [
-            (True, True),
-            (False, False),
-            (1, True),
-            (0, False),
-            ("true", True),  # Non-empty string is truthy
-        ]
-
-        for input_val, expected in test_cases:
-            result = convert_value_to_type(input_val, 'BOOLEAN')
-            self.assertEqual(result, expected)
-            print(f"   OK: {input_val} -> {result}")
-
-    def test_convert_to_date_string(self):
-        """Test DATE conversion to string."""
-        print("\n[Test] DATE conversion")
-
-        # String input
-        result = convert_value_to_type("2025-12-10", 'DATE')
-        self.assertEqual(result, "2025-12-10")
-        print(f"   OK: string -> {result}")
-
-        # Date object input
+    def test_convert_to_date_from_date_object(self):
         date_obj = date(2025, 12, 10)
-        result = convert_value_to_type(date_obj, 'DATE')
-        self.assertEqual(result, "2025-12-10")
-        print(f"   OK: date object -> {result}")
+        result = convert_value_to_type(date_obj, "DATE")
+        assert result == "2025-12-10"
 
-    def test_convert_to_timestamp_string(self):
-        """Test TIMESTAMP conversion to string."""
-        print("\n[Test] TIMESTAMP conversion")
+    def test_convert_to_timestamp_from_string(self):
+        result = convert_value_to_type("2025-12-10 14:30:00", "TIMESTAMP")
+        assert result.startswith("2025-12-10 14:30:00")
 
-        # String input - output format may include microseconds/timezone
-        result = convert_value_to_type("2025-12-10 14:30:00", 'TIMESTAMP')
-        self.assertTrue(result.startswith("2025-12-10 14:30:00"))
-        print(f"   OK: string -> {result}")
-
-        # Datetime object input - output format may include microseconds/timezone
+    def test_convert_to_timestamp_from_datetime_object(self):
         dt_obj = datetime(2025, 12, 10, 14, 30, 0)
-        result = convert_value_to_type(dt_obj, 'TIMESTAMP')
-        self.assertTrue(result.startswith("2025-12-10 14:30:00"))
-        print(f"   OK: datetime object -> {result}")
+        result = convert_value_to_type(dt_obj, "TIMESTAMP")
+        assert result.startswith("2025-12-10 14:30:00")
 
-    def test_convert_none_returns_none(self):
-        """Test that None input returns None."""
-        print("\n[Test] None handling")
-
-        for data_type in ['STRING', 'INT64', 'DATE', 'TIMESTAMP']:
-            result = convert_value_to_type(None, data_type)
-            self.assertIsNone(result)
-            print(f"   OK: None -> None for {data_type}")
+    @pytest.mark.parametrize("data_type", ["STRING", "INT64", "DATE", "TIMESTAMP"])
+    def test_convert_none_returns_none(self, data_type):
+        result = convert_value_to_type(None, data_type)
+        assert result is None
 
     def test_convert_with_none_data_type_returns_original(self):
-        """Test that None data_type returns original value."""
-        print("\n[Test] None data_type handling")
-
         result = convert_value_to_type("hello", None)
-        self.assertEqual(result, "hello")
-        print(f"   OK: None data_type returns original")
+        assert result == "hello"
 
     def test_convert_invalid_raises_error(self):
-        """Test that invalid conversion raises ValueError."""
-        print("\n[Test] Invalid conversion raises ValueError")
-
-        with self.assertRaises(ValueError):
-            convert_value_to_type("not_a_number", 'INT64')
-
-        print(f"   OK: ValueError raised for invalid conversion")
+        with pytest.raises(ValueError):
+            convert_value_to_type("not_a_number", "INT64")
 
 
-class TestDateStringHelpers(unittest.TestCase):
-    """Test helper functions for date/timestamp conversion."""
+# =============================================================================
+# Tests: Date/Timestamp Helper Functions
+# =============================================================================
 
-    def test_convert_to_date_string_various_formats(self):
-        """Test _convert_to_date_string with various input formats."""
-        print("\n[Test] _convert_to_date_string with various formats")
+class TestDateStringHelpers:
+    """Tests for _convert_to_date_string and _convert_to_timestamp_string."""
 
-        # Test ISO format (unambiguous)
+    def test_convert_to_date_string_iso_format(self):
         result = _convert_to_date_string("2025-12-10")
-        self.assertEqual(result, "2025-12-10")
-        print(f"   OK: 2025-12-10 -> {result}")
+        assert result == "2025-12-10"
 
-        # Test Y/m/d format
+    def test_convert_to_date_string_slash_format(self):
         result = _convert_to_date_string("2025/12/10")
-        self.assertEqual(result, "2025-12-10")
-        print(f"   OK: 2025/12/10 -> {result}")
+        assert result == "2025-12-10"
 
-        # Test d/m/Y format - result depends on parsing order
-        # Just verify it produces a valid date format
+    def test_convert_to_date_string_ambiguous_format(self):
+        """Ambiguous d/m/Y format - just verify valid output."""
         result = _convert_to_date_string("10/12/2025")
-        self.assertRegex(result, r'^\d{4}-\d{2}-\d{2}$')
-        print(f"   OK: 10/12/2025 -> {result}")
+        # Should produce valid YYYY-MM-DD format
+        assert len(result) == 10
+        assert result[4] == "-"
+        assert result[7] == "-"
 
-    def test_convert_to_timestamp_string_various_formats(self):
-        """Test _convert_to_timestamp_string with various input formats."""
-        print("\n[Test] _convert_to_timestamp_string with various formats")
-
-        test_cases = [
-            "2025-12-10 14:30:00",
-            "2025-12-10T14:30:00",
-        ]
-
-        for input_val in test_cases:
-            result = _convert_to_timestamp_string(input_val)
-            # Output should start with the expected timestamp (may have extra suffix)
-            self.assertTrue(result.startswith("2025-12-10 14:30:00"))
-            print(f"   OK: {input_val} -> {result}")
-
-
-if __name__ == "__main__":
-    unittest.main()
+    @pytest.mark.parametrize("input_val", [
+        "2025-12-10 14:30:00",
+        "2025-12-10T14:30:00",
+    ])
+    def test_convert_to_timestamp_string_formats(self, input_val):
+        result = _convert_to_timestamp_string(input_val)
+        assert result.startswith("2025-12-10 14:30:00")

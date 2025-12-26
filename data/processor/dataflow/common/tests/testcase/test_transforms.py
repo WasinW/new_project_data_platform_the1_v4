@@ -1,7 +1,9 @@
 """
-Test cases for transform functions
+Test cases for transform functions.
+
+Uses pytest style for cleaner, more maintainable tests.
 """
-import unittest
+import pytest
 
 from dataflow_common.transforms import (
     normalize_path,
@@ -11,68 +13,68 @@ from dataflow_common.transforms import (
     coalesce_by_mapping
 )
 
-class TestTransformModule(unittest.TestCase):
-    """Test transform utilities"""
-    
-    def test_normalize_path(self):
-        """Test path normalization"""
-        print("\n[Test] Test: Path normalization")
-        
-        test_cases = [
-            ("profiles.memberId", ["profiles", "memberId"]),
-            ("profiles['memberId']", ["profiles", "memberId"]),
-            ("['profiles']['memberId']", ["profiles", "memberId"]),
-            ("profiles['member'].data", ["profiles", "member", "data"]),
-            ("a.b.c.d", ["a", "b", "c", "d"]),
-            ("", []),
-            (None, []),
-            # Additional bracket variations
-            ('profiles["memberId"]', ["profiles", "memberId"]),
-            ("profiles[memberId]", ["profiles", "memberId"]),
-        ]
-        
-        for input_path, expected in test_cases:
-            result = normalize_path(input_path)
-            self.assertEqual(result, expected, 
-                           f"Failed for input: {input_path}")
-            print(f"   [OK] {input_path} -> {result}")
-    
-    def test_extract_by_path(self):
-        """Test nested value extraction"""
-        print("\n[Test] Test: Extract nested values")
-        
-        # Test data
-        record = {
-            "level1": {
-                "level2": {
-                    "value": "nested_value"
-                }
-            },
+
+# =============================================================================
+# Tests: normalize_path
+# =============================================================================
+
+class TestNormalizePath:
+    """Tests for normalize_path function."""
+
+    @pytest.mark.parametrize("input_path,expected", [
+        ("profiles.memberId", ["profiles", "memberId"]),
+        ("profiles['memberId']", ["profiles", "memberId"]),
+        ("['profiles']['memberId']", ["profiles", "memberId"]),
+        ("profiles['member'].data", ["profiles", "member", "data"]),
+        ("a.b.c.d", ["a", "b", "c", "d"]),
+        ("", []),
+        (None, []),
+        ('profiles["memberId"]', ["profiles", "memberId"]),
+        ("profiles[memberId]", ["profiles", "memberId"]),
+    ])
+    def test_normalize_path(self, input_path, expected):
+        result = normalize_path(input_path)
+        assert result == expected
+
+
+# =============================================================================
+# Tests: extract_by_path
+# =============================================================================
+
+class TestExtractByPath:
+    """Tests for extract_by_path function."""
+
+    @pytest.fixture
+    def sample_record(self):
+        return {
+            "level1": {"level2": {"value": "nested_value"}},
             "profiles": '{"memberId": "12345", "email": "test@example.com"}'
         }
-        
-        # Test nested extraction
+
+    def test_extract_nested_value(self, sample_record):
         path = ["level1", "level2", "value"]
-        result = extract_by_path(record, path)
-        self.assertEqual(result, "nested_value")
-        print(f"   [OK] Extracted nested: {result}")
-        
-        # Test JSON string parsing
+        result = extract_by_path(sample_record, path)
+        assert result == "nested_value"
+
+    def test_extract_from_json_string(self, sample_record):
         path = ["profiles", "memberId"]
-        result = extract_by_path(record, path)
-        self.assertEqual(result, "12345")
-        print(f"   [OK] Extracted from JSON: {result}")
-        
-        # Test missing path
+        result = extract_by_path(sample_record, path)
+        assert result == "12345"
+
+    def test_extract_missing_path(self, sample_record):
         path = ["missing", "path"]
-        result = extract_by_path(record, path)
-        self.assertIsNone(result)
-        print(f"   [OK] Missing path returns None")
-    
+        result = extract_by_path(sample_record, path)
+        assert result is None
+
+
+# =============================================================================
+# Tests: create_mapping_dict
+# =============================================================================
+
+class TestCreateMappingDict:
+    """Tests for create_mapping_dict function."""
+
     def test_create_mapping_dict(self):
-        """Test mapping dictionary creation"""
-        print("\n[Test] Test: Create mapping dictionary")
-        
         mapping_rows = [
             {
                 "RECONCILE_COLUMN_NAME": "MEMBER_NUMBER",
@@ -87,7 +89,7 @@ class TestTransformModule(unittest.TestCase):
                 "RECONCILE_CONFIRMED": True
             }
         ]
-        
+
         mapping_dict = create_mapping_dict(
             mapping_rows,
             src_field="MAPPING_COLUMN_NAME",
@@ -95,57 +97,52 @@ class TestTransformModule(unittest.TestCase):
             retrieved_flag_field="RECONCILE_RETRIEVED",
             confirmed_flag_field="RECONCILE_CONFIRMED"
         )
-        
-        self.assertIn("MEMBER_NUMBER", mapping_dict)
-        self.assertEqual(mapping_dict["MEMBER_NUMBER"]["src_path"], ["profiles", "memberId"])
-        self.assertTrue(mapping_dict["EMAIL"]["reconcile"])
-        self.assertTrue(mapping_dict["EMAIL"]["original"])
-        
-        print(f"   [OK] Created mapping with {len(mapping_dict)} entries")
-    
-    def test_map_record(self):
-        """Test record mapping"""
-        print("\n[Test] Test: Map record")
-        
-        # Input record
-        record = {
-            "profiles": {
-                "memberId": "123",
-                "email": "test@example.com"
-            }
-        }
-        
-        # Mapping dict
+
+        assert "MEMBER_NUMBER" in mapping_dict
+        assert mapping_dict["MEMBER_NUMBER"]["src_path"] == ["profiles", "memberId"]
+        assert mapping_dict["EMAIL"]["reconcile"] is True
+        assert mapping_dict["EMAIL"]["original"] is True
+
+
+# =============================================================================
+# Tests: map_record
+# =============================================================================
+
+class TestMapRecord:
+    """Tests for map_record function."""
+
+    @pytest.fixture
+    def sample_data(self):
+        record = {"profiles": {"memberId": "123", "email": "test@example.com"}}
         mapping_dict = {
-            "MEMBER_NUMBER": {
-                "src_path": ["profiles", "memberId"],
-                "reconcile": True,
-                "original": False
-            },
-            "EMAIL": {
-                "src_path": ["profiles", "email"],
-                "reconcile": True,
-                "original": True
-            }
+            "MEMBER_NUMBER": {"src_path": ["profiles", "memberId"], "reconcile": True, "original": False},
+            "EMAIL": {"src_path": ["profiles", "email"], "reconcile": True, "original": True}
         }
-        
-        # Test reconcile mode
+        return record, mapping_dict
+
+    def test_map_record_reconcile_mode(self, sample_data):
+        record, mapping_dict = sample_data
         result = map_record(record, mapping_dict, mode="reconcile")
-        self.assertEqual(result["MEMBER_NUMBER"], "123")
-        self.assertEqual(result["EMAIL"], "test@example.com")
-        print(f"   [OK] Reconcile mode: {len(result)} fields mapped")
-        
-        # Test original mode
+
+        assert result["MEMBER_NUMBER"] == "123"
+        assert result["EMAIL"] == "test@example.com"
+
+    def test_map_record_original_mode(self, sample_data):
+        record, mapping_dict = sample_data
         result = map_record(record, mapping_dict, mode="original")
-        self.assertNotIn("MEMBER_NUMBER", result)
-        self.assertIn("EMAIL", result)
-        print(f"   [OK] Original mode: {len(result)} fields mapped")
-    
-    def test_coalesce_by_mapping(self):
-        """Test record coalescing"""
-        print("\n[Test] Test: Coalesce records")
-        
-        # Test data
+
+        assert "MEMBER_NUMBER" not in result
+        assert "EMAIL" in result
+
+
+# =============================================================================
+# Tests: coalesce_by_mapping
+# =============================================================================
+
+class TestCoalesceByMapping:
+    """Tests for coalesce_by_mapping function."""
+
+    def test_coalesce_records(self):
         kv = (
             "key123",
             {
@@ -153,12 +150,12 @@ class TestTransformModule(unittest.TestCase):
                 "old": [{"MEMBER_NUMBER": "123", "EMAIL": "old@example.com", "PHONE": "555-1234"}]
             }
         )
-        
+
         columns = [
             {"RECONCILE_COLUMN_NAME": "EMAIL", "RECONCILE_RETRIEVED": True},
             {"RECONCILE_COLUMN_NAME": "PHONE", "RECONCILE_RETRIEVED": False}
         ]
-        
+
         result = coalesce_by_mapping(
             kv,
             columns=columns,
@@ -166,12 +163,7 @@ class TestTransformModule(unittest.TestCase):
             pk_field="MEMBER_NUMBER",
             dest_field="RECONCILE_COLUMN_NAME"
         )
-        
-        self.assertEqual(result["EMAIL"], "new@example.com")
-        self.assertEqual(result["PHONE"], "555-1234")
-        self.assertEqual(result["MEMBER_NUMBER"], "123")
-        
-        print(f"   [OK] Coalesced {len(result)} fields")
 
-if __name__ == "__main__":
-    unittest.main()
+        assert result["EMAIL"] == "new@example.com"
+        assert result["PHONE"] == "555-1234"
+        assert result["MEMBER_NUMBER"] == "123"

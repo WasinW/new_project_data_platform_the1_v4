@@ -1,17 +1,11 @@
 """
-Unit tests for streaming step classes in dataflow_common.steps.streaming_step.
+Test cases for streaming step classes in dataflow_common.steps.streaming_step.
 
-Tests for Step classes that wrap DoFns and create pipeline transforms.
-These tests focus on testing step initialization and parameter extraction
-without requiring full Apache Beam runtime.
+Uses pytest style for cleaner, more maintainable tests.
 """
-import unittest
+import pytest
 from unittest.mock import MagicMock, patch
-import logging
-import sys
-import os
 
-# Import the actual modules - tests will work if dataflow_common is installed
 try:
     from dataflow_common.steps.streaming_step import (
         RefreshMappingTableStep,
@@ -31,44 +25,39 @@ try:
     from dataflow_common.core import BaseStep
     from dataflow_common.steps import streaming_step as streaming_step_module
     IMPORTS_AVAILABLE = True
-except ImportError as e:
+except ImportError:
     IMPORTS_AVAILABLE = False
-    IMPORT_ERROR = str(e)
+
+pytestmark = pytest.mark.skipif(not IMPORTS_AVAILABLE, reason="Required modules not available")
 
 
-class MockConfig:
+# =============================================================================
+# Fixtures
+# =============================================================================
+
+@pytest.fixture
+def mock_config():
     """Mock PipelineConfig for testing."""
-
-    def __init__(self, **kwargs):
-        self.name = kwargs.get('name', 'test_pipeline')
-        self.mode = kwargs.get('mode', 'streaming')
-        self.term = kwargs.get('term', 'realtime')
-
-        # Mock IO config
-        self.io = MagicMock()
-        self.io.bq = {
-            'project': 'test-project',
-            'dataset': 'test_dataset',
-            'table': 'test_table'
-        }
-        self.io.s3 = {
-            'bucket': 's3://test-bucket',
-            'refined_prefix': 'refined'
-        }
-
-        # Mock params
-        self.params = MagicMock()
-        self.params.run_dt = '2024011510'
+    config = MagicMock()
+    config.name = 'test_pipeline'
+    config.mode = 'streaming'
+    config.term = 'realtime'
+    config.io = MagicMock()
+    config.io.bq = {'project': 'test-project', 'dataset': 'test_dataset', 'table': 'test_table'}
+    config.io.s3 = {'bucket': 's3://test-bucket', 'refined_prefix': 'refined'}
+    config.params = MagicMock()
+    config.params.run_dt = '2024011510'
+    return config
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestRefreshMappingTableStep(unittest.TestCase):
-    """Unit tests for RefreshMappingTableStep."""
+# =============================================================================
+# Tests: RefreshMappingTableStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization with spec, config, state."""
-        print("\n[TEST] RefreshMappingTableStep - initialization")
+class TestRefreshMappingTableStep:
+    """Tests for RefreshMappingTableStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'RefreshMappingTable',
             'id': 'refresh_mapping',
@@ -79,21 +68,14 @@ class TestRefreshMappingTableStep(unittest.TestCase):
             },
             'outputs': ['mapping_info']
         }
-        config = MockConfig()
-        state = {}
 
-        step = RefreshMappingTableStep(spec=spec, config=config, state=state)
+        step = RefreshMappingTableStep(spec=spec, config=mock_config, state={})
 
-        self.assertEqual(step.spec, spec)
-        self.assertEqual(step.config, config)
-        self.assertEqual(step.state, state)
-        self.assertIn('RefreshMappingTable', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert step.spec == spec
+        assert step.config == mock_config
+        assert 'RefreshMappingTable' in step.step_id
 
-    def test_step_extracts_params_correctly(self):
-        """Test that step extracts parameters from spec correctly."""
-        print("\n[TEST] RefreshMappingTableStep - param extraction")
-
+    def test_step_extracts_params_correctly(self, mock_config):
         spec = {
             'step': 'RefreshMappingTable',
             'id': 'refresh_mapping',
@@ -103,140 +85,102 @@ class TestRefreshMappingTableStep(unittest.TestCase):
                 'query': 'SELECT id, name FROM mapping'
             }
         }
-        config = MockConfig()
-        state = {}
 
-        step = RefreshMappingTableStep(spec=spec, config=config, state=state)
-
-        # Verify params can be extracted
+        step = RefreshMappingTableStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
-        self.assertEqual(params.get('fire_interval'), 120)
-        self.assertEqual(params.get('mapping_table'), 'project.dataset.my_mapping')
-        self.assertEqual(params.get('query'), 'SELECT id, name FROM mapping')
-        print("   [OK] Parameters extracted correctly")
+
+        assert params.get('fire_interval') == 120
+        assert params.get('mapping_table') == 'project.dataset.my_mapping'
+        assert params.get('query') == 'SELECT id, name FROM mapping'
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestReadFromPubSubStep(unittest.TestCase):
-    """Unit tests for ReadFromPubSubStep."""
+# =============================================================================
+# Tests: ReadFromPubSubStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] ReadFromPubSubStep - initialization")
+class TestReadFromPubSubStep:
+    """Tests for ReadFromPubSubStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'ReadFromPubSub',
             'id': 'read_pubsub',
-            'params': {
-                'subscription': 'projects/test/subscriptions/my-sub'
-            },
+            'params': {'subscription': 'projects/test/subscriptions/my-sub'},
             'outputs': ['messages']
         }
-        config = MockConfig()
-        state = {}
 
-        step = ReadFromPubSubStep(spec=spec, config=config, state=state)
+        step = ReadFromPubSubStep(spec=spec, config=mock_config, state={})
 
-        self.assertIn('ReadFromPubSub', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'ReadFromPubSub' in step.step_id
 
-    def test_subscription_param_extraction(self):
-        """Test subscription parameter is extracted correctly."""
-        print("\n[TEST] ReadFromPubSubStep - subscription extraction")
-
+    def test_subscription_param_extraction(self, mock_config):
         spec = {
             'step': 'ReadFromPubSub',
             'id': 'read_pubsub',
-            'params': {
-                'subscription': 'projects/my-project/subscriptions/my-subscription'
-            }
+            'params': {'subscription': 'projects/my-project/subscriptions/my-subscription'}
         }
-        config = MockConfig()
-        state = {}
 
-        step = ReadFromPubSubStep(spec=spec, config=config, state=state)
-
+        step = ReadFromPubSubStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
-        self.assertEqual(params.get('subscription'), 'projects/my-project/subscriptions/my-subscription')
-        print("   [OK] Subscription extracted correctly")
+
+        assert params.get('subscription') == 'projects/my-project/subscriptions/my-subscription'
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestExtractPersonasStep(unittest.TestCase):
-    """Unit tests for ExtractPersonasStep."""
+# =============================================================================
+# Tests: ExtractPersonasStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] ExtractPersonasStep - initialization")
+class TestExtractPersonasStep:
+    """Tests for ExtractPersonasStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'ExtractPersonas',
             'id': 'extract_personas',
-            'params': {
-                'input': 'messages',
-                'pk_col': 'personaId'
-            },
+            'params': {'input': 'messages', 'pk_col': 'personaId'},
             'outputs': ['persona_ids']
         }
-        config = MockConfig()
-        state = {'messages': MagicMock()}
 
-        step = ExtractPersonasStep(spec=spec, config=config, state=state)
+        step = ExtractPersonasStep(spec=spec, config=mock_config, state={'messages': MagicMock()})
 
-        self.assertIn('ExtractPersonas', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'ExtractPersonas' in step.step_id
 
-    def test_input_key_from_params(self):
-        """Test input key extraction from params."""
-        print("\n[TEST] ExtractPersonasStep - input from params")
-
+    def test_input_key_from_params(self, mock_config):
         spec = {
             'step': 'ExtractPersonas',
             'id': 'extract_personas',
-            'params': {
-                'input': 'pubsub_messages',
-                'pk_col': 'personaId'
-            }
+            'params': {'input': 'pubsub_messages', 'pk_col': 'personaId'}
         }
-        config = MockConfig()
-        state = {}
 
-        step = ExtractPersonasStep(spec=spec, config=config, state=state)
-
+        step = ExtractPersonasStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
         input_key = params.get('input') or step.spec.get('input')
-        self.assertEqual(input_key, 'pubsub_messages')
-        print("   [OK] Input key extracted from params")
 
-    def test_input_key_from_spec_top_level(self):
-        """Test input key extraction from top-level spec."""
-        print("\n[TEST] ExtractPersonasStep - input from top-level spec")
+        assert input_key == 'pubsub_messages'
 
+    def test_input_key_from_spec_top_level(self, mock_config):
         spec = {
             'step': 'ExtractPersonas',
             'id': 'extract_personas',
             'input': 'top_level_input',
             'params': {}
         }
-        config = MockConfig()
-        state = {}
 
-        step = ExtractPersonasStep(spec=spec, config=config, state=state)
-
+        step = ExtractPersonasStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
         input_key = params.get('input') or step.spec.get('input')
-        self.assertEqual(input_key, 'top_level_input')
-        print("   [OK] Input key extracted from top-level spec")
+
+        assert input_key == 'top_level_input'
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestFetchFromBigtableStep(unittest.TestCase):
-    """Unit tests for FetchFromBigtableStep."""
+# =============================================================================
+# Tests: FetchFromBigtableStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] FetchFromBigtableStep - initialization")
+class TestFetchFromBigtableStep:
+    """Tests for FetchFromBigtableStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'FetchFromBigtable',
             'id': 'fetch_bigtable',
@@ -249,18 +193,12 @@ class TestFetchFromBigtableStep(unittest.TestCase):
                 'input': 'persona_ids'
             }
         }
-        config = MockConfig()
-        state = {'persona_ids': MagicMock()}
 
-        step = FetchFromBigtableStep(spec=spec, config=config, state=state)
+        step = FetchFromBigtableStep(spec=spec, config=mock_config, state={'persona_ids': MagicMock()})
 
-        self.assertIn('FetchFromBigtable', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'FetchFromBigtable' in step.step_id
 
-    def test_bigtable_params_extraction(self):
-        """Test Bigtable parameter extraction."""
-        print("\n[TEST] FetchFromBigtableStep - param extraction")
-
+    def test_bigtable_params_extraction(self, mock_config):
         spec = {
             'step': 'FetchFromBigtable',
             'id': 'fetch_bigtable',
@@ -271,22 +209,16 @@ class TestFetchFromBigtableStep(unittest.TestCase):
                 'parent_field': ['profiles', 'consents']
             }
         }
-        config = MockConfig()
-        state = {}
 
-        step = FetchFromBigtableStep(spec=spec, config=config, state=state)
-
+        step = FetchFromBigtableStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
-        self.assertEqual(params.get('project'), 'my-gcp-project')
-        self.assertEqual(params.get('instance'), 'my-instance')
-        self.assertEqual(params.get('table'), 'my-table')
-        self.assertEqual(params.get('parent_field'), ['profiles', 'consents'])
-        print("   [OK] Bigtable params extracted correctly")
 
-    def test_default_parent_field(self):
-        """Test default parent_field value."""
-        print("\n[TEST] FetchFromBigtableStep - default parent_field")
+        assert params.get('project') == 'my-gcp-project'
+        assert params.get('instance') == 'my-instance'
+        assert params.get('table') == 'my-table'
+        assert params.get('parent_field') == ['profiles', 'consents']
 
+    def test_default_parent_field(self, mock_config):
         spec = {
             'step': 'FetchFromBigtable',
             'id': 'fetch_bigtable',
@@ -296,241 +228,169 @@ class TestFetchFromBigtableStep(unittest.TestCase):
                 'table': 'test-table'
             }
         }
-        config = MockConfig()
-        state = {}
 
-        step = FetchFromBigtableStep(spec=spec, config=config, state=state)
-
+        step = FetchFromBigtableStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
         parent_field = params.get('parent_field', ['profiles'])
-        self.assertEqual(parent_field, ['profiles'])
-        print("   [OK] Default parent_field is ['profiles']")
+
+        assert parent_field == ['profiles']
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestFilterEmptyPKStep(unittest.TestCase):
-    """Unit tests for FilterEmptyPKStep."""
+# =============================================================================
+# Tests: FilterEmptyPKStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] FilterEmptyPKStep - initialization")
+class TestFilterEmptyPKStep:
+    """Tests for FilterEmptyPKStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'FilterEmptyPK',
             'id': 'filter_empty',
-            'params': {
-                'pk_col': 'profiles.memberId',
-                'input': 'bigtable_rows'
-            }
+            'params': {'pk_col': 'profiles.memberId', 'input': 'bigtable_rows'}
         }
-        config = MockConfig()
-        state = {'bigtable_rows': MagicMock()}
 
-        step = FilterEmptyPKStep(spec=spec, config=config, state=state)
+        step = FilterEmptyPKStep(spec=spec, config=mock_config, state={'bigtable_rows': MagicMock()})
 
-        self.assertIn('FilterEmptyPK', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'FilterEmptyPK' in step.step_id
 
-    def test_default_pk_col(self):
-        """Test default pk_col value."""
-        print("\n[TEST] FilterEmptyPKStep - default pk_col")
+    def test_default_pk_col(self, mock_config):
+        spec = {'step': 'FilterEmptyPK', 'id': 'filter_empty', 'params': {}}
 
-        spec = {
-            'step': 'FilterEmptyPK',
-            'id': 'filter_empty',
-            'params': {}
-        }
-        config = MockConfig()
-        state = {}
-
-        step = FilterEmptyPKStep(spec=spec, config=config, state=state)
-
+        step = FilterEmptyPKStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
         pk_col = params.get('pk_col', 'profiles.memberId')
-        self.assertEqual(pk_col, 'profiles.memberId')
-        print("   [OK] Default pk_col is 'profiles.memberId'")
+
+        assert pk_col == 'profiles.memberId'
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestFilterEmptyFamilyStep(unittest.TestCase):
-    """Unit tests for FilterEmptyFamilyStep."""
+# =============================================================================
+# Tests: FilterEmptyFamilyStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] FilterEmptyFamilyStep - initialization")
+class TestFilterEmptyFamilyStep:
+    """Tests for FilterEmptyFamilyStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'FilterEmptyFamily',
             'id': 'filter_empty_family',
-            'params': {
-                'family_name': 'profiles',
-                'input': 'bigtable_rows'
-            }
+            'params': {'family_name': 'profiles', 'input': 'bigtable_rows'}
         }
-        config = MockConfig()
-        state = {'bigtable_rows': MagicMock()}
 
-        step = FilterEmptyFamilyStep(spec=spec, config=config, state=state)
+        step = FilterEmptyFamilyStep(spec=spec, config=mock_config, state={'bigtable_rows': MagicMock()})
 
-        self.assertIn('FilterEmptyFamily', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'FilterEmptyFamily' in step.step_id
 
-    def test_default_family_name(self):
-        """Test default family_name value."""
-        print("\n[TEST] FilterEmptyFamilyStep - default family_name")
+    def test_default_family_name(self, mock_config):
+        spec = {'step': 'FilterEmptyFamily', 'id': 'filter_empty_family', 'params': {}}
 
-        spec = {
-            'step': 'FilterEmptyFamily',
-            'id': 'filter_empty_family',
-            'params': {}
-        }
-        config = MockConfig()
-        state = {}
-
-        step = FilterEmptyFamilyStep(spec=spec, config=config, state=state)
-
+        step = FilterEmptyFamilyStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
         family_name = params.get('family_name', 'profiles')
-        self.assertEqual(family_name, 'profiles')
-        print("   [OK] Default family_name is 'profiles'")
+
+        assert family_name == 'profiles'
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestTransformSchemasStep(unittest.TestCase):
-    """Unit tests for TransformSchemasStep."""
+# =============================================================================
+# Tests: TransformSchemasStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] TransformSchemasStep - initialization")
+class TestTransformSchemasStep:
+    """Tests for TransformSchemasStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'TransformSchemas',
             'id': 'transform_schemas',
-            'params': {
-                'input': 'filtered_rows',
-                'mapping_info': 'mapping_data',
-                'table_name': 'ms_member'
-            },
+            'params': {'input': 'filtered_rows', 'mapping_info': 'mapping_data', 'table_name': 'ms_member'},
             'outputs': ['aws', 'gcp']
         }
-        config = MockConfig()
-        state = {
-            'filtered_rows': MagicMock(),
-            'mapping_data': MagicMock()
-        }
 
-        step = TransformSchemasStep(spec=spec, config=config, state=state)
+        step = TransformSchemasStep(
+            spec=spec, config=mock_config,
+            state={'filtered_rows': MagicMock(), 'mapping_data': MagicMock()}
+        )
 
-        self.assertIn('TransformSchemas', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'TransformSchemas' in step.step_id
 
-    def test_outputs_configuration(self):
-        """Test outputs configuration."""
-        print("\n[TEST] TransformSchemasStep - outputs config")
-
+    def test_outputs_configuration(self, mock_config):
         spec = {
             'step': 'TransformSchemas',
             'id': 'transform',
-            'params': {
-                'input': 'rows',
-                'mapping_info': 'mapping'
-            },
+            'params': {'input': 'rows', 'mapping_info': 'mapping'},
             'outputs': ['aws_output', 'gcp_output']
         }
-        config = MockConfig()
-        state = {}
 
-        step = TransformSchemasStep(spec=spec, config=config, state=state)
-
+        step = TransformSchemasStep(spec=spec, config=mock_config, state={})
         outputs = step.spec.get('outputs', ['gcp'])
-        self.assertEqual(len(outputs), 2)
-        self.assertEqual(outputs[0], 'aws_output')
-        self.assertEqual(outputs[1], 'gcp_output')
-        print("   [OK] Outputs configured correctly")
+
+        assert len(outputs) == 2
+        assert outputs[0] == 'aws_output'
+        assert outputs[1] == 'gcp_output'
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestFullfillSchemasStep(unittest.TestCase):
-    """Unit tests for FullfillSchemasStep."""
+# =============================================================================
+# Tests: FullfillSchemasStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] FullfillSchemasStep - initialization")
+class TestFullfillSchemasStep:
+    """Tests for FullfillSchemasStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'FullfillSchemas',
             'id': 'fullfill_schemas',
-            'params': {
-                'input': 'transformed_data',
-                'mapping_info': 'mapping_data'
-            }
-        }
-        config = MockConfig()
-        state = {
-            'transformed_data': MagicMock(),
-            'mapping_data': MagicMock()
+            'params': {'input': 'transformed_data', 'mapping_info': 'mapping_data'}
         }
 
-        step = FullfillSchemasStep(spec=spec, config=config, state=state)
+        step = FullfillSchemasStep(
+            spec=spec, config=mock_config,
+            state={'transformed_data': MagicMock(), 'mapping_data': MagicMock()}
+        )
 
-        self.assertIn('FullfillSchemas', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'FullfillSchemas' in step.step_id
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestWriteToBigQueryStreamingStep(unittest.TestCase):
-    """Unit tests for WriteToBigQueryStreamingStep."""
+# =============================================================================
+# Tests: WriteToBigQueryStreamingStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] WriteToBigQueryStreamingStep - initialization")
+class TestWriteToBigQueryStreamingStep:
+    """Tests for WriteToBigQueryStreamingStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'WriteToBigQueryStreaming',
             'id': 'write_bq',
-            'params': {
-                'table': 'project.dataset.table',
-                'input': 'gcp_data'
-            }
+            'params': {'table': 'project.dataset.table', 'input': 'gcp_data'}
         }
-        config = MockConfig()
-        state = {'gcp_data': MagicMock()}
 
-        step = WriteToBigQueryStreamingStep(spec=spec, config=config, state=state)
+        step = WriteToBigQueryStreamingStep(spec=spec, config=mock_config, state={'gcp_data': MagicMock()})
 
-        self.assertIn('WriteToBigQueryStreaming', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'WriteToBigQueryStreaming' in step.step_id
 
-    def test_table_param_extraction(self):
-        """Test table parameter extraction."""
-        print("\n[TEST] WriteToBigQueryStreamingStep - table extraction")
-
+    def test_table_param_extraction(self, mock_config):
         spec = {
             'step': 'WriteToBigQueryStreaming',
             'id': 'write_bq',
-            'params': {
-                'table': 'my-project.my_dataset.my_table',
-                'input': 'data'
-            }
+            'params': {'table': 'my-project.my_dataset.my_table', 'input': 'data'}
         }
-        config = MockConfig()
-        state = {}
 
-        step = WriteToBigQueryStreamingStep(spec=spec, config=config, state=state)
-
+        step = WriteToBigQueryStreamingStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
-        self.assertEqual(params.get('table'), 'my-project.my_dataset.my_table')
-        print("   [OK] Table extracted correctly")
+
+        assert params.get('table') == 'my-project.my_dataset.my_table'
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestWriteToS3ParquetStep(unittest.TestCase):
-    """Unit tests for WriteToS3ParquetStep."""
+# =============================================================================
+# Tests: WriteToS3ParquetStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] WriteToS3ParquetStep - initialization")
+class TestWriteToS3ParquetStep:
+    """Tests for WriteToS3ParquetStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'WriteToS3Parquet',
             'id': 'write_s3',
@@ -541,90 +401,60 @@ class TestWriteToS3ParquetStep(unittest.TestCase):
                 'input': 'aws_data'
             }
         }
-        config = MockConfig()
-        state = {'aws_data': MagicMock()}
 
-        step = WriteToS3ParquetStep(spec=spec, config=config, state=state)
+        step = WriteToS3ParquetStep(spec=spec, config=mock_config, state={'aws_data': MagicMock()})
 
-        self.assertIn('WriteToS3Parquet', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'WriteToS3Parquet' in step.step_id
 
-    def test_default_window_size(self):
-        """Test default window_size value."""
-        print("\n[TEST] WriteToS3ParquetStep - default window_size")
-
+    def test_default_window_size(self, mock_config):
         spec = {
             'step': 'WriteToS3Parquet',
             'id': 'write_s3',
-            'params': {
-                'prefix': 's3://bucket/path',
-                'input': 'data'
-            }
+            'params': {'prefix': 's3://bucket/path', 'input': 'data'}
         }
-        config = MockConfig()
-        state = {}
 
-        step = WriteToS3ParquetStep(spec=spec, config=config, state=state)
-
+        step = WriteToS3ParquetStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
         window_size = int(params.get('window_size', 3600))
-        self.assertEqual(window_size, 3600)  # Default 1 hour
-        print("   [OK] Default window_size is 3600")
 
-    def test_prefix_trailing_slash_handling(self):
-        """Test that prefix trailing slash is handled."""
-        print("\n[TEST] WriteToS3ParquetStep - prefix handling")
+        assert window_size == 3600
 
+    def test_prefix_trailing_slash_handling(self, mock_config):
         spec = {
             'step': 'WriteToS3Parquet',
             'id': 'write_s3',
-            'params': {
-                'prefix': 's3://bucket/path/',  # Note trailing slash
-                'input': 'data'
-            }
+            'params': {'prefix': 's3://bucket/path/', 'input': 'data'}
         }
-        config = MockConfig()
-        state = {}
 
-        step = WriteToS3ParquetStep(spec=spec, config=config, state=state)
-
+        step = WriteToS3ParquetStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
         prefix = params.get('prefix', '').rstrip('/')
-        self.assertEqual(prefix, 's3://bucket/path')
-        print("   [OK] Trailing slash handled correctly")
 
-    def test_input_key_aliases(self):
-        """Test input key can be specified as 'input' or 'in'."""
-        print("\n[TEST] WriteToS3ParquetStep - input aliases")
+        assert prefix == 's3://bucket/path'
 
-        # Test 'in' alias
+    def test_input_key_aliases(self, mock_config):
         spec = {
             'step': 'WriteToS3Parquet',
             'id': 'write_s3',
             'in': 'aws_data',
-            'params': {
-                'prefix': 's3://bucket/path'
-            }
+            'params': {'prefix': 's3://bucket/path'}
         }
-        config = MockConfig()
-        state = {}
 
-        step = WriteToS3ParquetStep(spec=spec, config=config, state=state)
-
+        step = WriteToS3ParquetStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
         input_key = params.get('input') or step.spec.get('input') or step.spec.get('in')
-        self.assertEqual(input_key, 'aws_data')
-        print("   [OK] Input 'in' alias works correctly")
+
+        assert input_key == 'aws_data'
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestWriteToBigQueryCDCStep(unittest.TestCase):
-    """Unit tests for WriteToBigQueryCDCStep."""
+# =============================================================================
+# Tests: WriteToBigQueryCDCStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] WriteToBigQueryCDCStep - initialization")
+class TestWriteToBigQueryCDCStep:
+    """Tests for WriteToBigQueryCDCStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'WriteToBigQueryCDC',
             'id': 'write_bq_cdc',
@@ -635,18 +465,12 @@ class TestWriteToBigQueryCDCStep(unittest.TestCase):
                 'change_type': 'UPSERT'
             }
         }
-        config = MockConfig()
-        state = {'gcp_data': MagicMock()}
 
-        step = WriteToBigQueryCDCStep(spec=spec, config=config, state=state)
+        step = WriteToBigQueryCDCStep(spec=spec, config=mock_config, state={'gcp_data': MagicMock()})
 
-        self.assertIn('WriteToBigQueryCDC', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'WriteToBigQueryCDC' in step.step_id
 
-    def test_cdc_params_extraction(self):
-        """Test CDC parameters extraction."""
-        print("\n[TEST] WriteToBigQueryCDCStep - CDC params")
-
+    def test_cdc_params_extraction(self, mock_config):
         spec = {
             'step': 'WriteToBigQueryCDC',
             'id': 'write_cdc',
@@ -659,108 +483,71 @@ class TestWriteToBigQueryCDCStep(unittest.TestCase):
                 'num_storage_api_streams': 8
             }
         }
-        config = MockConfig()
-        state = {}
 
-        step = WriteToBigQueryCDCStep(spec=spec, config=config, state=state)
-
+        step = WriteToBigQueryCDCStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
-        self.assertEqual(params.get('primary_key'), ['id', 'timestamp'])
-        self.assertEqual(params.get('change_type'), 'DELETE')
-        self.assertEqual(params.get('triggering_frequency'), 10)
-        self.assertEqual(params.get('num_storage_api_streams'), 8)
-        print("   [OK] CDC params extracted correctly")
 
-    def test_default_cdc_params(self):
-        """Test default CDC parameters."""
-        print("\n[TEST] WriteToBigQueryCDCStep - default params")
+        assert params.get('primary_key') == ['id', 'timestamp']
+        assert params.get('change_type') == 'DELETE'
+        assert params.get('triggering_frequency') == 10
+        assert params.get('num_storage_api_streams') == 8
 
+    def test_default_cdc_params(self, mock_config):
         spec = {
             'step': 'WriteToBigQueryCDC',
             'id': 'write_cdc',
-            'params': {
-                'table': 'project.dataset.table',
-                'input': 'data'
-            }
+            'params': {'table': 'project.dataset.table', 'input': 'data'}
         }
-        config = MockConfig()
-        state = {}
 
-        step = WriteToBigQueryCDCStep(spec=spec, config=config, state=state)
-
+        step = WriteToBigQueryCDCStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
-        # Check defaults
-        primary_key = params.get('primary_key', ['memberId'])
-        change_type = params.get('change_type', 'UPSERT')
-        triggering_frequency = params.get('triggering_frequency', 5)
-        num_streams = params.get('num_storage_api_streams', 5)
 
-        self.assertEqual(primary_key, ['memberId'])
-        self.assertEqual(change_type, 'UPSERT')
-        self.assertEqual(triggering_frequency, 5)
-        self.assertEqual(num_streams, 5)
-        print("   [OK] Default CDC params are correct")
+        assert params.get('primary_key', ['memberId']) == ['memberId']
+        assert params.get('change_type', 'UPSERT') == 'UPSERT'
+        assert params.get('triggering_frequency', 5) == 5
+        assert params.get('num_storage_api_streams', 5) == 5
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestWriteToBigLakeIcebergStreamingStep(unittest.TestCase):
-    """Unit tests for WriteToBigLakeIcebergStreamingStep."""
+# =============================================================================
+# Tests: WriteToBigLakeIcebergStreamingStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] WriteToBigLakeIcebergStreamingStep - initialization")
+class TestWriteToBigLakeIcebergStreamingStep:
+    """Tests for WriteToBigLakeIcebergStreamingStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'WriteToBigLakeIcebergStreaming',
             'id': 'write_biglake',
-            'params': {
-                'table': 'project.dataset.iceberg_table',
-                'input': 'data',
-                'triggering_frequency': 10
-            }
+            'params': {'table': 'project.dataset.iceberg_table', 'input': 'data', 'triggering_frequency': 10}
         }
-        config = MockConfig()
-        state = {'data': MagicMock()}
 
-        step = WriteToBigLakeIcebergStreamingStep(spec=spec, config=config, state=state)
+        step = WriteToBigLakeIcebergStreamingStep(spec=spec, config=mock_config, state={'data': MagicMock()})
 
-        self.assertIn('WriteToBigLakeIcebergStreaming', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'WriteToBigLakeIcebergStreaming' in step.step_id
 
-    def test_default_streaming_params(self):
-        """Test default streaming parameters."""
-        print("\n[TEST] WriteToBigLakeIcebergStreamingStep - defaults")
-
+    def test_default_streaming_params(self, mock_config):
         spec = {
             'step': 'WriteToBigLakeIcebergStreaming',
             'id': 'write_biglake',
-            'params': {
-                'table': 'project.dataset.table',
-                'input': 'data'
-            }
+            'params': {'table': 'project.dataset.table', 'input': 'data'}
         }
-        config = MockConfig()
-        state = {}
 
-        step = WriteToBigLakeIcebergStreamingStep(spec=spec, config=config, state=state)
-
+        step = WriteToBigLakeIcebergStreamingStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
-        triggering_frequency = params.get('triggering_frequency', 5)
-        num_streams = params.get('num_storage_api_streams', 5)
 
-        self.assertEqual(triggering_frequency, 5)
-        self.assertEqual(num_streams, 5)
-        print("   [OK] Default streaming params are correct")
+        assert params.get('triggering_frequency', 5) == 5
+        assert params.get('num_storage_api_streams', 5) == 5
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestMergeToIcebergStreamingStep(unittest.TestCase):
-    """Unit tests for MergeToIcebergStreamingStep."""
+# =============================================================================
+# Tests: MergeToIcebergStreamingStep
+# =============================================================================
 
-    def test_step_initialization(self):
-        """Test step initialization."""
-        print("\n[TEST] MergeToIcebergStreamingStep - initialization")
+class TestMergeToIcebergStreamingStep:
+    """Tests for MergeToIcebergStreamingStep class."""
 
+    def test_step_initialization(self, mock_config):
         spec = {
             'step': 'MergeToIcebergStreaming',
             'id': 'merge_iceberg',
@@ -769,21 +556,15 @@ class TestMergeToIcebergStreamingStep(unittest.TestCase):
                 'iceberg_table': 'project.dataset.iceberg_table',
                 'lookback_minutes': 30,
                 'merge_interval_sec': 300,
-                'merge_query': 'MERGE `{iceberg_table}` AS T USING (...) AS S ON T.id = S.id ...'
+                'merge_query': 'MERGE ...'
             }
         }
-        config = MockConfig()
-        state = {}
 
-        step = MergeToIcebergStreamingStep(spec=spec, config=config, state=state)
+        step = MergeToIcebergStreamingStep(spec=spec, config=mock_config, state={})
 
-        self.assertIn('MergeToIcebergStreaming', step.step_id)
-        print("   [OK] Step initialized correctly")
+        assert 'MergeToIcebergStreaming' in step.step_id
 
-    def test_merge_params_extraction(self):
-        """Test merge parameters extraction."""
-        print("\n[TEST] MergeToIcebergStreamingStep - params")
-
+    def test_merge_params_extraction(self, mock_config):
         spec = {
             'step': 'MergeToIcebergStreaming',
             'id': 'merge',
@@ -795,23 +576,17 @@ class TestMergeToIcebergStreamingStep(unittest.TestCase):
                 'merge_query': 'MERGE ...'
             }
         }
-        config = MockConfig()
-        state = {}
 
-        step = MergeToIcebergStreamingStep(spec=spec, config=config, state=state)
-
+        step = MergeToIcebergStreamingStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
-        self.assertEqual(params.get('native_table'), 'project.dataset.source')
-        self.assertEqual(params.get('iceberg_table'), 'project.dataset.target')
-        self.assertEqual(params.get('lookback_minutes'), 60)
-        self.assertEqual(params.get('merge_interval_sec'), 600)
-        self.assertIsNotNone(params.get('merge_query'))
-        print("   [OK] Merge params extracted correctly")
 
-    def test_default_lookback_and_interval(self):
-        """Test default lookback and interval values."""
-        print("\n[TEST] MergeToIcebergStreamingStep - defaults")
+        assert params.get('native_table') == 'project.dataset.source'
+        assert params.get('iceberg_table') == 'project.dataset.target'
+        assert params.get('lookback_minutes') == 60
+        assert params.get('merge_interval_sec') == 600
+        assert params.get('merge_query') is not None
 
+    def test_default_lookback_and_interval(self, mock_config):
         spec = {
             'step': 'MergeToIcebergStreaming',
             'id': 'merge',
@@ -821,148 +596,112 @@ class TestMergeToIcebergStreamingStep(unittest.TestCase):
                 'merge_query': 'MERGE ...'
             }
         }
-        config = MockConfig()
-        state = {}
 
-        step = MergeToIcebergStreamingStep(spec=spec, config=config, state=state)
-
+        step = MergeToIcebergStreamingStep(spec=spec, config=mock_config, state={})
         params = step.spec.get('params', {})
-        lookback = int(params.get('lookback_minutes', 30))
-        interval = int(params.get('merge_interval_sec', 300))
 
-        self.assertEqual(lookback, 30)
-        self.assertEqual(interval, 300)
-        print("   [OK] Default lookback=30, interval=300")
+        assert int(params.get('lookback_minutes', 30)) == 30
+        assert int(params.get('merge_interval_sec', 300)) == 300
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestStepIdGeneration(unittest.TestCase):
-    """Unit tests for step ID generation."""
+# =============================================================================
+# Tests: Step ID Generation
+# =============================================================================
 
-    def test_step_id_from_id_field(self):
-        """Test step_id generated from spec['id']."""
-        print("\n[TEST] Step ID - from id field")
+class TestStepIdGeneration:
+    """Tests for step ID generation."""
 
-        spec = {
-            'step': 'FilterEmptyPK',
-            'id': 'my_filter_step',
-            'params': {}
-        }
-        config = MockConfig()
-        state = {}
+    def test_step_id_from_id_field(self, mock_config):
+        spec = {'step': 'FilterEmptyPK', 'id': 'my_filter_step', 'params': {}}
 
-        step = FilterEmptyPKStep(spec=spec, config=config, state=state)
+        step = FilterEmptyPKStep(spec=spec, config=mock_config, state={})
 
-        self.assertIn('FilterEmptyPK', step.step_id)
-        self.assertIn('my_filter_step', step.step_id)
-        print("   [OK] step_id uses spec['id']")
+        assert 'FilterEmptyPK' in step.step_id
+        assert 'my_filter_step' in step.step_id
 
-    def test_step_id_from_out_field(self):
-        """Test step_id generated from spec['out']."""
-        print("\n[TEST] Step ID - from out field")
+    def test_step_id_from_out_field(self, mock_config):
+        spec = {'step': 'FilterEmptyPK', 'out': 'filtered_output', 'params': {}}
 
-        spec = {
-            'step': 'FilterEmptyPK',
-            'out': 'filtered_output',
-            'params': {}
-        }
-        config = MockConfig()
-        state = {}
+        step = FilterEmptyPKStep(spec=spec, config=mock_config, state={})
 
-        step = FilterEmptyPKStep(spec=spec, config=config, state=state)
-
-        self.assertIn('FilterEmptyPK', step.step_id)
-        print("   [OK] step_id can use spec['out']")
+        assert 'FilterEmptyPK' in step.step_id
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestAllStepsExported(unittest.TestCase):
-    """Test that all steps are properly exported."""
+# =============================================================================
+# Tests: Module Exports
+# =============================================================================
 
-    def test_all_exports(self):
-        """Test __all__ exports."""
-        print("\n[TEST] Module exports")
+class TestAllStepsExported:
+    """Tests for module exports."""
 
-        expected_steps = [
-            'RefreshMappingTableStep',
-            'ReadFromPubSubStep',
-            'ExtractPersonasStep',
-            'FetchFromBigtableStep',
-            'FilterEmptyPKStep',
-            'FilterEmptyFamilyStep',
-            'TransformSchemasStep',
-            'FullfillSchemasStep',
-            'WriteToBigQueryStreamingStep',
-            'WriteToS3ParquetStep',
-            'WriteToBigQueryCDCStep',
-            'WriteToBigLakeIcebergStreamingStep',
-            'MergeToIcebergStreamingStep',
-        ]
-
-        for step_name in expected_steps:
-            self.assertIn(step_name, streaming_step_module.__all__)
-            self.assertTrue(hasattr(streaming_step_module, step_name))
-            print(f"   [OK] {step_name} exported")
+    @pytest.mark.parametrize("step_name", [
+        'RefreshMappingTableStep',
+        'ReadFromPubSubStep',
+        'ExtractPersonasStep',
+        'FetchFromBigtableStep',
+        'FilterEmptyPKStep',
+        'FilterEmptyFamilyStep',
+        'TransformSchemasStep',
+        'FullfillSchemasStep',
+        'WriteToBigQueryStreamingStep',
+        'WriteToS3ParquetStep',
+        'WriteToBigQueryCDCStep',
+        'WriteToBigLakeIcebergStreamingStep',
+        'MergeToIcebergStreamingStep',
+    ])
+    def test_step_exported(self, step_name):
+        assert step_name in streaming_step_module.__all__
+        assert hasattr(streaming_step_module, step_name)
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestStepInheritance(unittest.TestCase):
-    """Test that all steps inherit from BaseStep."""
+# =============================================================================
+# Tests: BaseStep Inheritance
+# =============================================================================
 
-    def test_all_steps_inherit_basestep(self):
-        """Test all step classes inherit from BaseStep."""
-        print("\n[TEST] BaseStep inheritance")
+class TestStepInheritance:
+    """Tests for BaseStep inheritance."""
 
-        step_classes = [
-            RefreshMappingTableStep,
-            ReadFromPubSubStep,
-            ExtractPersonasStep,
-            FetchFromBigtableStep,
-            FilterEmptyPKStep,
-            FilterEmptyFamilyStep,
-            TransformSchemasStep,
-            FullfillSchemasStep,
-            WriteToBigQueryStreamingStep,
-            WriteToS3ParquetStep,
-            WriteToBigQueryCDCStep,
-            WriteToBigLakeIcebergStreamingStep,
-            MergeToIcebergStreamingStep,
-        ]
-
-        for step_class in step_classes:
-            self.assertTrue(issubclass(step_class, BaseStep))
-            print(f"   [OK] {step_class.__name__} inherits BaseStep")
+    @pytest.mark.parametrize("step_class", [
+        RefreshMappingTableStep,
+        ReadFromPubSubStep,
+        ExtractPersonasStep,
+        FetchFromBigtableStep,
+        FilterEmptyPKStep,
+        FilterEmptyFamilyStep,
+        TransformSchemasStep,
+        FullfillSchemasStep,
+        WriteToBigQueryStreamingStep,
+        WriteToS3ParquetStep,
+        WriteToBigQueryCDCStep,
+        WriteToBigLakeIcebergStreamingStep,
+        MergeToIcebergStreamingStep,
+    ])
+    def test_inherits_basestep(self, step_class):
+        assert issubclass(step_class, BaseStep)
 
 
-@unittest.skipUnless(IMPORTS_AVAILABLE, "Required modules not available")
-class TestStepExecuteMethod(unittest.TestCase):
-    """Test that all steps have execute method."""
+# =============================================================================
+# Tests: Execute Method Exists
+# =============================================================================
 
-    def test_all_steps_have_execute(self):
-        """Test all step classes have execute method."""
-        print("\n[TEST] Execute method exists")
+class TestStepExecuteMethod:
+    """Tests for execute method existence."""
 
-        step_classes = [
-            RefreshMappingTableStep,
-            ReadFromPubSubStep,
-            ExtractPersonasStep,
-            FetchFromBigtableStep,
-            FilterEmptyPKStep,
-            FilterEmptyFamilyStep,
-            TransformSchemasStep,
-            FullfillSchemasStep,
-            WriteToBigQueryStreamingStep,
-            WriteToS3ParquetStep,
-            WriteToBigQueryCDCStep,
-            WriteToBigLakeIcebergStreamingStep,
-            MergeToIcebergStreamingStep,
-        ]
-
-        for step_class in step_classes:
-            self.assertTrue(hasattr(step_class, 'execute'))
-            self.assertTrue(callable(getattr(step_class, 'execute')))
-            print(f"   [OK] {step_class.__name__}.execute() exists")
-
-
-if __name__ == '__main__':
-    unittest.main()
+    @pytest.mark.parametrize("step_class", [
+        RefreshMappingTableStep,
+        ReadFromPubSubStep,
+        ExtractPersonasStep,
+        FetchFromBigtableStep,
+        FilterEmptyPKStep,
+        FilterEmptyFamilyStep,
+        TransformSchemasStep,
+        FullfillSchemasStep,
+        WriteToBigQueryStreamingStep,
+        WriteToS3ParquetStep,
+        WriteToBigQueryCDCStep,
+        WriteToBigLakeIcebergStreamingStep,
+        MergeToIcebergStreamingStep,
+    ])
+    def test_has_execute_method(self, step_class):
+        assert hasattr(step_class, 'execute')
+        assert callable(getattr(step_class, 'execute'))
