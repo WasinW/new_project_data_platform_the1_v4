@@ -51,3 +51,14 @@ dataflow_common = "."
 # "dataflow_common.steps.dofns" = "steps/dofns"
 "dataflow_common.transforms" = "transforms"
 "dataflow_common.utils" = "utils"
+
+[tool.pytest.ini_options]
+# Filter warnings during test runs
+filterwarnings = [
+    # Ignore httplib2 deprecation warnings (third-party library)
+    "ignore::DeprecationWarning:httplib2.*",
+    # Ignore PytestCollectionWarning for apache_beam's TestPipeline
+    "ignore:cannot collect test class 'TestPipeline':pytest.PytestCollectionWarning",
+]
+# Disable collection of apache_beam's TestPipeline class
+python_classes = ["Test*", "!TestPipeline"]
