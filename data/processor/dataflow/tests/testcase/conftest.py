@@ -20,3 +20,8 @@ if str(dataflow_dir) not in sys.path:
 scripts_dir = dataflow_dir / "scripts"
 if str(scripts_dir) not in sys.path:
     sys.path.insert(0, str(scripts_dir))
+
+# Add common directory to sys.path for 'dataflow_common' imports
+common_dir = dataflow_dir / "common"
+if str(common_dir) not in sys.path:
+    sys.path.insert(0, str(common_dir))

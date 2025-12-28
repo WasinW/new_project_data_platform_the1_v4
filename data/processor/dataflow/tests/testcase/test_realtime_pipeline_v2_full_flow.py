@@ -22,24 +22,18 @@ import json
 import unittest
 import logging
 from pathlib import Path
-from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
-from typing import Dict, List, Any
-
-import apache_beam as beam
-from apache_beam.testing.test_pipeline import TestPipeline
-from apache_beam.testing.util import assert_that, equal_to, is_not_empty
-from apache_beam import pvalue
+from unittest.mock import patch
 
 # Set environment variable before imports
 os.environ.setdefault("WORKSPACE_ENV", "dev")
 
-# Add parent directories to path for imports
+# Add parent directories to path for imports - MUST be before dataflow_common imports!
 test_dir = os.path.dirname(os.path.abspath(__file__))
 tests_dir = os.path.dirname(test_dir)
 dataflow_dir = os.path.dirname(tests_dir)
+common_dir = os.path.join(dataflow_dir, 'common')
 
-for p in [test_dir, dataflow_dir]:
+for p in [test_dir, dataflow_dir, common_dir]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -47,9 +41,14 @@ for p in [test_dir, dataflow_dir]:
 DATAFLOW_DIR = Path(__file__).parent.parent.parent
 CONFIGS_DIR = DATAFLOW_DIR / "configs"
 
+# Now import apache_beam and dataflow_common
+import apache_beam as beam
+from apache_beam.testing.test_pipeline import TestPipeline
+from apache_beam.testing.util import assert_that, equal_to
+
 # Import common components
 from dataflow_common.orchestrator import Orchestrator
-from dataflow_common.config import PipelineConfig, load_config
+from dataflow_common.config import PipelineConfig
 from dataflow_common.core import BaseStep
 
 # Configure logging for tests
