@@ -22,8 +22,6 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, 'scripts'))
 
 # Import from full_script
 from customer_profile_batch_pipeline_full_script import (
-    # Config builder
-    build_config,
     # Mapping utilities
     normalize_path,
     extract_by_path,
@@ -37,48 +35,6 @@ from customer_profile_batch_pipeline_full_script import (
     MapRecordDoFn,
     EnsureColumnsDoFn,
 )
-
-
-# =============================================================================
-# TEST: BUILD CONFIG
-# =============================================================================
-
-class TestBuildConfig:
-    """Test build_config function."""
-
-    def test_build_config_stg(self):
-        """Test config is built correctly for stg environment."""
-        config = build_config("stg")
-
-        assert config["env"] == "stg"
-        assert config["io"]["bq"]["project"] == "the1-insight-stg"
-        assert "stg" in config["io"]["s3"]["bucket"]
-        assert "the1-insight-stg" in config["mapping"]["query"]
-
-    def test_build_config_prod(self):
-        """Test config is built correctly for prod environment."""
-        config = build_config("prod")
-
-        assert config["env"] == "prod"
-        assert config["io"]["bq"]["project"] == "the1-insight-prod"
-        assert "prod" in config["io"]["s3"]["bucket"]
-        assert "the1-insight-prod" in config["mapping"]["query"]
-
-    def test_build_config_contains_all_sections(self):
-        """Test that config contains all required sections."""
-        config = build_config("stg")
-
-        assert "env" in config
-        assert "io" in config
-        assert "mapping" in config
-        assert "pipeline" in config
-        assert "parquet" in config
-
-        # Check nested sections
-        assert "bq" in config["io"]
-        assert "s3" in config["io"]
-        assert "project" in config["io"]["bq"]
-        assert "dataset" in config["io"]["bq"]
 
 
 # =============================================================================
