@@ -1,29 +1,24 @@
 """
-Unit tests for dataflow_common modules.
+Unit tests for transform functions in dataflow_common.
 
-Tests the refactored common module with PTransform pattern.
+Tests mapping utilities, schema utilities, and coalesce functions.
 """
 from __future__ import annotations
 
-import json
 import sys
 import os
-from datetime import datetime, date, timezone
-from unittest.mock import MagicMock, patch
+from datetime import datetime, date
 
 import pytest
-import apache_beam as beam
-from apache_beam.testing.test_pipeline import TestPipeline
-from apache_beam.testing.util import assert_that, equal_to, is_empty
 import pyarrow as pa
 
 # Add common directory to path
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(BASE_DIR, 'common'))
+COMMON_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, COMMON_DIR)
 
 
 # =============================================================================
-# TEST: BATCH DoFns and UTILITIES
+# TEST: MAPPING UTILITIES
 # =============================================================================
 
 class TestNormalizePath:
@@ -47,6 +42,12 @@ class TestNormalizePath:
         result = normalize_path('profiles["memberId"]')
         assert result == ["profiles", "memberId"]
 
+    def test_mixed_notation(self):
+        from dofns.batch import normalize_path
+
+        result = normalize_path("data['profiles'].memberId")
+        assert result == ["data", "profiles", "memberId"]
+
     def test_empty_path(self):
         from dofns.batch import normalize_path
 
@@ -65,6 +66,12 @@ class TestNormalizePath:
         result = normalize_path("a.b.c.d.e")
         assert result == ["a", "b", "c", "d", "e"]
 
+    def test_path_with_spaces(self):
+        from dofns.batch import normalize_path
+
+        result = normalize_path("  profiles . memberId  ")
+        assert result == ["profiles", "memberId"]
+
 
 class TestExtractByPath:
     """Test extract_by_path function."""
@@ -75,6 +82,13 @@ class TestExtractByPath:
         record = {"profiles": {"memberId": "M001"}}
         result = extract_by_path(record, ["profiles", "memberId"])
         assert result == "M001"
+
+    def test_deep_extraction(self):
+        from dofns.batch import extract_by_path
+
+        record = {"a": {"b": {"c": {"d": "value"}}}}
+        result = extract_by_path(record, ["a", "b", "c", "d"])
+        assert result == "value"
 
     def test_missing_key(self):
         from dofns.batch import extract_by_path
@@ -102,6 +116,13 @@ class TestExtractByPath:
         record = {"key": "value"}
         result = extract_by_path(record, [])
         assert result == record
+
+    def test_nested_none_value(self):
+        from dofns.batch import extract_by_path
+
+        record = {"profiles": None}
+        result = extract_by_path(record, ["profiles", "memberId"])
+        assert result is None
 
 
 class TestCreateMappingDict:
@@ -147,7 +168,7 @@ class TestCreateMappingDict:
         rows = [
             {
                 "src_column_name": "profiles.id",
-                "dest_column_name": None,  # Missing
+                "dest_column_name": None,
                 "retrieved_flag": True,
                 "confirmed_flag": False,
             }
@@ -155,6 +176,30 @@ class TestCreateMappingDict:
 
         result = create_mapping_dict(rows)
         assert result == {}
+
+    def test_custom_field_names(self):
+        from dofns.batch import create_mapping_dict
+
+        rows = [
+            {
+                "source": "profiles.id",
+                "target": "member_id",
+                "flag_a": True,
+                "flag_b": False,
+            }
+        ]
+
+        result = create_mapping_dict(
+            rows,
+            src_field="source",
+            dest_field="target",
+            retrieved_flag_field="flag_a",
+            confirmed_flag_field="flag_b"
+        )
+
+        assert "member_id" in result
+        assert result["member_id"]["reconcile"] is True
+        assert result["member_id"]["original"] is False
 
 
 class TestMapRecord:
@@ -180,7 +225,7 @@ class TestMapRecord:
             },
             "other_field": {
                 "src_path": ["profiles", "other"],
-                "reconcile": False,  # Not in reconcile mode
+                "reconcile": False,
                 "original": True,
             },
         }
@@ -189,14 +234,42 @@ class TestMapRecord:
 
         assert result["member_id"] == "M001"
         assert result["full_name"] == "John"
-        assert "other_field" not in result  # Not included in reconcile mode
+        assert "other_field" not in result
 
     def test_original_mode(self):
         from dofns.batch import map_record
 
-        record = {
-            "profiles": {"memberId": "M001"}
+        record = {"profiles": {"memberId": "M001", "name": "John"}}
+
+        mapping_dict = {
+            "member_id": {
+                "src_path": ["profiles", "memberId"],
+                "reconcile": True,
+                "original": False,
+            },
+            "full_name": {
+                "src_path": ["profiles", "name"],
+                "reconcile": False,
+                "original": True,
+            },
         }
+
+        result = map_record(record, mapping_dict, mode="original")
+
+        assert "member_id" not in result
+        assert result["full_name"] == "John"
+
+    def test_empty_mapping(self):
+        from dofns.batch import map_record
+
+        record = {"profiles": {"memberId": "M001"}}
+        result = map_record(record, {}, mode="reconcile")
+        assert result == {}
+
+    def test_missing_source_path(self):
+        from dofns.batch import map_record
+
+        record = {"profiles": {"name": "John"}}
 
         mapping_dict = {
             "member_id": {
@@ -206,11 +279,13 @@ class TestMapRecord:
             },
         }
 
-        result = map_record(record, mapping_dict, mode="original")
+        result = map_record(record, mapping_dict, mode="reconcile")
+        assert result["member_id"] is None
 
-        # Should be empty because original=False for member_id
-        assert result == {}
 
+# =============================================================================
+# TEST: COALESCE UTILITIES
+# =============================================================================
 
 class TestCoalesceByMapping:
     """Test coalesce_by_mapping function."""
@@ -239,8 +314,8 @@ class TestCoalesceByMapping:
             dest_field="dest_column_name"
         )
 
-        assert result["field1"] == "new_value"  # prefer_new=True
-        assert result["field2"] == "old_value2"  # prefer_new=False
+        assert result["field1"] == "new_value"
+        assert result["field2"] == "old_value2"
 
     def test_no_new_rows(self):
         from dofns.batch import coalesce_by_mapping
@@ -263,7 +338,30 @@ class TestCoalesceByMapping:
             dest_field="dest_column_name"
         )
 
-        assert result is None  # Should return None when no new rows
+        assert result is None
+
+    def test_no_old_rows(self):
+        from dofns.batch import coalesce_by_mapping
+
+        kv = (
+            "key1",
+            {
+                "new": [{"field1": "new_value"}],
+                "old": [],
+            }
+        )
+
+        columns = [{"dest_column_name": "field1", "prefer_new": True}]
+
+        result = coalesce_by_mapping(
+            kv,
+            columns=columns,
+            flag_field="prefer_new",
+            pk_field="pk",
+            dest_field="dest_column_name"
+        )
+
+        assert result["field1"] == "new_value"
 
 
 # =============================================================================
@@ -305,6 +403,14 @@ class TestBuildPyarrowSchema:
         assert result.field("created_date").type == pa.date32()
         assert pa.types.is_timestamp(result.field("updated_at").type)
 
+    def test_numeric_type(self):
+        from dofns.batch import build_pyarrow_schema
+
+        schema_def = [{"name": "price", "type": "NUMERIC"}]
+        result = build_pyarrow_schema(schema_def)
+
+        assert pa.types.is_decimal(result.field("price").type)
+
     def test_default_to_string(self):
         from dofns.batch import build_pyarrow_schema
 
@@ -317,6 +423,18 @@ class TestBuildPyarrowSchema:
 
         assert result.field("unknown_type").type == pa.string()
         assert result.field("no_type").type == pa.string()
+
+    def test_skip_missing_name(self):
+        from dofns.batch import build_pyarrow_schema
+
+        schema_def = [
+            {"name": "valid", "type": "STRING"},
+            {"type": "INT64"},  # Missing name
+        ]
+
+        result = build_pyarrow_schema(schema_def)
+        assert len(result) == 1
+        assert result.field("valid").type == pa.string()
 
 
 class TestBuildPyarrowSchemaAllStrings:
@@ -334,6 +452,12 @@ class TestBuildPyarrowSchemaAllStrings:
         for field in result:
             assert field.type == pa.string()
 
+    def test_empty_columns(self):
+        from dofns.batch import build_pyarrow_schema_all_strings
+
+        result = build_pyarrow_schema_all_strings([])
+        assert len(result) == 0
+
 
 class TestNormalizeRowToSchema:
     """Test normalize_row_to_schema function."""
@@ -350,7 +474,7 @@ class TestNormalizeRowToSchema:
         result = normalize_row_to_schema(row, schema)
 
         assert result["name"] == "John"
-        assert result["count"] == "42"  # Converted to string
+        assert result["count"] == "42"
 
     def test_none_to_empty_string(self):
         from dofns.batch import normalize_row_to_schema
@@ -372,20 +496,26 @@ class TestNormalizeRowToSchema:
 
         assert result["birth_date"] == date(2000, 1, 15)
 
+    def test_date_parsing_dmy_format(self):
+        from dofns.batch import normalize_row_to_schema
+
+        schema = pa.schema([pa.field("birth_date", pa.date32())])
+
+        row = {"birth_date": "15/01/2000"}
+        result = normalize_row_to_schema(row, schema)
+
+        assert result["birth_date"] == date(2000, 1, 15)
+
     def test_boolean_parsing(self):
         from dofns.batch import normalize_row_to_schema
 
         schema = pa.schema([pa.field("active", pa.bool_())])
 
-        row1 = {"active": "true"}
-        row2 = {"active": "1"}
-        row3 = {"active": "yes"}
-        row4 = {"active": True}
-
-        assert normalize_row_to_schema(row1, schema)["active"] is True
-        assert normalize_row_to_schema(row2, schema)["active"] is True
-        assert normalize_row_to_schema(row3, schema)["active"] is True
-        assert normalize_row_to_schema(row4, schema)["active"] is True
+        assert normalize_row_to_schema({"active": "true"}, schema)["active"] is True
+        assert normalize_row_to_schema({"active": "1"}, schema)["active"] is True
+        assert normalize_row_to_schema({"active": "yes"}, schema)["active"] is True
+        assert normalize_row_to_schema({"active": True}, schema)["active"] is True
+        assert normalize_row_to_schema({"active": "false"}, schema)["active"] is False
 
     def test_integer_parsing(self):
         from dofns.batch import normalize_row_to_schema
@@ -397,213 +527,29 @@ class TestNormalizeRowToSchema:
 
         assert result["count"] == 42
 
+    def test_float_parsing(self):
+        from dofns.batch import normalize_row_to_schema
 
-# =============================================================================
-# TEST: BATCH DoFn CLASSES
-# =============================================================================
+        schema = pa.schema([pa.field("value", pa.float64())])
 
-class TestParseJsonDoFn:
-    """Test ParseJsonDoFn."""
+        row = {"value": "3.14"}
+        result = normalize_row_to_schema(row, schema)
 
-    def test_parse_json_field(self):
-        from dofns.batch import ParseJsonDoFn
+        assert result["value"] == 3.14
 
-        element = {
-            "id": "1",
-            "profiles": '{"name": "John", "age": 30}'
-        }
+    def test_invalid_integer(self):
+        from dofns.batch import normalize_row_to_schema
 
-        with TestPipeline() as p:
-            result = (
-                p
-                | beam.Create([element])
-                | beam.ParDo(ParseJsonDoFn(json_fields=["profiles"]))
-            )
+        schema = pa.schema([pa.field("count", pa.int64())])
 
-            def check_result(elements):
-                assert len(elements) == 1
-                assert elements[0]["profiles"] == {"name": "John", "age": 30}
+        row = {"count": "not_a_number"}
+        result = normalize_row_to_schema(row, schema)
 
-            assert_that(result, check_result)
-
-    def test_non_string_field(self):
-        from dofns.batch import ParseJsonDoFn
-
-        element = {
-            "id": "1",
-            "profiles": {"already": "parsed"}  # Already a dict
-        }
-
-        with TestPipeline() as p:
-            result = (
-                p
-                | beam.Create([element])
-                | beam.ParDo(ParseJsonDoFn(json_fields=["profiles"]))
-            )
-
-            def check_result(elements):
-                assert len(elements) == 1
-                # Should remain unchanged
-                assert elements[0]["profiles"] == {"already": "parsed"}
-
-            assert_that(result, check_result)
-
-
-class TestMapRecordDoFn:
-    """Test MapRecordDoFn."""
-
-    def test_map_record(self):
-        from dofns.batch import MapRecordDoFn
-
-        element = {"profiles": {"memberId": "M001"}}
-        mapping_dict = {
-            "member_id": {
-                "src_path": ["profiles", "memberId"],
-                "reconcile": True,
-                "original": False,
-            }
-        }
-
-        with TestPipeline() as p:
-            result = (
-                p
-                | beam.Create([element])
-                | beam.ParDo(MapRecordDoFn(mode="reconcile"), mapping_dict=mapping_dict)
-            )
-
-            def check_result(elements):
-                assert len(elements) == 1
-                assert elements[0]["member_id"] == "M001"
-
-            assert_that(result, check_result)
-
-
-class TestEnsureColumnsDoFn:
-    """Test EnsureColumnsDoFn."""
-
-    def test_ensure_columns(self):
-        from dofns.batch import EnsureColumnsDoFn
-
-        element = {"col1": "value1", "col2": 123}
-        columns = ["col1", "col2", "col3"]
-
-        with TestPipeline() as p:
-            result = (
-                p
-                | beam.Create([element])
-                | beam.ParDo(EnsureColumnsDoFn(columns))
-            )
-
-            def check_result(elements):
-                assert len(elements) == 1
-                result = elements[0]
-                assert result["col1"] == "value1"
-                assert result["col2"] == "123"  # Converted to string
-                assert result["col3"] is None  # Missing column
-
-            assert_that(result, check_result)
+        assert result["count"] is None
 
 
 # =============================================================================
-# TEST: DLQ SUPPORT
-# =============================================================================
-
-class TestDLQSupport:
-    """Test DLQ support classes and functions."""
-
-    def test_create_dlq_record(self):
-        from dofns.dlq import create_dlq_record
-
-        element = {"key": "value"}
-        error = ValueError("Test error")
-
-        record = create_dlq_record(
-            element=element,
-            error=error,
-            step_name="TestStep",
-            pipeline_name="TestPipeline"
-        )
-
-        assert record["error_message"] == "Test error"
-        assert record["error_type"] == "ValueError"
-        assert record["step_name"] == "TestStep"
-        assert record["pipeline_name"] == "TestPipeline"
-        assert "error_timestamp" in record
-
-    def test_dlq_output_mixin(self):
-        from dofns.dlq import DLQOutputMixin, SUCCESS_TAG, DLQ_TAG
-
-        class TestDoFn(DLQOutputMixin):
-            pipeline_name = "test"
-
-        dofn = TestDoFn()
-
-        # Test success
-        success_result = dofn.success({"data": "test"})
-        assert success_result.tag == SUCCESS_TAG
-
-        # Test to_dlq
-        dlq_result = dofn.to_dlq({"data": "test"}, ValueError("err"), "step")
-        assert dlq_result.tag == DLQ_TAG
-
-
-# =============================================================================
-# TEST: STREAM DoFns
-# =============================================================================
-
-class TestStreamDoFns:
-    """Test streaming DoFn classes."""
-
-    def test_extract_personas_dofn(self):
-        from dofns.stream import ExtractPersonasDoFn
-
-        message = json.dumps({
-            "payload": {"personaId": "p001"}
-        }).encode('utf-8')
-
-        with TestPipeline() as p:
-            result = (
-                p
-                | beam.Create([message])
-                | beam.ParDo(ExtractPersonasDoFn())
-            )
-
-            assert_that(result, equal_to([{"personaId": "p001"}]))
-
-    def test_filter_empty_pk_dofn(self):
-        from dofns.stream import FilterEmptyPKDoFn
-
-        valid = {"personaId": "p001", "profiles": {"memberId": "M001"}}
-        invalid = {"personaId": "p002", "profiles": {"memberId": ""}}
-
-        with TestPipeline() as p:
-            result = (
-                p
-                | beam.Create([valid, invalid])
-                | beam.ParDo(FilterEmptyPKDoFn())
-            )
-
-            assert_that(result, equal_to([valid]))
-
-    def test_filter_null_dofn(self):
-        from dofns.stream import FilterNullDoFn
-
-        valid = {"name": "John", "value": 123}
-        invalid_null = {"name": None, "value": 456}
-        invalid_empty = {"name": "  ", "value": 789}
-
-        with TestPipeline() as p:
-            result = (
-                p
-                | beam.Create([valid, invalid_null, invalid_empty])
-                | beam.ParDo(FilterNullDoFn("name"))
-            )
-
-            assert_that(result, equal_to([valid]))
-
-
-# =============================================================================
-# TEST: HELPER FUNCTIONS FROM STREAM
+# TEST: STREAM HELPER FUNCTIONS
 # =============================================================================
 
 class TestStreamHelpers:
@@ -614,6 +560,7 @@ class TestStreamHelpers:
 
         record_fields = [
             {"name": "id", "type": "STRING", "mode": "NULLABLE"},
+            {"name": "name", "type": "STRING", "mode": "NULLABLE"},
         ]
 
         schema = build_cdc_schema(record_fields)
@@ -621,15 +568,32 @@ class TestStreamHelpers:
         assert "fields" in schema
         assert len(schema["fields"]) == 2
         assert schema["fields"][0]["name"] == "row_mutation_info"
+        assert schema["fields"][0]["mode"] == "NULLABLE"
         assert schema["fields"][1]["name"] == "record"
+        assert len(schema["fields"][1]["fields"]) == 2
 
     def test_convert_value_to_type(self):
         from dofns.stream import convert_value_to_type
 
         assert convert_value_to_type("42", "INT64") == 42
+        assert convert_value_to_type("42", "INTEGER") == 42
         assert convert_value_to_type("3.14", "FLOAT64") == 3.14
+        assert convert_value_to_type("3.14", "FLOAT") == 3.14
         assert convert_value_to_type(123, "STRING") == "123"
         assert convert_value_to_type(None, "STRING") is None
+        assert convert_value_to_type(True, "BOOLEAN") is True
+
+    def test_sql_function_mapping(self):
+        from dofns.stream import SQL_FUNCTION_MAPPING
+
+        assert "CURRENT_DATE()" in SQL_FUNCTION_MAPPING
+        assert "NOW()" in SQL_FUNCTION_MAPPING
+        assert "UUID()" in SQL_FUNCTION_MAPPING
+
+        # Test CURRENT_DATE returns valid date format
+        result = SQL_FUNCTION_MAPPING["CURRENT_DATE()"]()
+        assert len(result) == 10
+        assert result[4] == "-"
 
 
 if __name__ == "__main__":
