@@ -36,6 +36,8 @@ from dataflow_common.dofns.stream import (
     # WriteParquetWithBeamFSDoFn,
     SyncToIcebergDoFn,
     SQLSubmitDoFn,
+    ExportBQToGCSDoFn,
+    TransferGCSToS3DoFn,
     ExtractWindowPathDoFn,
     WritePartitionToParquetDoFn,
     build_cdc_schema,
@@ -406,6 +408,7 @@ class WriteToBigQueryStreamingStep(BaseStep):
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
         from google.cloud import bigquery as bq_client
+        from google.api_core.client_info import ClientInfo
 
         # Get params from params dict
         params = self.spec.get("params", {})
@@ -431,17 +434,19 @@ class WriteToBigQueryStreamingStep(BaseStep):
         write_disposition = write_disposition_map.get(write_disposition_str, bigquery.BigQueryDisposition.WRITE_APPEND)
         create_disposition = create_disposition_map.get(create_disposition_str, bigquery.BigQueryDisposition.CREATE_NEVER)
 
-        LOGGER.info(f"[{self.step_id}] Writing to BigQuery: {table}")
-        LOGGER.info(f"[{self.step_id}]   Write disposition: {write_disposition_str}")
-        LOGGER.info(f"[{self.step_id}]   Method: STORAGE_WRITE_API")
+        # LOGGER.info(f"[{self.step_id}] Writing to BigQuery: {table}")
+        # LOGGER.info(f"[{self.step_id}]   Write disposition: {write_disposition_str}")
+        # LOGGER.info(f"[{self.step_id}]   Method: STORAGE_WRITE_API")
 
         # Fetch schema from table if not provided
         if not schema_param:
             LOGGER.info(f"[{self.step_id}] Fetching schema from existing table...")
             try:
-                client = bq_client.Client()
+                my_info = ClientInfo(user_agent="MyBigQueryApp")
+                client = bq_client.Client(client_info=my_info)
                 table_ref = client.get_table(table)
                 bq_schema = table_ref.schema
+                LOGGER.info(f"[{self.step_id}] Schema fetched: {str(bq_schema)}")
 
                 # Convert BigQuery SchemaField to Beam-compatible dict format
                 # Note: DATE, TIME, DATETIME need to be STRING for Storage Write API
@@ -458,7 +463,7 @@ class WriteToBigQueryStreamingStep(BaseStep):
                         for field in bq_schema
                     ]
                 }
-                LOGGER.info(f"[{self.step_id}] Schema fetched: {len(bq_schema)} fields")
+                # LOGGER.info(f"[{self.step_id}] Schema fetched: {len(bq_schema)} fields")
 
                 # Log type conversions
                 converted = [f.name for f in bq_schema if f.field_type in unsupported_types]
@@ -594,17 +599,17 @@ class WriteToS3ParquetStep(BaseStep):
 class WriteToBigQueryCDCStep(BaseStep):
     """
     Write to Native BigQuery table with CDC support using Storage Write API.
-
+    
     This step supports TRUE CDC UPSERT using Beam's use_cdc_writes parameter
     (available in Beam 2.69.0+).
-
+    
     Architecture:
         Native table support Beam write with Storage Write API CDC.
-
+        
         Options:
         1. native > biglake: write to native table with CDC, merge to BigLake Iceberg
         2. native only: write to native table with CDC support
-
+    
     Config params:
         table: BigQuery table path (project.dataset.table)
         input: Input PCollection name from state
@@ -613,19 +618,12 @@ class WriteToBigQueryCDCStep(BaseStep):
         triggering_frequency: Seconds between commits (default: 5)
         num_storage_api_streams: Number of parallel streams (default: 5)
         schema: (Optional) BigQuery schema - if not provided, will fetch from table
-        dlq_table: (Optional) DLQ table path for failed records (project.dataset.table)
-        pipeline_name: (Optional) Pipeline name for DLQ tracking
-
+    
     CDC Requirements:
         - Table must exist beforehand
         - Records will be wrapped in {row_mutation_info, record} format
         - Uses Storage Write API with use_cdc_writes=True
-
-    DLQ Support:
-        - Failed records are sent to DLQ table instead of being dropped
-        - DLQ records include error context for debugging
-        - Returns {'success': pcoll, 'dlq': pcoll} if dlq_table is configured
-
+        
     Example config:
         - step: WriteToBigQueryCDC
           id: write_bq_cdc
@@ -636,8 +634,6 @@ class WriteToBigQueryCDCStep(BaseStep):
             change_type: "UPSERT"
             triggering_frequency: 5
             num_storage_api_streams: 5
-            dlq_table: "{io.bq.project}.{io.bq.dataset}.pipeline_dlq"
-            pipeline_name: "customer-profile-realtime"
     """
 
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
@@ -653,7 +649,7 @@ class WriteToBigQueryCDCStep(BaseStep):
         num_storage_api_streams = params.get("num_storage_api_streams", 5)
         schema_param = params.get("schema")
         dlq_table = params.get("dlq_table")  # DLQ table path
-        pipeline_name = params.get("pipeline_name") or getattr(self.config, 'pipeline_name', 'unknown')
+        pipeline_name = params.get("pipeline_name")
 
         LOGGER.info(f"[{self.step_id}] params: {params}")
         LOGGER.info(f"[{self.step_id}] input_key: {input_key}")
@@ -679,17 +675,17 @@ class WriteToBigQueryCDCStep(BaseStep):
                     }
                     for field in bq_schema
                 ]
-
+                
                 # Build CDC schema with wrapper
                 cdc_schema = build_cdc_schema(record_fields)
-
+                
                 LOGGER.info(f"[{self.step_id}] Schema fetched: {len(bq_schema)} fields")
 
                 # Log type conversions
                 converted = [f.name for f in bq_schema if f.field_type in unsupported_types]
                 if converted:
                     LOGGER.warning(f"[{self.step_id}] Converted DATE/TIME/DATETIME -> STRING: {converted}")
-
+                    
             except Exception as e:
                 LOGGER.error(f"[{self.step_id}] Failed to fetch schema: {e}")
                 raise ValueError(f"Could not fetch schema from table {table}. Please provide schema in config.")
@@ -708,6 +704,44 @@ class WriteToBigQueryCDCStep(BaseStep):
 
         pcoll = self.state[input_key]
 
+        # # Step 1: Format data for CDC (wrap in {row_mutation_info, record})
+        # cdc_formatted = (
+        #     pcoll
+        #     | f"{self.step_id}_MapToCDCFormat" >> beam.ParDo(
+        #         MapToCdcTableRowDoFn(default_change_type=change_type,record_fields=record_fields)
+        #     )
+        # )
+        # # Step 1.5: CRITICAL - Filter out any invalid CDC rows to prevent null row_mutation_info errors
+        # step_id = self.step_id  # Capture for closure
+
+        # def is_valid_cdc_row(element):
+        #     """Validate CDC row has required structure."""
+        #     if element is None:
+        #         LOGGER.warning(f"[{step_id}] Filtering out None element : {element}")
+        #         return False
+        #     if not isinstance(element, dict):
+        #         LOGGER.warning(f"[{step_id}] Filtering out non-dict element: {type(element)} - {element}")
+        #         return False
+        #     if 'row_mutation_info' not in element or element['row_mutation_info'] is None:
+        #         LOGGER.error(f"[{step_id}] Filtering out element with missing/null row_mutation_info: {element}")
+        #         return False
+        #     rmi = element['row_mutation_info']
+        #     if not isinstance(rmi, dict):
+        #         LOGGER.error(f"[{step_id}] Filtering out element with invalid row_mutation_info type: {type(rmi)} - {element}")
+        #         return False
+        #     if 'mutation_type' not in rmi or rmi['mutation_type'] is None:
+        #         LOGGER.error(f"[{step_id}] Filtering out element with missing/null mutation_type: {element}")
+        #         return False
+        #     if 'change_sequence_number' not in rmi or rmi['change_sequence_number'] is None:
+        #         LOGGER.error(f"[{step_id}] Filtering out element with missing/null change_sequence_number: {element}")
+        #         return False
+        #     return True
+
+        # cdc_validated = (
+        #     cdc_formatted
+        #     | f"{self.step_id}_ValidateCDC" >> beam.Filter(is_valid_cdc_row)
+        # )
+
         # Step 1: Format data for CDC with DLQ support
         cdc_do_fn = MapToCdcTableRowDoFn(
             default_change_type=change_type,
@@ -722,7 +756,7 @@ class WriteToBigQueryCDCStep(BaseStep):
             step_name=f"{self.step_id}_MapToCDCFormat"
         )
 
-        # Step 2: Write success records to BigQuery using Storage Write API with CDC support
+        # Step 2: Write to BigQuery using Storage Write API with CDC support
         result = (
             cdc_success
             | f"{self.step_id}_WriteBQCDC" >> bigquery.WriteToBigQuery(
@@ -757,6 +791,9 @@ class WriteToBigQueryCDCStep(BaseStep):
         if dlq_table:
             return {'success': result, 'dlq': cdc_dlq}
         return result
+
+        # # LOGGER.info(f"[{self.step_id}] BigQuery CDC write configured with UPSERT support")
+        # return result
     
 class WriteToBigLakeIcebergStreamingStep(BaseStep):
     """
@@ -775,7 +812,7 @@ class WriteToBigLakeIcebergStreamingStep(BaseStep):
         LOGGER.info(f"[{self.step_id}] Writing to BigLake Iceberg: {table}")
         # Convert BigQuery SchemaField to record fields
         # Note: DATE, TIME, DATETIME need to be STRING for CDC writes
-        unsupported_types = {'DATE', 'TIME', 'DATETIME'}
+        unsupported_types = {'DATE', 'TIME', 'DATETIME', 'TIMESTAMP'}
 
         # Fetch schema if not provided
         if not schema_param:
@@ -794,8 +831,7 @@ class WriteToBigLakeIcebergStreamingStep(BaseStep):
                     for f in table_ref.schema
                 ]
             }
-        LOGGER.info(f"[{self.step_id}] Writing to BigLake Iceberg schemas : {schema_param}")
-
+        # LOGGER.info(f"[{self.step_id}] Writing to BigLake Iceberg schemas : {schema_param}")
         pcoll = self.state[input_key]
 
         # Prepare data (convert dict to JSON for nested fields)
@@ -804,6 +840,7 @@ class WriteToBigLakeIcebergStreamingStep(BaseStep):
             pcoll
             | f"{self.step_id}_PrepareForBigLake" >> beam.ParDo(
                 WriteToBigLakeDoFn(table_name=table))
+            | f"{self.step_id}_LogData" >> beam.Map(lambda x: (LOGGER.info(f"[{self.step_id}] Writing to BigLake Iceberg schemas : {schema_param}"), x)[1])
         )
 
         LOGGER.info(f"[{self.step_id}] Writing to BigLake Iceberg prepared : {prepared}")
@@ -1075,14 +1112,15 @@ class SQLSubmitToTargetBQStep(BaseStep):
     def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
         # Get params
         params = self.spec.get("params", {})
+        input = params.get("input")
         target_table = params.get("target_table")
         lookback_minutes = int(params.get("lookback_minutes", 30))
         submit_interval_sec = int(params.get("submit_interval_sec", 300))
         query = params.get("query")
-        
         project_id = self.config.io.bq.get('project')
 
         LOGGER.info(f"[{self.step_id}] SQLSubmitToTargetTable configured:")
+        LOGGER.info(f"[{self.step_id}]   Input: {input}")
         LOGGER.info(f"[{self.step_id}]   Target table: {target_table}")
         LOGGER.info(f"[{self.step_id}]   Lookback: {lookback_minutes} minutes")
         LOGGER.info(f"[{self.step_id}]   Submit interval: {submit_interval_sec} seconds")
@@ -1091,27 +1129,28 @@ class SQLSubmitToTargetBQStep(BaseStep):
             LOGGER.error(f"[{self.step_id}] query is required!")
             raise ValueError("query must be provided in config")
 
-        # Create periodic trigger (fires every submit_interval_sec)
-        periodic_trigger = (
-            pipeline
-            | f"{self.step_id}_PeriodicImpulse" >> PeriodicImpulse(
-                fire_interval=submit_interval_sec,
-                apply_windowing=True
+        # Determine trigger source: Input PCollection or Independent Periodic Impulse
+        if input:
+            LOGGER.info(f"[{self.step_id}] Using input trigger from: {input}")
+            windowed = self.state[input]
+        else:
+            LOGGER.info(f"[{self.step_id}] Using independent periodic trigger: {submit_interval_sec}s")
+            # Create periodic trigger (fires every submit_interval_sec)
+            windowed = (
+                pipeline
+                | f"{self.step_id}_PeriodicImpulse" >> PeriodicImpulse(
+                    fire_interval=submit_interval_sec,
+                    apply_windowing=True
+                )
+                | f"{self.step_id}_Window" >> beam.WindowInto(
+                    window.FixedWindows(submit_interval_sec),
+                    trigger=trigger.AfterWatermark(),
+                    accumulation_mode=trigger.AccumulationMode.DISCARDING
+                )
             )
-        )
 
-        # Apply fixed window (same as submit interval)
-        windowed = (
-            periodic_trigger
-            | f"{self.step_id}_Window" >> beam.WindowInto(
-                window.FixedWindows(submit_interval_sec),
-                trigger=trigger.AfterWatermark(),
-                accumulation_mode=trigger.AccumulationMode.DISCARDING
-            )
-        )
-
-        # Execut query on each window close
-        result = (
+        # Execute query on each window close
+        logged = (
             windowed
             | f"{self.step_id}_SQLSubmit" >> beam.ParDo(
                 SQLSubmitDoFn(
@@ -1121,17 +1160,219 @@ class SQLSubmitToTargetBQStep(BaseStep):
                     query=query
                 )
             )
-        )
-
-        # Log results
-        logged = (
-            result
-            | f"{self.step_id}_LogResults" >> beam.Map(
-                lambda x: LOGGER.info(f"[{self.step_id}] Submit result: {x}") or x
-            )
+            # | f"{self.step_id}_LogResults" >> beam.Map(
+            #     lambda x: LOGGER.info(f"[{self.step_id}] Submit result: {x}") or x
+            # )
         )
 
         return logged
+
+
+class ExportBQToGCSStep(BaseStep):
+    """
+    Export BigQuery table to GCS using SQL EXPORT DATA.
+    
+    This step wraps PeriodicImpulse + ExportBQToGCSDoFn.
+    
+    Config params:
+        table: Source BigQuery table
+        gcs_bucket: Target GCS bucket
+        output_filename: Output path prefix
+        output_file_format: PARQUET (default), AVRO, CSV, JSON
+        lookback_minutes: Time window for export (default: 30)
+        submit_interval_sec: Run interval (default: 300)
+        date_columns: List of columns for time filtering (optional)
+        
+    Example config:
+        - step: ExportBQToGCS
+          id: export_bq
+          params:
+            table: "project.dataset.table"
+            gcs_bucket: "my-bucket"
+            output_filename: "exports/table_name"
+            submit_interval_sec: 3600
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        # Get params from params dict
+        params = self.spec.get("params", {})
+        input = params.get("input")
+        source_table = params.get("source_table")
+        lookback_minutes = int(params.get("lookback_minutes", 30))
+        export_interval_sec = int(params.get("export_interval_sec", 300))
+        cutoff_date_column = params.get("cutoff_date_column", None)
+        gcs_bucket = params.get("gcs_bucket")
+        output_file_format = params.get("output_file_format", "PARQUET")
+        
+        # Determine trigger source: Input PCollection or Independent Periodic Impulse
+        if input:
+            LOGGER.info(f"[{self.step_id}] Using input trigger from: {input}")
+            windowed = self.state[input]
+        else:
+            LOGGER.info(f"[{self.step_id}] Using independent periodic trigger: {export_interval_sec}s")
+            windowed = (
+                pipeline
+                | f"{self.step_id}_PeriodicImpulse" >> PeriodicImpulse(
+                    fire_interval=export_interval_sec,
+                    apply_windowing=True
+                )
+                | f"{self.step_id}_Window" >> beam.WindowInto(
+                    window.FixedWindows(export_interval_sec),
+                    trigger=trigger.AfterWatermark(),
+                    accumulation_mode=trigger.AccumulationMode.DISCARDING
+                )
+            )
+
+        # Build pipeline: Trigger -> DoFn
+        logged = (
+            windowed
+            | f"{self.step_id}_TriggerExport" >> beam.CombineGlobally(lambda x: "START_EXPORT").without_defaults()
+            | f"{self.step_id}_ExportBQ" >> beam.ParDo(
+                ExportBQToGCSDoFn(
+                    project_id=self.config.io.bq.get('project'),
+                    source_table=source_table,
+                    gcs_bucket=gcs_bucket,
+                    output_file_format=output_file_format,
+                    lookback_minutes=lookback_minutes,
+                    cutoff_date_column=cutoff_date_column
+                )
+            )
+            | f"{self.step_id}_LogResults" >> beam.Map(lambda x: LOGGER.info(f"[{self.step_id}] Export result: {x}") or x)
+        )
+
+        return logged
+
+
+
+class PeriodicImpulseStep(BaseStep):
+    """
+    Generates a periodic impulse (tick) at regular intervals.
+    
+    This is the first step in a synchronized pipeline. It emits a 
+    Global Window element every X seconds.
+    
+    Config params:
+        fire_interval: Interval in seconds (default: 300)
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        params = self.spec.get("params", {})
+        fire_interval = int(params.get("fire_interval", 300))
+        
+        LOGGER.info(f"[{self.step_id}] Creating periodic impulse: {fire_interval}s")
+
+        return (
+            pipeline
+            | f"{self.step_id}_PeriodicImpulse" >> PeriodicImpulse(
+                fire_interval=fire_interval,
+                apply_windowing=False
+            )
+        )
+
+
+class FixedWindowStep(BaseStep):
+    """
+    Applies fixed windowing to an input trigger.
+    
+    This step takes a trigger (e.g., from PeriodicImpulse) and applies 
+    FixedWindows to it. Downstream steps that use this as input will 
+    all be synchronized to the same window.
+    
+    Config params:
+        input: Trigger source ID (PeriodicImpulseStep)
+        window_size_sec: Size of the window in seconds (default: 300)
+    """
+
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        params = self.spec.get("params", {})
+        input = params.get("input")
+        window_size_sec = int(params.get("window_size_sec", 300))
+        
+        LOGGER.info(f"[{self.step_id}] Applying windowing ({window_size_sec}s) to: {input}")
+
+        pcoll = self.state[input]
+        
+        return (
+            pcoll
+            | f"{self.step_id}_Window" >> beam.WindowInto(
+                window.FixedWindows(window_size_sec),
+                trigger=trigger.AfterWatermark(),
+                accumulation_mode=trigger.AccumulationMode.DISCARDING
+            )
+        )
+
+class TransferGCSToS3Step(BaseStep):
+    """
+    Transfer files from GCS to S3 after BigQuery export.
+    
+    This step retrieves AWS credentials from Secret Manager and uses
+    TransferGCSToS3DoFn to copy files from GCS to S3.
+    
+    Config params:
+        input: Trigger from ExportBQToGCS step
+        gcs_bucket: Source GCS bucket path (gs://bucket/path)
+        s3_bucket: Destination S3 bucket path (bucket/path)
+        s3_region: AWS region (default: ap-southeast-1)
+        aws_access_key_secret: Secret Manager ID for AWS access key
+        aws_secret_key_secret: Secret Manager ID for AWS secret key
+    """
+    
+    def _get_secret_value(self, secret_id):
+        from google.cloud import secretmanager
+        import json
+
+        """Get secret value from Secret Manager"""
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{self.config.io.bq.get('project')}/secrets/{secret_id}/versions/latest"
+        try:
+            response = client.access_secret_version(request={"name": name})
+            return json.loads(response.payload.data.decode("UTF-8"))
+
+        except Exception as e:
+            logger.error(f"Failed to get secret {secret_id}: {e}")
+            raise
+    
+    def execute(self, pipeline: beam.Pipeline) -> beam.PCollection:
+        from dataflow_common.dofns.stream import TransferGCSToS3DoFn
+        
+        params = self.spec.get("params", {})
+        input = params.get("input")
+        gcs_bucket = params.get("gcs_bucket")
+        s3_bucket = params.get("s3_bucket")
+        s3_region = params.get("s3_region", "ap-southeast-1")
+        
+        LOGGER.info(f"[{self.step_id}] TransferGCSToS3Step configured:")
+        LOGGER.info(f"[{self.step_id}]   Input: {input}")
+        LOGGER.info(f"[{self.step_id}]   GCS: {gcs_bucket}")
+        LOGGER.info(f"[{self.step_id}]   S3: {s3_bucket}")
+        LOGGER.info(f"[{self.step_id}]   Region: {s3_region}")
+        
+        # Retrieve AWS credentials from Secret Manager
+        aws_access_key = self._get_secret_value('insight-data-pipeline')['aws-access-key']
+        aws_secret_key = self._get_secret_value('insight-data-pipeline')['aws-secret-key']
+        
+        # Get input PCollection
+        pcoll = self.state[input]
+        
+        # Transfer files
+        logged = (
+            pcoll
+            | f"{self.step_id}_TransferToS3" >> beam.ParDo(
+                TransferGCSToS3DoFn(
+                    gcs_bucket=gcs_bucket,
+                    s3_bucket=s3_bucket,
+                    s3_region=s3_region,
+                    aws_access_key=aws_access_key,
+                    aws_secret_key=aws_secret_key
+                )
+            )
+            # | f"{self.step_id}_LogResults" >> beam.Map(
+            #     lambda x: LOGGER.info(f"[{self.step_id}] Transfer result: {x}") or x
+            # )
+        )
+        
+        return logged
+
 
 __all__ = [
     'RefreshMappingTableStep',
@@ -1149,6 +1390,10 @@ __all__ = [
     'WriteToBigLakeIcebergStreamingStep', # write to biglake iceberg with append mode
     'MergeToIcebergStreamingStep', # merge from native CDC to iceberg table
     'SQLSubmitToTargetBQStep', # submit SQL to target table using BQ
+    'ExportBQToGCSStep', # export BQ table to GCS
+    'PeriodicImpulseStep', # periodic impulse for fan-out
+    'FixedWindowStep', # apply windowing to trigger
+    'TransferGCSToS3Step', # transfer files from GCS to S3
 ]
 # NOTE -----------------
 # Step	                                Write Method	    Table Type	            CDC Support
