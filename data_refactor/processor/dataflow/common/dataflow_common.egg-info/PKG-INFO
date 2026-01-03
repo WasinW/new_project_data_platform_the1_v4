@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: dataflow_common
+Version: 2.0.0
+Requires-Python: >=3.10
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: apache-beam[gcp]==2.69.0
+Requires-Dist: google-cloud-bigquery==3.25.0
+Requires-Dist: google-cloud-bigtable>=2.26.0
+Requires-Dist: google-cloud-pubsub>=2.23.1
+Requires-Dist: pyarrow==14.0.2
+Requires-Dist: numpy<2,>=1.21
+Requires-Dist: pandas<2.1.0,>=1.5.0
+Requires-Dist: fastavro>=1.9.0
+Requires-Dist: fsspec==2024.6.1
+Requires-Dist: aiobotocore==2.13.0
+Requires-Dist: boto3==1.34.106
+Requires-Dist: botocore==1.34.106
+Provides-Extra: test
+Requires-Dist: pytest>=7.4.0; extra == "test"
+Dynamic: requires-python
