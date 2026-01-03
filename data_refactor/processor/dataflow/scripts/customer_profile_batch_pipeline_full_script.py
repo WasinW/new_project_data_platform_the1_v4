@@ -9,7 +9,8 @@ Usage:
         --runner DataflowRunner \
         --project the1-insight-stg \
         --region asia-southeast1 \
-        --temp_location gs://bucket/temp
+        --temp_location gs://bucket/temp \
+        --env stg
 
 Pipeline Flow:
     1. Read data from BigQuery (source table)
@@ -55,54 +56,69 @@ LOGGER = logging.getLogger(__name__)
 
 
 # =============================================================================
-# CONFIGURATION
+# CONFIGURATION BUILDER (Dynamic based on environment)
 # =============================================================================
 
-WORKSPACE_ENV = "stg"
+def build_config(env: str) -> Dict[str, Any]:
+    """Build all configuration dictionaries based on environment.
 
-PIPELINE_CONFIG = {
-    "name": "ms_member_batch",
-    "mode": "batch",
-    "term": "short_term",
-}
+    Args:
+        env: Environment name (stg, uat, prod)
 
-IO_CONFIG = {
-    "bq": {
-        "project": f"the1-insight-{WORKSPACE_ENV}",
-        "dataset": "insight",
-        "source_table": "raw_member_data",
-        "target_table": "ms_personas",
-        "temp_gcs": f"gs://the1-insight-{WORKSPACE_ENV}-data-pipeline-data-staging/audit_log/dataflow/temp",
-    },
-    "s3": {
-        "bucket": f"s3://t1-analytics/refined/insights/ms_personas_{WORKSPACE_ENV}",
-        "region": "ap-southeast-1",
-    },
-}
+    Returns:
+        Dictionary containing all configuration
+    """
+    io_config = {
+        "bq": {
+            "project": f"the1-insight-{env}",
+            "dataset": "insight",
+            "source_table": "personas",
+            "target_table": "ms_personas",
+            "temp_gcs": f"gs://the1-insight-{env}-data-pipeline-data-staging/audit_log/dataflow/temp",
+        },
+        "s3": {
+            "bucket": f"s3://t1-analytics/refined/insights/ms_personas_{env}",
+            "region": "ap-southeast-1",
+        },
+    }
 
-MAPPING_CONFIG = {
-    "table": f"{IO_CONFIG['bq']['project']}.{IO_CONFIG['bq']['dataset']}.mapping_reconcile",
-    "query": f"""
-        SELECT
-            reconcile_column_name as dest_column_name,
-            mapping_column_name as src_column_name,
-            reconcile_retrieved as retrieved_flag,
-            reconcile_confirmed as confirmed_flag,
-            table_name
-        FROM `{IO_CONFIG['bq']['project']}.{IO_CONFIG['bq']['dataset']}.mapping_reconcile`
-        WHERE table_name = 'ms_member'
-    """,
-}
+    mapping_config = {
+        "table": f"{io_config['bq']['project']}.{io_config['bq']['dataset']}.mapping_reconcile",
+        "query": f"""
+            SELECT
+                reconcile_column_name as dest_column_name,
+                mapping_column_name as src_column_name,
+                reconcile_retrieved as retrieved_flag,
+                reconcile_confirmed as confirmed_flag,
+                table_name
+            FROM `{io_config['bq']['project']}.{io_config['bq']['dataset']}.mapping_reconcile`
+            WHERE table_name = 'insight.ms_member'
+        """,
+    }
 
-PARQUET_CONFIG = {
-    "num_shards": 2,
-    "date_columns": [
-        "birth_date",
-        "consent_date",
-        "created_date",
-        "register_date",
-    ],
-}
+    pipeline_config = {
+        "name": "ms_member_batch",
+        "mode": "batch",
+        "term": "short_term",
+    }
+
+    parquet_config = {
+        "num_shards": 2,
+        "date_columns": [
+            "birth_date",
+            "consent_date",
+            "created_date",
+            "register_date",
+        ],
+    }
+
+    return {
+        "env": env,
+        "io": io_config,
+        "mapping": mapping_config,
+        "pipeline": pipeline_config,
+        "parquet": parquet_config,
+    }
 
 
 # =============================================================================
@@ -126,7 +142,7 @@ def normalize_path(path: str) -> List[str]:
         return [p.strip() for p in cleaned.split('.') if p.strip()]
 
     except Exception as e:
-        LOGGER.error(f"Error normalizing path '{path}': {e}")
+        logging.error(f"Error normalizing path '{path}': {e}")
         return []
 
 
@@ -152,7 +168,7 @@ def extract_by_path(record: Dict[str, Any], path: List[str]) -> Any:
         return cur
 
     except Exception as e:
-        LOGGER.warning(f"Error extracting path {path} from record: {e}")
+        logging.warning(f"Error extracting path {path} from record: {e}")
         return None
 
 
@@ -182,14 +198,14 @@ def create_mapping_dict(
                 }
 
             except Exception as e:
-                LOGGER.warning(f"Error processing mapping row: {e}")
+                logging.warning(f"Error processing mapping row: {e}")
                 continue
 
-        LOGGER.info(f"Created mapping dictionary with {len(mapping)} entries")
+        logging.info(f"Created mapping dictionary with {len(mapping)} entries")
         return mapping
 
     except Exception as e:
-        LOGGER.error(f"Failed to create mapping dictionary: {e}")
+        logging.error(f"Failed to create mapping dictionary: {e}")
         raise
 
 
@@ -212,13 +228,13 @@ def map_record(
                 out[dest_col] = val
 
             except Exception as e:
-                LOGGER.warning(f"Error mapping column '{dest_col}': {e}")
+                logging.warning(f"Error mapping column '{dest_col}': {e}")
                 continue
 
         return out
 
     except Exception as e:
-        LOGGER.error(f"Failed to map record: {e}")
+        logging.error(f"Failed to map record: {e}")
         raise
 
 
@@ -264,7 +280,7 @@ def coalesce_by_mapping(
                     out[tgt] = new_row[tgt]
 
             except Exception as e:
-                LOGGER.warning(f"Error processing column mapping: {e}")
+                logging.warning(f"Error processing column mapping: {e}")
                 continue
 
         if pk_field and new_row.get(pk_field):
@@ -275,7 +291,7 @@ def coalesce_by_mapping(
         return out
 
     except Exception as e:
-        LOGGER.error(f"Failed to coalesce records: {e}")
+        logging.error(f"Failed to coalesce records: {e}")
         raise
 
 
@@ -294,16 +310,16 @@ def query_mapping_schema(project: str, dataset: str, table_name: str) -> List[st
             ORDER BY reconcile_column_name
         """
 
-        LOGGER.info(f"[query_mapping_schema] Querying mapping for table: {table_name}")
+        logging.info(f"[query_mapping_schema] Querying mapping for table: {table_name}")
 
         results = client.query(query).result()
         columns = [row.reconcile_column_name for row in results if row.reconcile_column_name]
 
-        LOGGER.info(f"[query_mapping_schema] Found {len(columns)} columns")
+        logging.info(f"[query_mapping_schema] Found {len(columns)} columns")
         return columns
 
     except Exception as e:
-        LOGGER.error(f"[query_mapping_schema] Failed to query mapping: {e}")
+        logging.error(f"[query_mapping_schema] Failed to query mapping: {e}")
         raise
 
 
@@ -330,10 +346,10 @@ class ParseJsonDoFn(DoFn):
                     try:
                         rec[field] = json.loads(rec[field])
                     except json.JSONDecodeError as e:
-                        LOGGER.warning(f"[ParseJsonDoFn] Failed to parse '{field}': {e}")
+                        logging.warning(f"[ParseJsonDoFn] Failed to parse '{field}': {e}")
             yield rec
         except Exception as e:
-            LOGGER.error(f"[ParseJsonDoFn] Error: {e}")
+            logging.error(f"[ParseJsonDoFn] Error: {e}")
             raise
 
 
@@ -348,7 +364,7 @@ class MapRecordDoFn(DoFn):
             result = map_record(element, mapping_dict, self.mode)
             yield result
         except Exception as e:
-            LOGGER.error(f"[MapRecordDoFn] Error: {e}")
+            logging.error(f"[MapRecordDoFn] Error: {e}")
             raise
 
 
@@ -370,12 +386,24 @@ class EnsureColumnsDoFn(DoFn):
 # MAIN PIPELINE
 # =============================================================================
 
-def create_pipeline(pipeline_options: PipelineOptions):
-    """Create and run the batch pipeline."""
+def create_pipeline(pipeline_options: PipelineOptions, config: Dict[str, Any]):
+    """Create and run the batch pipeline.
+
+    Args:
+        pipeline_options: Beam pipeline options
+        config: Configuration dictionary built by build_config()
+    """
+    env = config["env"]
+    io_config = config["io"]
+    mapping_config = config["mapping"]
+    parquet_config = config["parquet"]
 
     LOGGER.info("=" * 60)
     LOGGER.info("Customer Profile Batch Pipeline - Full Script")
-    LOGGER.info(f"Environment: {WORKSPACE_ENV}")
+    LOGGER.info(f"Environment: {env}")
+    LOGGER.info(f"Project: {io_config['bq']['project']}")
+    LOGGER.info(f"Source Table: {io_config['bq']['source_table']}")
+    LOGGER.info(f"Target Table: {io_config['bq']['target_table']}")
     LOGGER.info("=" * 60)
 
     with beam.Pipeline(options=pipeline_options) as p:
@@ -383,12 +411,13 @@ def create_pipeline(pipeline_options: PipelineOptions):
         # =====================================================================
         # Step 1: Load mapping from BigQuery
         # =====================================================================
+        LOGGER.info("Step 1: Loading mapping from BigQuery...")
         mapping_rows = (
             p
             | "ReadMapping" >> ReadFromBigQuery(
-                query=MAPPING_CONFIG["query"],
+                query=mapping_config["query"],
                 use_standard_sql=True,
-                project=IO_CONFIG["bq"]["project"],
+                project=io_config["bq"]["project"],
             )
         )
 
@@ -402,10 +431,19 @@ def create_pipeline(pipeline_options: PipelineOptions):
         # =====================================================================
         # Step 2: Read source data from BigQuery
         # =====================================================================
+        LOGGER.info("Step 2: Reading source data from BigQuery...")
         source_query = f"""
-            SELECT *
-            FROM `{IO_CONFIG['bq']['project']}.{IO_CONFIG['bq']['dataset']}.{IO_CONFIG['bq']['source_table']}`
-            WHERE updated_date >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)
+            SELECT personaId, profiles
+            FROM (
+                SELECT personaId, profiles,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY JSON_VALUE(profiles, '$.memberId')
+                        ORDER BY timestamp DESC
+                    ) AS rn
+                FROM `{io_config['bq']['project']}.{io_config['bq']['dataset']}.{io_config['bq']['source_table']}`
+                WHERE COALESCE(JSON_VALUE(profiles, '$.memberId'), '') <> ''
+            )
+            WHERE rn = 1
         """
 
         source_data = (
@@ -413,13 +451,14 @@ def create_pipeline(pipeline_options: PipelineOptions):
             | "ReadSource" >> ReadFromBigQuery(
                 query=source_query,
                 use_standard_sql=True,
-                project=IO_CONFIG["bq"]["project"],
+                project=io_config["bq"]["project"],
             )
         )
 
         # =====================================================================
         # Step 3: Parse JSON fields
         # =====================================================================
+        LOGGER.info("Step 3: Parsing JSON fields...")
         parsed_data = (
             source_data
             | "ParseJson" >> beam.ParDo(ParseJsonDoFn(json_fields=["profiles"]))
@@ -428,6 +467,7 @@ def create_pipeline(pipeline_options: PipelineOptions):
         # =====================================================================
         # Step 4: Apply mapping to records
         # =====================================================================
+        LOGGER.info("Step 4: Applying mapping to records...")
         mapping_side = beam.pvalue.AsSingleton(mapping_dict)
 
         mapped_new = (
@@ -441,9 +481,10 @@ def create_pipeline(pipeline_options: PipelineOptions):
         # =====================================================================
         # Step 5: Read existing data for reconciliation (optional)
         # =====================================================================
+        LOGGER.info("Step 5: Reading existing data for reconciliation...")
         existing_query = f"""
             SELECT *
-            FROM `{IO_CONFIG['bq']['project']}.{IO_CONFIG['bq']['dataset']}.{IO_CONFIG['bq']['target_table']}`
+            FROM `{io_config['bq']['project']}.{io_config['bq']['dataset']}.{io_config['bq']['target_table']}`
         """
 
         existing_data = (
@@ -451,13 +492,15 @@ def create_pipeline(pipeline_options: PipelineOptions):
             | "ReadExisting" >> ReadFromBigQuery(
                 query=existing_query,
                 use_standard_sql=True,
-                project=IO_CONFIG["bq"]["project"],
+                project=io_config["bq"]["project"],
             )
         )
 
         # =====================================================================
         # Step 6: Create key-value pairs for CoGroupByKey
         # =====================================================================
+        LOGGER.info("Step 6: Creating key-value pairs...")
+
         def safe_get_key(d, key_field="member_number"):
             return (d.get(key_field), d)
 
@@ -476,6 +519,7 @@ def create_pipeline(pipeline_options: PipelineOptions):
         # =====================================================================
         # Step 7: CoGroupByKey and Coalesce
         # =====================================================================
+        LOGGER.info("Step 7: CoGroupByKey and Coalesce...")
         grouped = {"new": new_kv, "old": old_kv} | "CoGroupByKey" >> beam.CoGroupByKey()
 
         mapping_rows_side = beam.pvalue.AsList(mapping_rows)
@@ -495,10 +539,11 @@ def create_pipeline(pipeline_options: PipelineOptions):
         # =====================================================================
         # Step 8: Prepare for Parquet output
         # =====================================================================
+        LOGGER.info("Step 8: Preparing for Parquet output...")
         columns = query_mapping_schema(
-            IO_CONFIG["bq"]["project"],
-            IO_CONFIG["bq"]["dataset"],
-            "ms_member"
+            io_config["bq"]["project"],
+            io_config["bq"]["dataset"],
+            "insight.ms_member"
         )
         pa_schema = build_pyarrow_schema_all_strings(columns)
 
@@ -510,8 +555,9 @@ def create_pipeline(pipeline_options: PipelineOptions):
         # =====================================================================
         # Step 9: Write to Parquet
         # =====================================================================
+        LOGGER.info("Step 9: Writing to Parquet...")
         run_dt = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        parquet_prefix = f"{IO_CONFIG['s3']['bucket']}/batch/{run_dt}/ms_member"
+        parquet_prefix = f"{io_config['s3']['bucket']}/batch/{run_dt}/ms_member"
 
         _ = (
             prepared
@@ -519,19 +565,20 @@ def create_pipeline(pipeline_options: PipelineOptions):
                 file_path_prefix=parquet_prefix,
                 schema=pa_schema,
                 file_name_suffix=".snappy.parquet",
-                num_shards=PARQUET_CONFIG["num_shards"],
+                num_shards=parquet_config["num_shards"],
             )
         )
 
         # =====================================================================
-        # Step 10: Write to BigQuery (WRITE_TRUNCATE or WRITE_APPEND)
+        # Step 10: Write to BigQuery (WRITE_TRUNCATE for initial load)
         # =====================================================================
+        LOGGER.info("Step 10: Writing to BigQuery...")
         _ = (
             coalesced
             | "WriteBQ" >> WriteToBigQuery(
-                table=f"{IO_CONFIG['bq']['project']}.{IO_CONFIG['bq']['dataset']}.{IO_CONFIG['bq']['target_table']}",
+                table=f"{io_config['bq']['project']}.{io_config['bq']['dataset']}.{io_config['bq']['target_table']}",
                 schema="SCHEMA_AUTODETECT",
-                write_disposition="WRITE_APPEND",
+                write_disposition="WRITE_TRUNCATE",  # Initial load - truncate first
                 create_disposition="CREATE_NEVER",
             )
         )
@@ -561,12 +608,9 @@ def parse_args():
 
 def main():
     """Main entry point."""
-    global WORKSPACE_ENV
-
     args, pipeline_args = parse_args()
 
-    WORKSPACE_ENV = args.env
-
+    # Setup logging
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -575,14 +619,22 @@ def main():
 
     LOGGER.info("=" * 60)
     LOGGER.info("Customer Profile Batch Pipeline - Full Script")
-    LOGGER.info(f"Environment: {WORKSPACE_ENV}")
+    LOGGER.info(f"Environment: {args.env}")
     LOGGER.info(f"Log level: {args.log_level}")
     LOGGER.info("=" * 60)
 
+    # Build configuration dynamically based on environment
+    # This ensures all configs use the correct environment
+    config = build_config(args.env)
+
+    LOGGER.info(f"Configuration built for environment: {config['env']}")
+    LOGGER.info(f"BigQuery Project: {config['io']['bq']['project']}")
+
+    # Create pipeline options
     pipeline_options = PipelineOptions(pipeline_args)
 
     try:
-        create_pipeline(pipeline_options)
+        create_pipeline(pipeline_options, config)
         LOGGER.info("Pipeline completed successfully!")
 
     except Exception as e:
