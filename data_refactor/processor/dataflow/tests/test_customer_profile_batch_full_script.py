@@ -2,13 +2,13 @@
 Unit tests for customer_profile_batch_pipeline_full_script.py
 
 Tests the standalone batch pipeline that contains all components inline.
+Matches the YAML config: customer_profile_batch_initial.yaml
 """
 from __future__ import annotations
 
 import json
 import sys
 import os
-from datetime import datetime, date
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,17 +23,15 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, 'scripts'))
 # Import from full_script
 from customer_profile_batch_pipeline_full_script import (
     # Mapping utilities
-    normalize_path,
-    extract_by_path,
-    create_mapping_dict,
-    map_record,
-    coalesce_by_mapping,
-    # Schema utilities
+    get_nested_value,
+    build_mapping_dict,
     build_pyarrow_schema_all_strings,
     # DoFns
     ParseJsonDoFn,
-    MapRecordDoFn,
-    EnsureColumnsDoFn,
+    FilterEmptyPKDoFn,
+    TransformSchemasDoFn,
+    FullfillSchemasDoFn,
+    FilterNullFieldDoFn,
 )
 
 
@@ -41,149 +39,92 @@ from customer_profile_batch_pipeline_full_script import (
 # TEST: MAPPING UTILITIES
 # =============================================================================
 
-class TestNormalizePath:
-    """Test normalize_path function."""
+class TestGetNestedValue:
+    """Test get_nested_value function."""
 
-    def test_simple_dot_notation(self):
-        result = normalize_path("profiles.memberId")
-        assert result == ["profiles", "memberId"]
-
-    def test_bracket_notation(self):
-        result = normalize_path("profiles['memberId']")
-        assert result == ["profiles", "memberId"]
-
-    def test_empty_path(self):
-        assert normalize_path("") == []
-
-    def test_none_path(self):
-        assert normalize_path(None) == []
+    def test_simple_path(self):
+        data = {"profiles": {"memberId": "M001"}}
+        result = get_nested_value(data, "profiles.memberId")
+        assert result == "M001"
 
     def test_deep_nesting(self):
-        result = normalize_path("a.b.c.d")
-        assert result == ["a", "b", "c", "d"]
-
-
-class TestExtractByPath:
-    """Test extract_by_path function."""
-
-    def test_simple_extraction(self):
-        record = {"profiles": {"memberId": "M001"}}
-        result = extract_by_path(record, ["profiles", "memberId"])
-        assert result == "M001"
+        data = {"a": {"b": {"c": {"d": "value"}}}}
+        result = get_nested_value(data, "a.b.c.d")
+        assert result == "value"
 
     def test_missing_key(self):
-        record = {"profiles": {}}
-        result = extract_by_path(record, ["profiles", "memberId"])
+        data = {"profiles": {}}
+        result = get_nested_value(data, "profiles.memberId")
         assert result is None
 
-    def test_none_record(self):
-        result = extract_by_path(None, ["key"])
+    def test_none_data(self):
+        result = get_nested_value(None, "key")
         assert result is None
-
-    def test_json_string_parsing(self):
-        record = {"profiles": '{"memberId": "M001"}'}
-        result = extract_by_path(record, ["profiles", "memberId"])
-        assert result == "M001"
 
     def test_empty_path(self):
-        record = {"key": "value"}
-        result = extract_by_path(record, [])
-        assert result == record
+        data = {"key": "value"}
+        result = get_nested_value(data, "")
+        assert result is None
+
+    def test_json_string_in_path(self):
+        data = {"profiles": '{"memberId": "M001"}'}
+        result = get_nested_value(data, "profiles.memberId")
+        assert result == "M001"
 
 
-class TestCreateMappingDict:
-    """Test create_mapping_dict function."""
+class TestBuildMappingDict:
+    """Test build_mapping_dict function."""
 
-    def test_basic_mapping(self):
+    def test_basic_mapping_with_path(self):
         rows = [
             {
-                "src_column_name": "profiles.memberId",
-                "dest_column_name": "member_id",
-                "retrieved_flag": True,
-                "confirmed_flag": False,
+                "reconcile_column_name": "member_id",
+                "mapping_column_name": "profiles.memberId",
+                "reconcile_retrieved": True,
+                "reconcile_confirmed": True,
+                "mapping_column_type": "STRING",
+                "mapping_logic": None,
             },
         ]
 
-        result = create_mapping_dict(rows)
+        result = build_mapping_dict(rows)
 
-        assert "member_id" in result
-        assert result["member_id"]["src_path"] == ["profiles", "memberId"]
-        assert result["member_id"]["reconcile"] is True
-        assert result["member_id"]["original"] is False
+        assert "mapping_dict" in result
+        assert "schemas_dict" in result
+        assert "ms_member" in result["mapping_dict"]
+        assert "aws" in result["mapping_dict"]["ms_member"]
+        assert "gcp" in result["mapping_dict"]["ms_member"]
+        assert "member_id" in result["mapping_dict"]["ms_member"]["aws"]
+        assert result["mapping_dict"]["ms_member"]["aws"]["member_id"]["type"] == "path"
+
+    def test_mapping_with_logic(self):
+        rows = [
+            {
+                "reconcile_column_name": "updated_date",
+                "mapping_column_name": None,
+                "reconcile_retrieved": True,
+                "reconcile_confirmed": False,
+                "mapping_column_type": "TIMESTAMP",
+                "mapping_logic": "CURRENT_TIMESTAMP()",
+            },
+        ]
+
+        result = build_mapping_dict(rows)
+
+        assert "updated_date" in result["mapping_dict"]["ms_member"]["gcp"]
+        assert result["mapping_dict"]["ms_member"]["gcp"]["updated_date"]["type"] == "logic"
+        # Should not be in aws since reconcile_confirmed is False
+        assert "updated_date" not in result["mapping_dict"]["ms_member"]["aws"]
 
     def test_empty_rows(self):
-        result = create_mapping_dict([])
-        assert result == {}
+        result = build_mapping_dict([])
+        assert result["mapping_dict"]["ms_member"]["aws"] == {}
+        assert result["mapping_dict"]["ms_member"]["gcp"] == {}
 
-    def test_missing_dest_field(self):
-        rows = [{"src_column_name": "x", "dest_column_name": None}]
-        result = create_mapping_dict(rows)
-        assert result == {}
-
-
-class TestMapRecord:
-    """Test map_record function."""
-
-    def test_reconcile_mode(self):
-        record = {"profiles": {"memberId": "M001"}}
-        mapping_dict = {
-            "member_id": {
-                "src_path": ["profiles", "memberId"],
-                "reconcile": True,
-                "original": False,
-            },
-        }
-
-        result = map_record(record, mapping_dict, mode="reconcile")
-        assert result["member_id"] == "M001"
-
-    def test_original_mode_excluded(self):
-        record = {"profiles": {"memberId": "M001"}}
-        mapping_dict = {
-            "member_id": {
-                "src_path": ["profiles", "memberId"],
-                "reconcile": True,
-                "original": False,
-            },
-        }
-
-        result = map_record(record, mapping_dict, mode="original")
-        assert result == {}
-
-
-class TestCoalesceByMapping:
-    """Test coalesce_by_mapping function."""
-
-    def test_prefer_new(self):
-        kv = (
-            "key1",
-            {
-                "new": [{"field1": "new_val"}],
-                "old": [{"field1": "old_val"}],
-            }
-        )
-        columns = [{"dest_column_name": "field1", "prefer_flag": True}]
-
-        result = coalesce_by_mapping(
-            kv,
-            columns=columns,
-            flag_field="prefer_flag",
-            pk_field="pk",
-            dest_field="dest_column_name"
-        )
-
-        assert result["field1"] == "new_val"
-
-    def test_no_new_rows_returns_none(self):
-        kv = ("key1", {"new": [], "old": [{"f": "v"}]})
-        columns = [{"dest_column_name": "f", "flag": True}]
-
-        result = coalesce_by_mapping(
-            kv, columns=columns, flag_field="flag",
-            pk_field="pk", dest_field="dest_column_name"
-        )
-
-        assert result is None
+    def test_missing_column_name(self):
+        rows = [{"reconcile_column_name": None, "mapping_column_name": "x"}]
+        result = build_mapping_dict(rows)
+        assert result["mapping_dict"]["ms_member"]["aws"] == {}
 
 
 # =============================================================================
@@ -213,7 +154,7 @@ class TestParseJsonDoFn:
     """Test ParseJsonDoFn."""
 
     def test_parse_json_field(self):
-        element = {"profiles": '{"name": "John"}'}
+        element = {"profiles": '{"name": "John", "memberId": "M001"}'}
 
         with TestPipeline() as p:
             result = (
@@ -224,7 +165,8 @@ class TestParseJsonDoFn:
 
             def check_result(elements):
                 assert len(elements) == 1
-                assert elements[0]["profiles"] == {"name": "John"}
+                assert elements[0]["profiles"]["name"] == "John"
+                assert elements[0]["profiles"]["memberId"] == "M001"
 
             assert_that(result, check_result)
 
@@ -245,53 +187,142 @@ class TestParseJsonDoFn:
             assert_that(result, check_result)
 
 
-class TestMapRecordDoFn:
-    """Test MapRecordDoFn."""
+class TestFilterEmptyPKDoFn:
+    """Test FilterEmptyPKDoFn."""
 
-    def test_map_record(self):
-        element = {"profiles": {"memberId": "M001"}}
-        mapping_dict = {
-            "member_id": {
-                "src_path": ["profiles", "memberId"],
-                "reconcile": True,
-                "original": False,
-            }
-        }
+    def test_filters_empty_member_id(self):
+        elements = [
+            {"profiles": {"memberId": "M001"}},
+            {"profiles": {"memberId": ""}},
+            {"profiles": {"memberId": None}},
+            {"profiles": {}},
+            {"profiles": {"memberId": "M002"}},
+        ]
 
         with TestPipeline() as p:
             result = (
                 p
-                | beam.Create([element])
-                | beam.ParDo(MapRecordDoFn(mode="reconcile"), mapping_dict=mapping_dict)
+                | beam.Create(elements)
+                | beam.ParDo(FilterEmptyPKDoFn(field_path="profiles.memberId"))
             )
 
             def check_result(elements):
-                assert len(elements) == 1
-                assert elements[0]["member_id"] == "M001"
+                assert len(elements) == 2
+                member_ids = [e["profiles"]["memberId"] for e in elements]
+                assert "M001" in member_ids
+                assert "M002" in member_ids
 
             assert_that(result, check_result)
 
 
-class TestEnsureColumnsDoFn:
-    """Test EnsureColumnsDoFn."""
+class TestTransformSchemasDoFn:
+    """Test TransformSchemasDoFn."""
 
-    def test_ensure_columns(self):
-        element = {"col1": "val1", "col2": 123}
-        columns = ["col1", "col2", "col3"]
+    def test_transform_to_aws_and_gcp(self):
+        element = {"profiles": {"memberId": "M001", "firstName": "John"}}
+        mapping_info = {
+            "mapping_dict": {
+                "ms_member": {
+                    "aws": {
+                        "member_id": {"type": "path", "value": "profiles.memberId", "data_type": "STRING"},
+                    },
+                    "gcp": {
+                        "memberId": {"type": "path", "value": "profiles.memberId", "data_type": "STRING"},
+                    },
+                }
+            },
+            "schemas_dict": {
+                "ms_member": {"member_id": "STRING", "memberId": "STRING"}
+            }
+        }
 
         with TestPipeline() as p:
+            mapping_side = p | "CreateMapping" >> beam.Create([mapping_info])
+
+            outputs = (
+                p
+                | "CreateInput" >> beam.Create([element])
+                | beam.ParDo(
+                    TransformSchemasDoFn(),
+                    mapping_info=beam.pvalue.AsSingleton(mapping_side),
+                    table_name='ms_member'
+                ).with_outputs('aws', 'gcp')
+            )
+
+            def check_aws(elements):
+                assert len(elements) == 1
+                assert elements[0]["member_id"] == "M001"
+
+            def check_gcp(elements):
+                assert len(elements) == 1
+                assert elements[0]["memberId"] == "M001"
+
+            assert_that(outputs.aws, check_aws, label="CheckAWS")
+            assert_that(outputs.gcp, check_gcp, label="CheckGCP")
+
+
+class TestFullfillSchemasDoFn:
+    """Test FullfillSchemasDoFn."""
+
+    def test_fills_missing_columns(self):
+        element = {"col1": "value1", "col2": 123}
+        mapping_info = {
+            "mapping_dict": {},
+            "schemas_dict": {
+                "ms_member": {
+                    "col1": "STRING",
+                    "col2": "INT64",
+                    "col3": "STRING",
+                }
+            }
+        }
+
+        with TestPipeline() as p:
+            mapping_side = p | "CreateMapping" >> beam.Create([mapping_info])
+
             result = (
                 p
-                | beam.Create([element])
-                | beam.ParDo(EnsureColumnsDoFn(columns))
+                | "CreateInput" >> beam.Create([element])
+                | beam.ParDo(
+                    FullfillSchemasDoFn(),
+                    mapping_info=beam.pvalue.AsSingleton(mapping_side),
+                    table_name='ms_member'
+                )
             )
 
             def check_result(elements):
                 assert len(elements) == 1
                 r = elements[0]
-                assert r["col1"] == "val1"
-                assert r["col2"] == "123"
+                assert r["col1"] == "value1"
+                assert r["col2"] == "123"  # Converted to string
                 assert r["col3"] is None
+
+            assert_that(result, check_result)
+
+
+class TestFilterNullFieldDoFn:
+    """Test FilterNullFieldDoFn."""
+
+    def test_filters_null_field(self):
+        elements = [
+            {"memberId": "M001", "name": "John"},
+            {"memberId": None, "name": "Jane"},
+            {"memberId": "", "name": "Bob"},
+            {"memberId": "M002", "name": "Alice"},
+        ]
+
+        with TestPipeline() as p:
+            result = (
+                p
+                | beam.Create(elements)
+                | beam.ParDo(FilterNullFieldDoFn(field_name="memberId"))
+            )
+
+            def check_result(elements):
+                assert len(elements) == 2
+                member_ids = [e["memberId"] for e in elements]
+                assert "M001" in member_ids
+                assert "M002" in member_ids
 
             assert_that(result, check_result)
 

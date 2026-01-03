@@ -10,6 +10,7 @@ Key differences from original DAG:
 - Removed --mode (not needed - hardcoded as batch)
 - Added --env parameter instead of --project_id
 - Removed dataflow_common from py_requirements
+- AWS secrets are fetched INSIDE Dataflow worker (not in pipeline_options)
 
 Pipeline Flow:
 1. Trigger mapping_reconcile transfer from S3 to BigQuery
@@ -17,13 +18,17 @@ Pipeline Flow:
 3. Pre-check Dataflow setup
 4. Run Dataflow batch pipeline
 5. Verify job completion
+
+Security Note:
+AWS credentials are NOT passed via pipeline_options to avoid exposure
+in Dataflow job parameters. Instead, they are fetched from Secret Manager
+inside the Dataflow worker using WriteToS3ParquetDoFn.
 """
 import datetime
 import logging
 import subprocess
 import json
 from datetime import timedelta
-from google.cloud import secretmanager
 import time
 
 from airflow import DAG
@@ -83,18 +88,6 @@ def check_dataflow_setup(**context):
     if result.stdout:
         logger.info(f"Recent jobs: {result.stdout[:500]}")
     return True
-
-
-def get_secret_value(secret_id, project_id):
-    """Get secret value from Secret Manager"""
-    client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
-    try:
-        response = client.access_secret_version(request={"name": name})
-        return json.loads(response.payload.data.decode("UTF-8"))
-    except Exception as e:
-        logger.error(f"Failed to get secret {secret_id}: {e}")
-        raise
 
 
 def verify_job_completion(**context):
@@ -240,10 +233,9 @@ dataflow_job = BeamRunPythonPipelineOperator(
         # Note: Removed --config_path and --mode (not needed for full_script)
         'env': WORKSPACE_ENV,  # Environment derived from project_id
 
-        # AWS S3 credentials (needed for writing Parquet to S3)
-        's3_region_name': 'ap-southeast-1',
-        's3_access_key_id': get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-access-key'],
-        's3_secret_access_key': get_secret_value('insight-data-pipeline', PROJECT_ID)['aws-secret-key'],
+        # NOTE: AWS S3 credentials are NOT passed here!
+        # They are fetched INSIDE the Dataflow worker from Secret Manager.
+        # This prevents secrets from being exposed in job parameters.
 
         'labels': {
             'environment': WORKSPACE_ENV,
@@ -259,8 +251,10 @@ dataflow_job = BeamRunPythonPipelineOperator(
         'numpy>=1.21,<2',
         'apache-beam[gcp]==2.69.0',
         'google-cloud-bigquery==3.25.0',
+        'google-cloud-secret-manager>=2.0.0',  # For fetching secrets in worker
         'pyarrow==14.0.2',
         'pandas>=1.5.0,<2.1.0',
+        'boto3>=1.26.0',  # For S3 write (secrets fetched in worker)
         'pyyaml>=6.0',
         # Note: dataflow_common removed - full_script is standalone
     ],
