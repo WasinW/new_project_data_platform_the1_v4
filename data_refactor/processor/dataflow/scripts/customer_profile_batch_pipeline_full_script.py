@@ -31,15 +31,14 @@ import json
 import logging
 import re
 import sys
-import uuid
-from datetime import datetime, date, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import apache_beam as beam
-from apache_beam import DoFn, PCollection
+from apache_beam import DoFn
 from apache_beam.io.gcp.bigquery import ReadFromBigQuery, WriteToBigQuery
 from apache_beam.io.parquetio import WriteToParquet
-from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
+from apache_beam.options.pipeline_options import PipelineOptions
 import pyarrow as pa
 
 from google.cloud import bigquery as bq_client
@@ -233,7 +232,7 @@ def coalesce_by_mapping(
 ) -> Optional[Dict[str, Any]]:
     """Coalesce values from new/old rows based on a mapping."""
     try:
-        key, groups = kv
+        _key, groups = kv  # _key is the join key, kept for debugging if needed
         new_rows = groups.get("new") or []
         old_rows = groups.get("old") or []
 
