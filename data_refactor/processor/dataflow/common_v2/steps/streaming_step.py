@@ -570,7 +570,7 @@ class MergeToIcebergTransform(beam.PTransform):
         iceberg_table: str,
         merge_query: str,
         lookback_minutes: int = 30,
-        merge_interval_sec: int = 300,
+        fire_interval: int = 300,
         label: str = "MergeToIceberg"
     ):
         super().__init__(label)
@@ -579,13 +579,13 @@ class MergeToIcebergTransform(beam.PTransform):
         self.iceberg_table = iceberg_table
         self.merge_query = merge_query
         self.lookback_minutes = lookback_minutes
-        self.merge_interval_sec = merge_interval_sec
+        self.fire_interval = fire_interval
 
     def expand(self, pipeline: beam.Pipeline) -> PCollection:
         periodic_trigger = (
             pipeline
             | f"{self.label}_PeriodicImpulse" >> PeriodicImpulse(
-                fire_interval=self.merge_interval_sec,
+                fire_interval=self.fire_interval,
                 apply_windowing=True
             )
         )
@@ -593,7 +593,7 @@ class MergeToIcebergTransform(beam.PTransform):
         windowed = (
             periodic_trigger
             | f"{self.label}_Window" >> beam.WindowInto(
-                window.FixedWindows(self.merge_interval_sec),
+                window.FixedWindows(self.fire_interval),
                 trigger=trigger.AfterWatermark(),
                 accumulation_mode=trigger.AccumulationMode.DISCARDING
             )
