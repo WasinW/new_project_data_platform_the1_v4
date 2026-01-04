@@ -264,7 +264,7 @@ def create_pipeline(pipeline_options: PipelineOptions):
                 project_id=IO_CONFIG["bigtable"]["project"],
                 instance_id=IO_CONFIG["bigtable"]["instance"],
                 table_id=IO_CONFIG["bigtable"]["table"],
-                family_columns=IO_CONFIG["bigtable"]["family_columns"],
+                parent_field=IO_CONFIG["bigtable"]["family_columns"],  # Fixed: was family_columns
             )
         )
 
@@ -306,8 +306,8 @@ def create_pipeline(pipeline_options: PipelineOptions):
             )
         )
 
-        aws_ms_personas = transform_ms_member.aws
-        gcp_ms_personas = transform_ms_member.gcp
+        aws_ms_personas = transform_ms_member['aws']  # Fixed: dict access instead of dot notation
+        gcp_ms_personas = transform_ms_member['gcp']
 
         # =====================================================================
         # Step 6.1: Transform schemas for events_consents
@@ -321,7 +321,7 @@ def create_pipeline(pipeline_options: PipelineOptions):
             )
         )
 
-        gcp_events_consents = transform_consents.gcp
+        gcp_events_consents = transform_consents['gcp']  # Fixed: dict access
 
         # =====================================================================
         # Step 7: Fulfill AWS schema with all fields
@@ -381,7 +381,7 @@ def create_pipeline(pipeline_options: PipelineOptions):
             gcp_events_consents
             | WriteToBigLakeIcebergTransform(
                 table=BQ_TABLES["events_consents"],
-                project=IO_CONFIG["bq"]["project"],
+                # Note: project is not needed - fetched from table path
             )
         )
 
@@ -391,7 +391,7 @@ def create_pipeline(pipeline_options: PipelineOptions):
         _ = (
             full_aws
             | WriteToS3ParquetTransform(
-                base_prefix=IO_CONFIG["s3"]["bucket"],
+                prefix=IO_CONFIG["s3"]["bucket"],  # Fixed: was base_prefix
                 window_size=PARQUET_CONFIG["window_size"],
                 date_columns=PARQUET_CONFIG["date_columns"],
             )
@@ -408,7 +408,7 @@ def create_pipeline(pipeline_options: PipelineOptions):
                 iceberg_table=BQ_TABLES["ms_personas_iceberg"],
                 merge_query=MERGE_QUERY_TEMPLATE,
                 lookback_minutes=SYNC_CONFIG["lookback_minutes"],
-                fire_interval=300,
+                merge_interval_sec=300,  # Fixed: was fire_interval
             )
         )
 
