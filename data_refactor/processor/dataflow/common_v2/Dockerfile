@@ -59,15 +59,15 @@ RUN echo "========== STEP 3: Installing S3 deps ==========" && \
     echo "=================================================="
 
 # ============================================
-# STEP 4: Install dataflow_common wheel
+# STEP 4: Install dataflow_common_v2 wheel
 # ============================================
-COPY dist/dataflow_common-2.0.0-py3-none-any.whl /tmp/
+COPY dist/dataflow_common_v2-2.0.0-py3-none-any.whl /tmp/
 
-RUN echo "========== STEP 4: Installing dataflow_common ==========" && \
-    pip install --no-cache-dir --no-deps /tmp/dataflow_common-2.0.0-py3-none-any.whl && \
-    rm /tmp/dataflow_common-2.0.0-py3-none-any.whl && \
-    echo "--- Verifying dataflow_common package structure ---" && \
-    python -c "import dataflow_common; print(f'dataflow_common {dataflow_common.__version__}')" && \
+RUN echo "========== STEP 4: Installing dataflow_common_v2 ==========" && \
+    pip install --no-cache-dir --no-deps /tmp/dataflow_common_v2-2.0.0-py3-none-any.whl && \
+    rm /tmp/dataflow_common_v2-2.0.0-py3-none-any.whl && \
+    echo "--- Verifying dataflow_common_v2 package structure ---" && \
+    python -c "import dataflow_common_v2; print(f'dataflow_common_v2 {dataflow_common_v2.__version__}')" && \
     echo "========================================================"
 
 # ============================================
@@ -77,14 +77,14 @@ RUN echo "========== STEP 4: Installing dataflow_common ==========" && \
 # ============================================
 # Verify all imports - v2.0.0 uses PTransform pattern (no orchestrator/config)
 RUN python -c "\
-from dataflow_common import __version__; \
-from dataflow_common.steps import RefreshMappingTableTransform; \
-from dataflow_common.steps import ReadFromPubSubTransform; \
-from dataflow_common.steps import WriteToBigQueryCDCTransform; \
-from dataflow_common.dofns import MappingRefreshDoFn; \
-from dataflow_common.dofns import ExtractPersonasDoFn; \
-from dataflow_common.dofns import DLQOutputMixin; \
-print(f'All dataflow_common v{__version__} imports successful'); \
+from dataflow_common_v2 import __version__; \
+from dataflow_common_v2.steps import RefreshMappingTableTransform; \
+from dataflow_common_v2.steps import ReadFromPubSubTransform; \
+from dataflow_common_v2.steps import WriteToBigQueryCDCTransform; \
+from dataflow_common_v2.dofns import MappingRefreshDoFn; \
+from dataflow_common_v2.dofns import ExtractPersonasDoFn; \
+from dataflow_common_v2.dofns import DLQOutputMixin; \
+print(f'All dataflow_common_v2 v{__version__} imports successful'); \
 "
 
 WORKDIR /

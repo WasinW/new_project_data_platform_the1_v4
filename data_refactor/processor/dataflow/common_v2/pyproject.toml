@@ -3,7 +3,7 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dataflow_common"
+name = "dataflow_common_v2"
 version = "2.0.0"  # Major version bump for refactored architecture
 requires-python = ">=3.10"
 # TESTED COMPATIBLE SET - Must match Dockerfile versions!
@@ -33,15 +33,15 @@ test = [
 [tool.setuptools]
 # REMOVED: connectors, transforms, utils (no longer needed)
 packages = [
-    "dataflow_common",
-    "dataflow_common.steps",
-    "dataflow_common.dofns",
+    "dataflow_common_v2",
+    "dataflow_common_v2.steps",
+    "dataflow_common_v2.dofns",
 ]
 
 [tool.setuptools.package-dir]
-dataflow_common = "."
-"dataflow_common.steps" = "steps"
-"dataflow_common.dofns" = "dofns"
+dataflow_common_v2 = "."
+"dataflow_common_v2.steps" = "steps"
+"dataflow_common_v2.dofns" = "dofns"
 
 [tool.pytest.ini_options]
 # Filter warnings during test runs

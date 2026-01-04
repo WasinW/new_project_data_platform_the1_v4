@@ -1,14 +1,14 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="dataflow_common",
+    name="dataflow_common_v2",
     version="2.0.0",  # Major version bump for refactored architecture
     # Explicitly list all packages (main + sub-packages)
     # REMOVED: connectors, transforms, utils (no longer needed)
     packages=[
-        'dataflow_common',
-        'dataflow_common.steps',
-        'dataflow_common.dofns',
+        'dataflow_common_v2',
+        'dataflow_common_v2.steps',
+        'dataflow_common_v2.dofns',
     ],
     package_dir={'': '.'},
     python_requires=">=3.10",
