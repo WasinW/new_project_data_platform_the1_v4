@@ -1,0 +1,64 @@
+{
+  "sdk_info": {
+    "language": "PYTHON"
+  },
+  "image": "${IMAGE_FULL}",
+  "metadata": {
+    "name": "Member Tiers Kafka Consumer",
+    "description": "Streaming pipeline that consumes member tier events (upgraded/downgraded) from Confluent Kafka",
+    "parameters": [
+      {
+        "name": "secret_project",
+        "label": "Secret Project ID",
+        "helpText": "GCP Project where Kafka credentials are stored in Secret Manager",
+        "isOptional": false,
+        "paramType": "TEXT"
+      },
+      {
+        "name": "secret_id",
+        "label": "Secret ID",
+        "helpText": "Secret Manager secret ID for Kafka credentials (default: loyalty-data-kafka-connect-members)",
+        "isOptional": true,
+        "paramType": "TEXT"
+      },
+      {
+        "name": "topic_type",
+        "label": "Topic Type",
+        "helpText": "Which topic(s) to consume: upgraded, downgraded, or both (default: both)",
+        "isOptional": true,
+        "paramType": "TEXT",
+        "regexes": ["^(upgraded|downgraded|both)$"]
+      },
+      {
+        "name": "writer_mode",
+        "label": "Writer Mode",
+        "helpText": "Which writer mode to use: pyiceberg or beam_iceberg (default: beam_iceberg)",
+        "isOptional": true,
+        "paramType": "TEXT",
+        "regexes": ["^(pyiceberg|beam_iceberg)$"]
+      },
+      {
+        "name": "auto_offset_reset",
+        "label": "Auto Offset Reset",
+        "helpText": "Where to start reading: latest or earliest (default: latest)",
+        "isOptional": true,
+        "paramType": "TEXT",
+        "regexes": ["^(latest|earliest)$"]
+      },
+      {
+        "name": "debug_mode",
+        "label": "Debug Mode",
+        "helpText": "Enable verbose debug logging (default: true)",
+        "isOptional": true,
+        "paramType": "TEXT"
+      }
+    ]
+  },
+  "defaultEnvironment": {
+    "additionalUserLabels": {
+      "pipeline": "member-tiers-kafka-consumer",
+      "team": "data-engineering",
+      "domain": "loyalty-data"
+    }
+  }
+}

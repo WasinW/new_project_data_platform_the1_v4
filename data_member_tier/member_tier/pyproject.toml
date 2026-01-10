@@ -1,0 +1,57 @@
+[project]
+name = "member-tiers-pipeline"
+version = "0.1.0"
+description = "Kafka consumer pipeline for member tier events"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "apache-beam[gcp]==2.61.0",
+    "google-cloud-secret-manager>=2.20.0,<2.26.0",
+    
+    # PyArrow (required for Iceberg)
+    "pyarrow>=14.0.0,<18.0.0",
+    
+    # HTTP requests for API calls
+    "requests>=2.31.0",
+    
+    # ===========================================
+    # PyIceberg with GCS support (for pyiceberg mode)
+    # ===========================================
+    "pyiceberg[gcsfs]>=0.7.0,<0.9.0",
+    
+    # GCS filesystem support (required by pyiceberg)
+    "gcsfs>=2024.1.0",
+    "fsspec>=2024.1.0",
+    
+    # Google auth for GCS
+    "google-auth>=2.20.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.4.0",
+]
+
+# ===========================================
+# WRITER MODE NOTES
+# ===========================================
+# 
+# 1. pyiceberg (default, recommended):
+#    - Pure Python implementation
+#    - No Java required
+#    - Dependencies: pyiceberg[gcsfs], gcsfs, fsspec
+#
+# 2. beam_iceberg (experimental):
+#    - Uses Beam ManagedIO with cross-language transforms
+#    - Requires Java expansion service (Dataflow provides this automatically)
+#    - For DirectRunner: need to run expansion service manually
+#    - JAR dependencies downloaded at runtime by Beam
+#
+# Usage:
+#   --writer_mode=pyiceberg  (default)
+#   --writer_mode=beam_iceberg
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
