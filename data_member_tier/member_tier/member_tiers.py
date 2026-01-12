@@ -16,7 +16,7 @@ Pipeline Flow:
 Author: Data Engineering Team
 Date: 2025-01-07
 
-IMPORTANT: Kafka config follows kafkaGCS.py pattern (proven working):
+IMPORTANT: Kafka config follows member_tier.py pattern (proven working):
   - sasl.mechanism (SINGULAR, not sasl.mechanisms)
   - NO serviceName in JAAS config (only for GSSAPI/Kerberos)
   - with_metadata=True in ReadFromKafka
@@ -33,7 +33,6 @@ import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
-
 # Thailand timezone (UTC+7)
 TZ_BANGKOK = timezone(timedelta(hours=7))
 from typing import Any, Dict, Iterator, List, Optional, Tuple, NamedTuple
@@ -98,8 +97,8 @@ TOPIC_CONFIGS = {
 }
 
 # Default Secret Manager secret name
-DEFAULT_KAFKA_SECRET_NAME = "loyalty-data-kafka-connect-members"
-DEFAULT_API_SECRET_NAME = "loyalty-data-kafka-connect-members"
+DEFAULT_KAFKA_SECRET_NAME = "loyalty-data-purchases-collector"
+DEFAULT_API_SECRET_NAME = "loyalty-data-purchases-collector"
 
 # GCS output configuration
 DEFAULT_GCS_OUTPUT_BUCKET = "gs://the1-loyalty-data-stg-pipeline-data-raw"
@@ -125,18 +124,15 @@ API_MAX_RETRIES = 2
 API_RETRY_DELAY_SECONDS = 1
 
 # Payload format: 'json' or 'avro'
-# IMPORTANT: loyalty.members.upgraded/downgraded use AVRO/BINARY format
 PAYLOAD_FORMAT = "avro"
 
-# Confluent Schema Registry - REQUIRED for Avro decode
+# If using Confluent Schema Registry for Avro, set this URL and set PAYLOAD_FORMAT='avro'
 USE_SCHEMA_REGISTRY = True
-# Schema Registry URL will be loaded from Secret Manager (CONFLUENT_SR_URL)
-SCHEMA_REGISTRY_URL = None  # Set from env var
+SCHEMA_REGISTRY_URL = "https://psrc-10wzj.ap-southeast-2.aws.confluent.cloud"
 
 # Simple cache for schema id -> parsed schema
 _SCHEMA_CACHE: Dict[int, Dict] = {}
-# Use same secret as Kafka credentials (contains schemaRegistryURL)
-DEFAULT_CONFLUENT_SECRET_NAME = DEFAULT_KAFKA_SECRET_NAME
+DEFAULT_CONFLUENT_SECRET_NAME = "loyalty-data-purchases-collector"
 
 # Flag to track if Schema Registry credentials have been loaded on worker
 _WORKER_SR_CREDENTIALS_LOADED = False
@@ -255,7 +251,7 @@ SCHEMA_MEMBER_TIER_RAW = pa.schema([
 
 
 # =============================================================================
-# SECRET MANAGER HELPERS (from kafkaGCS.py pattern)
+# SECRET MANAGER HELPERS (from member_tier.py pattern)
 # =============================================================================
 
 def get_secret_value(secret_id: str, project_id: str) -> dict:
@@ -299,7 +295,7 @@ def load_confluent_env_from_secret_manager(
 ) -> bool:
     """Load Confluent/Kafka config from Secret Manager into env vars.
     
-    Follows kafkaGCS.py pattern for key mapping.
+    Follows member_tier.py pattern for key mapping.
     """
     data = get_secret_value(secret_id, project_id)
 
@@ -314,7 +310,7 @@ def load_confluent_env_from_secret_manager(
                 return lower_map.get(lk)
         return None
 
-    # Full mapping from kafkaGCS.py
+    # Full mapping from member_tier.py
     mapping = {
         "CONFLUENT_TOPIC": _get_any(
             "confluent-topic", "confluent_topic", "topic", "CONFLUENT_TOPIC"),
@@ -373,7 +369,7 @@ def load_confluent_env_from_secret_manager(
 def build_consumer_config(group_id: str, auto_offset_reset: str = "latest") -> Dict[str, str]:
     """Build Kafka consumer config dict for ReadFromKafka.
     
-    CRITICAL: This follows kafkaGCS.py pattern EXACTLY:
+    CRITICAL: This follows member_tier.py pattern EXACTLY:
     - Uses 'sasl.mechanism' (SINGULAR, not 'sasl.mechanisms')
     - NO serviceName in JAAS config (only for GSSAPI/Kerberos)
     """
@@ -382,11 +378,16 @@ def build_consumer_config(group_id: str, auto_offset_reset: str = "latest") -> D
     sasl_mechanism = os.getenv("CONFLUENT_SASL_MECHANISM", "PLAIN")
     sasl_username = os.getenv("CONFLUENT_SASL_USERNAME")
     sasl_password = os.getenv("CONFLUENT_SASL_PASSWORD")
+    
+    # # Optional Schema Registry config
+    # sr_url = os.getenv("CONFLUENT_SR_URL")
+    # sr_api_key = os.getenv("CONFLUENT_SR_API_KEY")
+    # sr_api_secret = os.getenv("CONFLUENT_SR_API_SECRET")
 
     if not bootstrap or not sasl_username or not sasl_password:
         raise RuntimeError("Kafka credentials not set in environment")
 
-    # Base Kafka client configuration - EXACTLY from kafkaGCS.py
+    # Base Kafka client configuration - EXACTLY from member_tier.py
     config = {
         "bootstrap.servers": bootstrap,
         "group.id": group_id,
@@ -402,20 +403,28 @@ def build_consumer_config(group_id: str, auto_offset_reset: str = "latest") -> D
         "connections.max.idle.ms": "540000",
         # SSL settings
         "ssl.endpoint.identification.algorithm": "https",
-        # Throughput optimization settings (from kafkaGCS.py)
+        # Throughput optimization settings (from member_tier.py)
         "fetch.min.bytes": "1",              # Don't wait for batch
         "fetch.max.wait.ms": "500",          # CORRECT key name (not fetch.wait.max.ms)
         "max.partition.fetch.bytes": "1048576",
         "max.poll.records": "500",           # Limit records per poll
         "isolation.level": "read_committed",
     }
+    
+    # # Add Schema Registry config if available
+    # if sr_url:
+    #     config["sr_url"] = sr_url
+    # if sr_api_key:
+    #     config["sr_api_key"] = sr_api_key
+    # if sr_api_secret:
+    #     config["sr_api_secret"] = sr_api_secret
 
     # SASL credentials
     if sasl_username and sasl_password:
         # config["sasl.username"] = sasl_username
         # config["sasl.password"] = sasl_password
         # # CRITICAL: NO serviceName for PLAIN mechanism (only for GSSAPI/Kerberos)
-        # # This is the exact format from kafkaGCS.py that WORKS
+        # # This is the exact format from member_tier.py that WORKS
         config["sasl.jaas.config"] = (
             f"org.apache.kafka.common.security.plain.PlainLoginModule required "
             f'username="{sasl_username}" password="{sasl_password}";'
@@ -491,6 +500,7 @@ def get_schema_from_registry(schema_id: int):
         )
 
     url = f"{sr_url}/schemas/ids/{schema_id}"
+    # url = f"{SCHEMA_REGISTRY_URL}/schemas/ids/{schema_id}"
     auth = None
     if sr_api_key and sr_api_secret:
         auth = (sr_api_key, sr_api_secret)
@@ -512,8 +522,21 @@ def get_schema_from_registry(schema_id: int):
 
 def decode_confluent_avro(b: bytes):
     if not b or len(b) < 5:
+        LOGGER.warning(
+            "Avro decode: payload too short (len=%d, need >=5 bytes). First bytes: %s",
+            len(b) if b else 0,
+            b[:20].hex() if b else "empty"
+        )
         return None
+
+    # Log first bytes for debugging wire format
+    LOGGER.debug("Avro decode: len=%d, first 10 bytes: %s", len(b), b[:10].hex())
     if b[0] != 0:
+        # Not Confluent wire format - try schemaless decode as fallback
+        LOGGER.warning(
+            "Avro decode: magic byte is %d (expected 0). Trying schemaless decode. First bytes: %s",
+            b[0], b[:20].hex()
+        )
         try:
             forced_id = os.getenv("CONFLUENT_SCHEMA_ID")
             schema = None
@@ -521,24 +544,44 @@ def decode_confluent_avro(b: bytes):
                 fid = int(forced_id)
                 schema = _SCHEMA_CACHE.get(fid) or (get_schema_from_registry(fid) if USE_SCHEMA_REGISTRY else None)
                 if schema:
+                    LOGGER.info("Using forced schema ID %d for non-wire-format message", fid)
                     return schemaless_reader(BytesIO(b), schema)
-            return schemaless_reader(BytesIO(b), _SCHEMA_CACHE.get(0))
-        except Exception:  # pragma: no cover - defensive
+            cached_schema = _SCHEMA_CACHE.get(0)
+            if cached_schema:
+                return schemaless_reader(BytesIO(b), cached_schema)
+            LOGGER.warning("No schema available for schemaless decode (magic byte != 0)")
+        except Exception as e:
+            LOGGER.warning("Schemaless decode failed: %s", e)
             return None
     schema_id = int.from_bytes(b[1:5], "big")
+    LOGGER.debug("Avro decode: schema_id=%d extracted from wire format", schema_id)
     schema = (
         get_schema_from_registry(schema_id)
         if USE_SCHEMA_REGISTRY
         else _SCHEMA_CACHE.get(schema_id)
     )
     if schema is None:
+        LOGGER.error(
+            "Schema %d not available. USE_SCHEMA_REGISTRY=%s, cache_keys=%s",
+            schema_id, USE_SCHEMA_REGISTRY, list(_SCHEMA_CACHE.keys())
+        )
         raise RuntimeError(
             f"Schema {schema_id} not available in cache and schema registry disabled"
         )
     try:
-        return schemaless_reader(BytesIO(b[5:]), schema)
-    except Exception:  # pragma: no cover - defensive
+        result = schemaless_reader(BytesIO(b[5:]), schema)
+        LOGGER.debug("Avro decode SUCCESS: schema_id=%d", schema_id)
+        return result
+    except Exception as e:
+        LOGGER.error(
+            "Avro decode FAILED: schema_id=%d, error=%s, payload_len=%d, first_bytes=%s",
+            schema_id, e, len(b), b[:30].hex()
+        )
         return None
+
+# Counter for decode_kafka_value logging
+_DECODE_LOG_COUNT = 0
+_DECODE_LOG_MAX = 5
 
 def decode_kafka_value(raw):
     """Decode Kafka message value according to `PAYLOAD_FORMAT`.
@@ -547,19 +590,75 @@ def decode_kafka_value(raw):
     are returned unchanged to keep behavior identical to the prior inline
     lambda.
     """
+    global _DECODE_LOG_COUNT
+
+    # Handle None input
+    if raw is None:
+        LOGGER.warning("decode_kafka_value: received None input")
+        return None
+
+    # Log first N messages for debugging
+    _DECODE_LOG_COUNT += 1
+    should_log = _DECODE_LOG_COUNT <= _DECODE_LOG_MAX
+
+    raw_type = type(raw).__name__
+    raw_len = len(raw) if hasattr(raw, '__len__') else 0
+
+    if should_log:
+        first_bytes = ""
+        if isinstance(raw, (bytes, bytearray)) and len(raw) >= 10:
+            first_bytes = f", first_10_bytes={raw[:10].hex()}"
+        LOGGER.info(
+            "decode_kafka_value [%d/%d]: PAYLOAD_FORMAT=%s, input_type=%s, input_len=%d%s",
+            _DECODE_LOG_COUNT, _DECODE_LOG_MAX, PAYLOAD_FORMAT, raw_type, raw_len, first_bytes
+        )
+
     if PAYLOAD_FORMAT == "json":
         if isinstance(raw, (bytes, bytearray)):
-            return raw.decode("utf-8")
+            try:
+                decoded = raw.decode("utf-8")
+                if should_log:
+                    LOGGER.info("decode_kafka_value: JSON decode OK, str_len=%d", len(decoded))
+                return decoded
+            except UnicodeDecodeError as e:
+                LOGGER.error("decode_kafka_value: UTF-8 decode failed: %s", e)
+                return None
         return raw
+
     if PAYLOAD_FORMAT == "avro":
         if isinstance(raw, (bytes, bytearray)):
-            return decode_confluent_avro(bytes(raw))
+            result = decode_confluent_avro(bytes(raw))
+            if result is None and should_log:
+                LOGGER.warning(
+                    "decode_kafka_value: Avro decode returned None for %d bytes",
+                    raw_len
+                )
+            elif result is not None and should_log:
+                LOGGER.info(
+                    "decode_kafka_value: Avro decode OK, result_type=%s, keys=%s",
+                    type(result).__name__,
+                    list(result.keys())[:5] if isinstance(result, dict) else "N/A"
+                )
+            return result
+        else:
+            LOGGER.warning(
+                "decode_kafka_value: PAYLOAD_FORMAT=avro but input is %s (not bytes)",
+                raw_type
+            )
         return raw
+
+    LOGGER.warning("decode_kafka_value: unknown PAYLOAD_FORMAT=%s", PAYLOAD_FORMAT)
     return raw
 
 # =============================================================================
-# NETWORK DIAGNOSTIC HELPERS (from kafkaGCS.py)
+# NETWORK DIAGNOSTIC HELPERS (from member_tier.py)
 # =============================================================================
+
+# Counter for extract_kafka_value logging (log only first N messages)
+_EXTRACT_LOG_COUNT = 0
+_EXTRACT_LOG_MAX = 5  # Log first 5 messages for debugging
+_EXTRACT_ERROR_COUNT = 0
+
 
 def extract_kafka_value(record):
     """Extract value from Kafka record.
@@ -570,6 +669,7 @@ def extract_kafka_value(record):
     try:
         # Log for debugging
         LOGGER.info(f"extract_kafka_value called with type: {type(record)} , record: {record}")
+        value = None
         
         # KafkaRecord has .value attribute when with_metadata=True
         if hasattr(record, 'value'):
@@ -582,10 +682,35 @@ def extract_kafka_value(record):
             LOGGER.info(f"Extracted value from tuple[1], type: {type(value)}")
             return value
         else:
-            LOGGER.warning(f"Unexpected record format: {type(record)}, returning as-is")
+            # Unknown format - log warning and return as-is
+            LOGGER.warning(
+                "extract_kafka_value: unexpected record format: type=%s, repr=%s",
+                type(record).__name__, repr(record)[:200]
+            )
             return record
+
+        # Log first N messages for debugging
+        _EXTRACT_LOG_COUNT += 1
+        if _EXTRACT_LOG_COUNT <= _EXTRACT_LOG_MAX:
+            value_len = len(value) if value and hasattr(value, '__len__') else 0
+            value_type = type(value).__name__
+            first_bytes = ""
+            if isinstance(value, (bytes, bytearray)) and len(value) >= 5:
+                first_bytes = f", first_5_bytes={value[:5].hex()}"
+            LOGGER.info(
+                "extract_kafka_value [%d/%d]: type=%s, len=%d%s",
+                _EXTRACT_LOG_COUNT, _EXTRACT_LOG_MAX, value_type, value_len, first_bytes
+            )
+
+        return value
     except Exception as e:
-        LOGGER.error(f"Error extracting Kafka value: {e}, record type: {type(record)}")
+        _EXTRACT_ERROR_COUNT += 1
+        # Log first 10 errors, then every 100th
+        if _EXTRACT_ERROR_COUNT <= 10 or _EXTRACT_ERROR_COUNT % 100 == 0:
+            LOGGER.error(
+                "extract_kafka_value ERROR [#%d]: %s, record_type=%s",
+                _EXTRACT_ERROR_COUNT, e, type(record).__name__
+            )
         return None
 
 
@@ -629,6 +754,21 @@ def parse_timestamp(ts_str: Any) -> Optional[datetime]:
         return datetime.fromisoformat(ts)
     except Exception:
         return datetime.now(TZ_BANGKOK)
+
+
+# def build_iceberg_catalog_config(warehouse_location: str, project_id: str) -> Dict[str, Any]:
+#     """Build Iceberg Hadoop Catalog configuration for Beam IcebergIO."""
+#     return {
+#         "catalog_name": ICEBERG_CATALOG_NAME,
+#         "catalog_type": "hadoop",
+#         "warehouse_location": warehouse_location,
+#         "catalog_properties": {
+#             "fs.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem",
+#             "fs.AbstractFileSystem.gs.impl": "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS",
+#             "fs.gs.project.id": project_id,
+#             "fs.gs.auth.service.account.enable": "true",
+#         }
+#     }
 
 
 # =============================================================================
@@ -724,18 +864,17 @@ class MemberTierAPIClient:
 
 
 # =============================================================================
-# DoFn CLASSES - KAFKA DECODE (from kafkaGCS.py pattern)
+# DoFn CLASSES - KAFKA DECODE (from member_tier.py pattern)
 # =============================================================================
 
 class DecodeKafkaValueDoFn(DoFn):
-    """Decode Kafka message value bytes to dict.
-
-    Following kafkaGCS.py pattern:
+    """Decode Kafka message value bytes to string.
+    
+    Following member_tier.py pattern:
     - Handles bytes decoding
-    - Parses JSON to dict
     - Error tracking via metrics
     """
-
+    
     def __init__(self, topic_name: str, debug_mode: bool = True):
         self.topic_name = topic_name
         self.debug_mode = debug_mode
@@ -758,6 +897,13 @@ class DecodeKafkaValueDoFn(DoFn):
         self._decode_latency = Metrics.distribution("kafka", "decode_latency_ms")
         self._payload_size = Metrics.distribution("kafka", "payload_bytes")
 
+        # Log setup completion for Cloud Logging visibility
+        self._logger.info(
+            "✓ DecodeKafkaValueDoFn.setup() COMPLETED: topic=%s, debug_mode=%s, "
+            "PAYLOAD_FORMAT=%s, USE_SCHEMA_REGISTRY=%s",
+            self.topic_name, self.debug_mode, PAYLOAD_FORMAT, USE_SCHEMA_REGISTRY
+        )
+
     def start_bundle(self):
         """Initialize per-bundle state for batch processing tracking."""
         self._bundle_count = 0
@@ -773,7 +919,7 @@ class DecodeKafkaValueDoFn(DoFn):
 
     # def process(self, element) -> Iterator[Dict[str, Any]]:
     #     self._message_count += 1
-    #     timestamp = datetime.now(TZ_BANGKOK)
+    #     timestamp = datetime.now(timezone.utc)
     #     self._logger.info(f"[{self.topic_name}] DecodeKafkaValueDoFn received element type: {type(element)}")
     #     self._logger.info(f"[{self.topic_name}] Decoding message #{self._message_count} , element={element}")
     #     try:
@@ -820,24 +966,41 @@ class DecodeKafkaValueDoFn(DoFn):
         self._bundle_count += 1
         self._message_count += 1
         timestamp = datetime.now(TZ_BANGKOK)
+        self._logger.info(
+            "DecodeKafkaValueDoFn.process() element=%s, ",element
+        )
 
         # Track payload size
         payload_len = len(element) if isinstance(element, (bytes, bytearray, str)) else 0
         if self._payload_size and payload_len > 0:
             self._payload_size.update(payload_len)
-
+        
         start_time = time.time()
         try:
+            # out = decode_kafka_value(element)
             # Decode bytes to string
             decoded_str = decode_kafka_value(element)
 
+            
             # Track decode latency
             if self._decode_latency:
                 latency_ms = int((time.time() - start_time) * 1000)
                 self._decode_latency.update(latency_ms)
 
             if decoded_str is None:
-                self._logger.warning(f"[{self.topic_name}] Received None after decode, skipping")
+                self._errors.inc()
+                self._errors_seen += 1
+                # Log detailed info for debugging decode failures
+                if self._errors_seen <= 10 or self._errors_seen % 100 == 0:
+                    first_bytes = ""
+                    if isinstance(element, (bytes, bytearray)) and len(element) >= 10:
+                        first_bytes = f", first_10_bytes={element[:10].hex()}"
+                    self._logger.warning(
+                        "[%s] decode_kafka_value returned None (error #%d): "
+                        "element_type=%s, element_len=%d%s",
+                        self.topic_name, self._errors_seen,
+                        type(element).__name__, payload_len, first_bytes
+                    )
                 return
 
             # Parse JSON string to dict
@@ -854,6 +1017,7 @@ class DecodeKafkaValueDoFn(DoFn):
 
             self._ok.inc()
             self._success_count += 1
+            
 
             # Build result dict with metadata
             result = {
@@ -874,7 +1038,10 @@ class DecodeKafkaValueDoFn(DoFn):
                     self._success_count,
                     payload_len if payload_len > 0 else "n/a",
                 )
-
+            
+            # if out is None:
+            #     return
+            # yield out
             yield result
 
         except Exception as exc:  # defensive: avoid worker crashes on bad payloads
@@ -886,12 +1053,18 @@ class DecodeKafkaValueDoFn(DoFn):
             )
             if should_log:
                 self._logs_emitted += 1
-                self._logger.warning(
-                    "Kafka value decode failed (%s: %s). payload_type=%s payload_len=%s",
+                first_bytes = ""
+                if isinstance(element, (bytes, bytearray)) and len(element) >= 20:
+                    first_bytes = f", first_20_bytes={element[:20].hex()}"
+                self._logger.error(
+                    "[%s] Kafka decode EXCEPTION #%d (%s: %s): payload_type=%s, payload_len=%s%s",
+                    self.topic_name,
+                    self._errors_seen,
                     type(exc).__name__,
                     exc,
                     type(element).__name__,
-                    (len(element) if isinstance(element, (bytes, bytearray, str)) else "n/a"),
+                    payload_len if payload_len > 0 else "n/a",
+                    first_bytes,
                 )
 
 
@@ -1158,9 +1331,22 @@ class CallMemberTierInfoAPIDoFn(DoFn):
     def setup(self):
         """Initialize API client (called once per worker)."""
         self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
-        self._logger.info("CallMemberTierInfoAPIDoFn.setup() called")
-        self._client = MemberTierAPIClient(self.api_secret_project, self.api_secret_id)
-        self._logger.info("MemberTierAPIClient initialized successfully")
+        self._logger.info(
+            "✓ CallMemberTierInfoAPIDoFn.setup() STARTED: "
+            "api_secret_project=%s, api_secret_id=%s",
+            self.api_secret_project, self.api_secret_id
+        )
+        try:
+            self._client = MemberTierAPIClient(self.api_secret_project, self.api_secret_id)
+            self._logger.info(
+                "✓ CallMemberTierInfoAPIDoFn.setup() COMPLETED: "
+                "MemberTierAPIClient initialized successfully"
+            )
+        except Exception as e:
+            self._logger.error(
+                "✗ CallMemberTierInfoAPIDoFn.setup() FAILED: %s", e
+            )
+            raise
     
     def process(self, element: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
         payload = element.get("payload", {})
@@ -1281,6 +1467,14 @@ class WriteToIcebergWithPyIcebergDoFn(DoFn):
         self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
         try:
             from pyiceberg.catalog import load_catalog
+            
+            # # Create catalog config for GCS (Hadoop style)
+            # catalog_config = {
+            #     "type": "hadoop",
+            #     "warehouse": self.warehouse_location,
+            # }
+            
+            # self._catalog = load_catalog(ICEBERG_CATALOG_NAME, **catalog_config)
 
             # Use HadoopCatalog - stores metadata in GCS alongside data
             # This allows all workers to see the same table state
@@ -1321,8 +1515,10 @@ class WriteToIcebergWithPyIcebergDoFn(DoFn):
         
         try:
             from pyiceberg.schema import Schema
-            from pyiceberg.types import NestedField
-
+            from pyiceberg.types import (
+                StringType, BooleanType, TimestamptzType, NestedField
+            )
+            
             # Convert PyArrow schema to Iceberg schema
             iceberg_fields = []
             for i, field in enumerate(self.schema):
@@ -1453,14 +1649,18 @@ class AddWindowKeyDoFn(DoFn):
 #         )
 
 # =============================================================================
-# COMPOSITE TRANSFORMS 
+# COMPOSITE TRANSFORMS
 # =============================================================================
 
 class WriteToIcebergPyIceberg(PTransform):
     """Write to Iceberg using PyIceberg (batch append per window)."""
+    
+    # def setup(self):
+    #     self._logger = get_logger(self.__class__.__name__)
 
     def __init__(self, warehouse_location: str, database: str, table_name: str,
                  schema: pa.Schema, project_id: str):
+        # self._logger = None
         self.warehouse_location = warehouse_location
         self.database = database
         self.table_name = table_name
@@ -1533,15 +1733,21 @@ def run():
     debug_mode = known_args.debug_mode and not known_args.no_debug
     api_secret_project = known_args.api_secret_project or known_args.secret_project
 
-    LOGGER.info("=" * 60)
+    LOGGER.info("=" * 70)
     LOGGER.info("Member Tiers Kafka Consumer Pipeline (kafkaGCS pattern)")
-    LOGGER.info(f"Writer Mode: {known_args.writer_mode}")
-    LOGGER.info(f"Secret Project: {known_args.secret_project}")
-    LOGGER.info(f"Topic Type: {known_args.topic_type}")
-    LOGGER.info(f"Output Path: {known_args.output_path}")
-    LOGGER.info(f"Window Size: {known_args.window_size}s")
-    LOGGER.info(f"Skip API Call: {known_args.skip_api_call}")
-    LOGGER.info("=" * 60)
+    LOGGER.info("=" * 70)
+    LOGGER.info("Configuration:")
+    LOGGER.info("  - Writer Mode: %s", known_args.writer_mode)
+    LOGGER.info("  - Secret Project: %s", known_args.secret_project)
+    LOGGER.info("  - Topic Type: %s", known_args.topic_type)
+    LOGGER.info("  - Output Path: %s", known_args.output_path)
+    LOGGER.info("  - Window Size: %ds", known_args.window_size)
+    LOGGER.info("  - Skip API Call: %s", known_args.skip_api_call)
+    LOGGER.info("  - Debug Mode: %s", debug_mode)
+    LOGGER.info("Decode Settings:")
+    LOGGER.info("  - PAYLOAD_FORMAT: %s", PAYLOAD_FORMAT)
+    LOGGER.info("  - USE_SCHEMA_REGISTRY: %s", USE_SCHEMA_REGISTRY)
+    LOGGER.info("=" * 70)
 
     # Load Kafka credentials
     load_confluent_env_from_secret_manager(
@@ -1550,7 +1756,7 @@ def run():
         overwrite=True,
     )
 
-    # Pre-flight connectivity check (from kafkaGCS.py)
+    # Pre-flight connectivity check (from member_tier.py)
     bootstrap_servers = os.getenv("CONFLUENT_BOOTSTRAP_SERVERS")
     _log_dns_resolution(bootstrap_servers)
     _preflight_kafka_connectivity(bootstrap_servers)
@@ -1561,6 +1767,9 @@ def run():
         topics_to_consume.append(("upgraded", TOPIC_CONFIGS["upgraded"]))
     if known_args.topic_type in ("downgraded", "both"):
         topics_to_consume.append(("downgraded", TOPIC_CONFIGS["downgraded"]))
+
+    # # Iceberg catalog config (for Beam IcebergIO)
+    # catalog_config = build_iceberg_catalog_config(known_args.output_path, known_args.secret_project)
 
     # Pipeline options
     options = PipelineOptions(pipeline_args)
@@ -1580,7 +1789,7 @@ def run():
         extracted_collections = {}
         
         # =====================================================================
-        # STEP 1-2: Consume from Kafka and Extract (kafkaGCS.py pattern)
+        # STEP 1-2: Consume from Kafka and Extract (member_tier.py pattern)
         # =====================================================================
         for topic_type, topic_config in topics_to_consume:
             topic = topic_config["topic"]
@@ -1597,7 +1806,7 @@ def run():
                 topic, consumer_group,
             )
 
-            # Read from Kafka - EXACTLY like kafkaGCS.py
+            # Read from Kafka - EXACTLY like member_tier.py
             # with_metadata=True then Extract Value
             raw_messages = (
                 p
@@ -1605,7 +1814,7 @@ def run():
                 >> ReadFromKafka(
                     consumer_config=consumer_config,
                     topics=[topic],
-                    with_metadata=True,  # CRITICAL: Same as kafkaGCS.py
+                    with_metadata=True,  # CRITICAL: Same as member_tier.py
                 )
                 # | f"ExtractValue_{safe_name}" >> beam.Map(lambda record: record.value)
                 | f"ExtractValue_{safe_name}" >> beam.Map(extract_kafka_value)
@@ -1617,7 +1826,7 @@ def run():
             #     | f"FilterNone_{safe_name}" >> beam.Filter(lambda x: x is not None)
             # )
 
-            # Decode Kafka value (following kafkaGCS.py pattern)
+            # Decode Kafka value (following member_tier.py pattern)
             decoded = (
                 raw_messages
                 | f"DecodeKafkaValue_{safe_name}"
