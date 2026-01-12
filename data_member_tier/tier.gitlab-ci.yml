@@ -1,0 +1,486 @@
+stages:
+# - build
+- deploy-stg
+# - test-stg
+- deploy-prod
+# - test-prod
+
+variables:
+  RUNNER_TAG_NONPROD: 'nonprod-docker-cicd-x86'
+  RUNNER_TAG_PROD: 'prod-docker-cicd-x86'
+  TIER_SERVICE_NAME: 'loyalty-data-tier-pipeline'
+  SCRIPTS_PATH: 'data-pipeline/'
+  MEMBER_TIERS_DATAFLOW_PATH: 'data-pipeline/processor/dataflow/scripts/member_tiers'
+  MODULE_COMMON_PATH: 'data-pipeline/processor/dataflow/common'
+  INFRASTRUCTURE_COMMON_PATH: 'infrastructure/common/GCP/'
+  TIERS_INFRASTRUCTURE_PATH: 'infrastructure/tier'
+  PYTHON_IMAGE: 'python:3.11-slim'
+  #   MEMBER_TIERS_GAR_REPOSITORY_NAME: 'insight-datapipeline-dataflow-common'
+  GCP_STG_PROJECT_ID: 'the1-loyalty-data-stg'
+  GCP_PRD_PROJECT_ID: 'the1-loyalty-data-prod'
+  #   GAR_PROD_REPOSITORY_BASE_PATH: 'asia-southeast1-docker.pkg.dev'
+  #   GAR_STG_REPOSITORY_BASE_PATH: 'asia-southeast1-docker.pkg.dev'
+  #   # PYTHON_IMAGE: 'python:3.9.24-slim'
+  #   PYTHON_IMAGE: 'python:3.11-slim' # เปลี่ยนจาก 3.9.24 เป็น 3.11
+  #   CONTAINER_BUILD_IMAGE: 'gcr.io/kaniko-project/executor:v1.9.0-debug'
+  # ==========================================================================
+  # Flex Template Variables (NEW)
+  # ==========================================================================
+  MEMBER_TIERS_DOCKER_IMAGE_NAME: 'member-tiers-dataflow'
+  MEMBER_TIERS_SPEC_GCS_PATH: "gs://$GCP_STG_PROJECT_ID-pipeline-scripts/templates/$MEMBER_TIERS_DOCKER_IMAGE_NAME/flex-template-spec-member-tiers.json"
+  MEMBER_TIERS_GAR_REPOSITORY_NAME: 'loyalty-data-member-tiers'
+  GAR_REPOSITORY_BASE_PATH: 'asia-southeast1-docker.pkg.dev'
+  GCP_PROJECT_ID: 'the1-loyalty-data'
+  DATAFLOW_REGION: 'asia-southeast1'
+  MEMBER_TIERS_DATAFLOW_JOB_NAME: 'loyalty-data-member-tiers-consumer'
+  CONTAINER_BUILD_IMAGE: 'gcr.io/kaniko-project/executor:v1.9.0-debug'
+
+# ============================================
+# RULES DEFINITIONS
+# ============================================
+# .execute-pipeline-template:
+#   rules:
+#   - if: $TRIGGER_ROLLBACK_NONPROD == "1"
+#     when: never
+#   - if: $TRIGGER_TERRAFORM_PLAN_NONPROD == "1"
+#     when: never
+#   - if: $TRIGGER_TERRAFORM_APPLY_NONPROD == "1"
+#     when: never
+#   - if: $TRIGGER_TERRAFORM_APPLY_PROD == "1"
+#     when: never
+#   - if: $TRIGGER_TERRAFORM_APPLY_ALL == "1"
+#     when: never
+#   - if: $TRIGGER_MANUAL_DEPLOY == "1"
+#     when: never
+
+# Rule for Terraform changes only
+.member_tiers_terraform_rules: &member_tiers_terraform_rules
+  rules:
+  - if: ($SERVICE_NAME != "Select Option") && ($SERVICE_NAME != $TIER_SERVICE_NAME)
+    when: never
+  - if: '$TRIGGER_TERRAFORM_APPLY_ALL == "1"'
+    when: never
+  - if: ($TRIGGER_MANUAL_DEPLOY == "1") && ($SERVICE_NAME == $TIER_SERVICE_NAME)
+    when: never
+  - !reference [ .execute-pipeline-template, rules ]
+  - changes:
+    # - infrastructure/common/GCP/*.tf
+    # - infrastructure/common/GCP/*.tfvars
+    - infrastructure/tier/*.tf
+    - infrastructure/tier/*.tfvars
+    # - pipeline/tier.gitlab-ci.yml
+    when: on_success
+  - when: never
+
+.member_tiers_table_rules: &member_tiers_table_rules
+  rules:
+  - if: ($SERVICE_NAME != "Select Option") && ($SERVICE_NAME != $TIER_SERVICE_NAME)
+    when: never
+  - !reference [ .execute-pipeline-template, rules ]
+  - changes:
+    - infrastructure/tier/schemas/**/*
+    # - pipeline/tier.gitlab-ci.yml
+    when: on_success
+  - when: never
+
+.member_tiers_dataflow_rules: &member_tiers_dataflow_rules
+  rules:
+  - if: ($SERVICE_NAME != "Select Option") && ($SERVICE_NAME != $TIER_SERVICE_NAME)
+    when: never
+  - if: ($TRIGGER_MANUAL_DEPLOY == "1") && ($SERVICE_NAME == $TIER_SERVICE_NAME)
+    when: never
+  - !reference [ .execute-pipeline-template, rules ]
+  - changes:
+    - data-pipeline/processor/dataflow/scripts/member_tiers/member_tiers.py
+    - pipeline/tier.gitlab-ci.yml
+    when: on_success
+  - when: never
+
+# ============================================
+# SHARED SCRIPTS (like data-loyalty-tiers pattern)
+# ============================================
+.data-loyalty-tiers-gcp-prepare:
+  script:
+  - |
+    if [ "$WORKSPACE_ENV" = "prod" ]; then
+      # T1_PIPELINE_SA is a *file* containing base64(JSON)
+      base64 -d "$T1_PIPELINE_SA" > "$GOOGLE_APPLICATION_CREDENTIALS_PATH"
+    else
+      # T1_PIPELINE_NP_SA is a *file* containing base64(JSON)
+      base64 -d "$T1_PIPELINE_NP_SA" > "$GOOGLE_APPLICATION_CREDENTIALS_PATH"
+    fi
+  - export GOOGLE_APPLICATION_CREDENTIALS="$GOOGLE_APPLICATION_CREDENTIALS_PATH"
+  - gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+
+.data-loyalty-tiers-terraform-plan:
+  script:
+  - echo "terraform plan starting for data-pipeline"
+  - echo "RUN_PATH=$RUN_PATH"
+  # - cd $CI_PROJECT_DIR/$COMMON_RUN_PATH
+  # - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  # - pwd
+  # - ls -la
+  # - terraform init
+  # - terraform workspace select -or-create $WORKSPACE_ENV
+  # - terraform plan
+  - cd $CI_PROJECT_DIR/$RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - pwd
+  - ls -la
+  - terraform init
+  - terraform workspace select -or-create $WORKSPACE_ENV
+  - terraform plan
+  # - terraform apply -auto-approve
+  # after_script:
+  # - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+
+
+.data-loyalty-tiers-terraform-apply:
+  script:
+  - echo "terraform apply starting for data-pipeline"
+  - echo "COMMON_RUN_PATH=$COMMON_RUN_PATH"
+  - echo "RUN_PATH=$RUN_PATH"
+  # - cd $CI_PROJECT_DIR/$COMMON_RUN_PATH
+  # - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  # - pwd
+  # - ls -la
+  # - terraform init
+  # - terraform workspace select -or-create $WORKSPACE_ENV
+  # - terraform apply -auto-approve
+  - cd $CI_PROJECT_DIR/$RUN_PATH
+  - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  - terraform init
+  - terraform workspace select -or-create $WORKSPACE_ENV
+  - terraform apply -auto-approve
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  # .data-loyalty-tiers-dataflow-run:
+  #   script:
+  #   - cd $RUN_PATH
+  #   - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
+  #   - echo "terraform plan starting for data-pipeline"
+  #   - pwd
+  #   - terraform init
+  #   - terraform workspace select -or-create $WORKSPACE_ENV
+  #   - terraform apply -auto-approve
+  #   after_script:
+  #   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+
+data-loyalty-tiers:terraform:apply:nonprod:
+  stage: deploy-stg
+  tags:
+  - $RUNNER_TAG_NONPROD
+  variables:
+    WORKSPACE_ENV: stg
+    RUN_PATH: $TIERS_INFRASTRUCTURE_PATH
+    COMMON_RUN_PATH: $INFRASTRUCTURE_COMMON_PATH
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: "$CI_PROJECT_DIR/google-application-credentials.json"
+  script:
+  - !reference [ .data-loyalty-tiers-gcp-prepare, script ]
+  - !reference [ .data-loyalty-tiers-terraform-plan, script ]
+  - !reference [ .data-loyalty-tiers-terraform-apply, script ]
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  # needs:
+  # - data-loyalty-tiers:terraform:plan:nonprod
+
+  <<: *member_tiers_terraform_rules
+
+#data-loyalty-tiers:terraform:plan:prod:
+#  stage: deploy-prod
+#  tags:
+#  - $RUNNER_TAG_PROD
+#  variables:
+#    WORKSPACE_ENV: prod
+#    RUN_PATH: "infrastructure"
+#    GOOGLE_APPLICATION_CREDENTIALS_PATH: "$CI_PROJECT_DIR/google-application-credentials.json"
+#  script:
+#  - !reference [ .data-loyalty-tiers-gcp-prepare, script ]
+#  - !reference [ .data-loyalty-tiers-terraform-plan, script ]
+#  after_script:
+#  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+#  <<: *member_tiers_terraform_rules 
+#
+# ----------------------------------------------------------------------------------------------
+# data-loyalty-tiers:deploy:dataflow:nonprod:
+#   stage: deploy-stg
+#   tags:
+#   - $RUNNER_TAG_NONPROD
+#   # image: $PYTHON_IMAGE
+#   image: google/cloud-sdk:latest #google/cloud-sdk:alpine
+#   variables:
+#     WORKSPACE_ENV: stg
+#     RUN_PATH: $MEMBER_TIERS_DATAFLOW_PATH
+#     GCP_PROJECT_ID: $GCP_STG_PROJECT_ID
+#     COMMON_RUN_PATH: $COMMON_RUN_PATH
+#     # GOOGLE_APPLICATION_CREDENTIALS_PATH: "$T1_PIPELINE_NP_SA"
+#     GOOGLE_APPLICATION_CREDENTIALS_PATH: "$CI_PROJECT_DIR/google-application-credentials.json"
+#     # JOB_NAME: "beamapp-root-0106090345-634781-mwsqeqt0"
+#   script:
+#   - !reference [ .data-loyalty-tiers-gcp-prepare, script ]
+#   - cd $CI_PROJECT_DIR/$RUN_PATH
+#   - pip install uv
+#   - pip install --break-system-packages \ apache-beam[gcp]==2.60.0 \ pyarrow>=10.0.0 \ requests>=2.0.0 \ fastavro>=1.7.0 \ certifi>=2023.0.0 \ google-cloud-secret-manager>=2.0.0
+#   - pip install apache-beam[gcp]==2.60.0
+#   - pip install pyarrow>=10.0.0
+#   - pip install requests>=2.0.0
+#   - pip install fastavro>=1.7.0
+#   - pip install certifi>=2023.0.0
+#   - pip install google-cloud-secret-manager>=2.0.0
+#   - |
+#     EXISTING_JOB=$(gcloud dataflow jobs list --project "$GCP_PROJECT_ID" --region "$DATAFLOW_REGION" --filter="name=${JOB_NAME} AND state=Running" --format="value(id)" | head -n 1 || true)
+#     if [ -n "$EXISTING_JOB" ]; then
+#       echo "Stop Job ID: $EXISTING_JOB ..."
+#       gcloud dataflow jobs cancel "$EXISTING_JOB" \
+#         --project "$GCP_PROJECT_ID" \
+#         --region "$DATAFLOW_REGION"
+#     else
+#       echo "Not job running found"
+#     fi
+#   - ""
+#   # - |
+#   #   python3 member_tiers.py \
+#   #   --runner=DataflowRunner \
+#   #   --project the1-loyalty-data-stg \
+#   #   --region asia-southeast1 \
+#   #   --staging_location gs://the1-loyalty-data-stg-pipeline-audit-logs/staging \
+#   #   --temp_location gs://the1-loyalty-data-stg-pipeline-audit-logs/temp \
+#   #   --network "projects/the1-network-stg/global/networks/the1-vpc-net-share-stg" \
+#   #   --subnetwork "https://www.googleapis.com/compute/v1/projects/the1-network-stg/regions/$DATAFLOW_REGION/subnetworks/the1-subnet-dataflow-stg" \
+#   #   --secret_project the1-loyalty-data-stg \
+#   #   --secret_id loyalty-data-kafka-connect-members \
+#   #   --topic loyalty.members.upgraded \
+#   #   --num_workers 1 --max_num_workers 1 \
+#   #   --save_main_session
+#   - |
+#     python3 member_tiers.py \
+#     --runner=DataflowRunner \
+#     --project the1-loyalty-data-stg \
+#     --region asia-southeast1 \
+#     --staging_location gs://the1-loyalty-data-stg-pipeline-audit-logs/staging \
+#     --temp_location gs://the1-loyalty-data-stg-pipeline-audit-logs/temp \
+#     --service-account-email "t1-loy-data-stg-sa-iac@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+#     --network "projects/the1-network-stg/global/networks/the1-vpc-net-share-stg" \
+#     --subnetwork "https://www.googleapis.com/compute/v1/projects/the1-network-stg/regions/$DATAFLOW_REGION/subnetworks/the1-subnet-dataflow-stg" \
+#     --max-workers 2 \
+#     --additional-experiments=use_runner_v2 \
+#     --parameters secret_project=$GCP_PROJECT_ID \
+#     --parameters secret_id=loyalty-data-kafka-connect-members \
+#     --parameters topic_type=both \
+#     --parameters auto_offset_reset=latest \
+#     --save_main_session
+
+#   after_script:
+#   - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+#   <<: *member_tiers_dataflow_rules
+
+# ============================================
+# FLEX TEMPLATE - BUILD STAGE (NEW)
+# ============================================
+data-loyalty-tiers:build:image:nonprod:
+  stage: deploy-stg
+  image:
+    name: $CONTAINER_BUILD_IMAGE
+    entrypoint: [ "" ]
+  tags:
+  - $RUNNER_TAG_NONPROD
+  variables:
+    DEPLOYMENT_TAG: $CI_COMMIT_SHORT_SHA
+    GCP_PROJECT_ID: $GCP_STG_PROJECT_ID
+    GOOGLE_APPLICATION_CREDENTIALS: "/kaniko/.docker/gcloud-key.json"
+    MEMBER_TIERS_DOCKER_IMAGE_NAME: 'member-tiers-dataflow'
+  before_script:
+  - mkdir -p /kaniko/.docker
+  - base64 -d "$T1_PIPELINE_NP_SA" > /kaniko/.docker/gcloud-key.json
+  script:
+  - |
+    /kaniko/executor \
+      --context "$CI_PROJECT_DIR/$MEMBER_TIERS_DATAFLOW_PATH" \
+      --dockerfile "$CI_PROJECT_DIR/$MEMBER_TIERS_DATAFLOW_PATH/Dockerfile" \
+      --destination "$GAR_REPOSITORY_BASE_PATH/$GCP_PROJECT_ID/$MEMBER_TIERS_GAR_REPOSITORY_NAME/$MEMBER_TIERS_DOCKER_IMAGE_NAME:$DEPLOYMENT_TAG" \
+      --destination "$GAR_REPOSITORY_BASE_PATH/$GCP_PROJECT_ID/$MEMBER_TIERS_GAR_REPOSITORY_NAME/$MEMBER_TIERS_DOCKER_IMAGE_NAME:latest" \
+      --image-name-tag-with-digest-file /workspace/image-full.txt
+  - cat /workspace/image-full.txt
+  - cp /workspace/image-full.txt "$CI_PROJECT_DIR/image-full.txt"
+  artifacts:
+    paths:
+    - image-full.txt
+  <<: *member_tiers_dataflow_rules
+
+# data-loyalty-tiers:build:image:prod:
+#   stage: build
+#   image:
+#     name: $CONTAINER_BUILD_IMAGE
+#     entrypoint: [ "" ]
+#   tags:
+#   - $RUNNER_TAG_PROD
+#   variables:
+#     DEPLOYMENT_TAG: $CI_COMMIT_SHORT_SHA
+#     GCP_PROJECT_ID: $GCP_PRD_PROJECT_ID
+#     GOOGLE_APPLICATION_CREDENTIALS: "/kaniko/.docker/gcloud-key.json"
+#   before_script:
+#   - mkdir -p /kaniko/.docker
+#   - base64 -d "$T1_PIPELINE_SA" > /kaniko/.docker/gcloud-key.json
+#   script:
+#   - |
+#     /kaniko/executor \
+#       --context "$CI_PROJECT_DIR/$MEMBER_TIERS_DATAFLOW_PATH" \
+#       --dockerfile "$CI_PROJECT_DIR/$MEMBER_TIERS_DATAFLOW_PATH/Dockerfile" \
+#       --destination "$GAR_REPOSITORY_BASE_PATH/$GCP_PROJECT_ID/$MEMBER_TIERS_GAR_REPOSITORY_NAME/$MEMBER_TIERS_DOCKER_IMAGE_NAME:$DEPLOYMENT_TAG" \
+#       --destination "$GAR_REPOSITORY_BASE_PATH/$GCP_PROJECT_ID/$MEMBER_TIERS_GAR_REPOSITORY_NAME/$MEMBER_TIERS_DOCKER_IMAGE_NAME:latest" \
+#       --image-name-tag-with-digest-file /workspace/image-full.txt
+#   - cat /workspace/image-full.txt
+#   - cp /workspace/image-full.txt "$CI_PROJECT_DIR/image-full.txt"
+#   artifacts:
+#     paths:
+#     - image-full.txt
+#   <<: *member_tiers_dataflow_rules
+
+# ============================================
+# FLEX TEMPLATE - DEPLOY STAGE (NEW)
+# ============================================
+data-loyalty-tiers:deploy:dataflow:nonprod:
+  stage: deploy-stg
+  image: google/cloud-sdk:latest
+  tags:
+  - $RUNNER_TAG_NONPROD
+  variables:
+    WORKSPACE_ENV: stg
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: "$CI_PROJECT_DIR/google-application-credentials.json"
+    SPEC_TEMPLATE: "$CI_PROJECT_DIR/$MEMBER_TIERS_DATAFLOW_PATH/flex-template-spec-member-tiers.json"
+    #  the1-loyalty-data-stg-pipeline-scripts
+    GCP_PROJECT_ID: $GCP_STG_PROJECT_ID
+    MEMBER_TIERS_DOCKER_IMAGE_NAME: 'member-tiers-dataflow'
+    MEMBER_TIERS_SPEC_GCS_PATH: "gs://$GCP_STG_PROJECT_ID-pipeline-scripts/templates/$MEMBER_TIERS_DOCKER_IMAGE_NAME/flex-template-spec-member-tiers.json"
+  before_script:
+  - !reference [ .data-loyalty-tiers-gcp-prepare, script ]
+  script:
+  - set -euo pipefail
+
+  # Get image path from artifact
+  - test -f image-full.txt
+  - IMAGE_FULL=$(head -n 1 image-full.txt)
+  - echo "Image $IMAGE_FULL"
+
+  # Render and upload template spec
+  - sed "s|\${IMAGE_FULL}|$IMAGE_FULL|g" "$SPEC_TEMPLATE" > /tmp/spec.json
+  - gsutil cp /tmp/spec.json "$MEMBER_TIERS_SPEC_GCS_PATH"
+  - echo "Template uploaded to $MEMBER_TIERS_SPEC_GCS_PATH"
+
+  # Check for existing running job
+  - JOB_NAME="$MEMBER_TIERS_DATAFLOW_JOB_NAME"
+  - ""
+  - EXISTING_JOB=$(gcloud dataflow jobs list --project "$GCP_PROJECT_ID" --region "$DATAFLOW_REGION" --filter="name=${JOB_NAME} AND state=Running" --format="value(id)" | head -n 1 || true)
+  - UPDATE_FLAG=""
+  # - |
+  #   if [ -n "$EXISTING_JOB" ]; then
+  #     echo "Found existing job $EXISTING_JOB - will update"
+  #     UPDATE_FLAG="--update"
+  #   else
+  #     echo "No existing job found - will create new"
+  #   fi
+  - |
+    if [ -n "$EXISTING_JOB" ]; then
+      echo "Stop Job ID: $EXISTING_JOB ..."
+      gcloud dataflow jobs cancel "$EXISTING_JOB" \
+        --project "$GCP_PROJECT_ID" \
+        --region "$DATAFLOW_REGION"
+    else
+      echo "Not job running found"
+    fi
+  # --service-account-email "t1-loy-data-stg-sa-iac@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+  # Deploy Flex Template
+  - |
+    gcloud dataflow flex-template run "$JOB_NAME" \
+      --project "$GCP_PROJECT_ID" \
+      --region "$DATAFLOW_REGION" \
+      --template-file-gcs-location "$MEMBER_TIERS_SPEC_GCS_PATH" \
+      --service-account-email "t1-loy-data-stg-sa-iac@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+      --network "projects/the1-network-stg/global/networks/the1-vpc-net-share-stg" \
+      --subnetwork "https://www.googleapis.com/compute/v1/projects/the1-network-stg/regions/$DATAFLOW_REGION/subnetworks/the1-subnet-dataflow-stg" \
+      --max-workers 2 \
+      --additional-experiments=use_runner_v2 \
+      $UPDATE_FLAG \
+      --parameters secret_project=$GCP_PROJECT_ID \
+      --parameters secret_id=loyalty-data-purchases-collector \
+      --parameters topic_type=both \
+      --parameters writer_mode=beam_iceberg \
+      --parameters auto_offset_reset=latest
+
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  needs:
+  # - data-loyalty-tiers:deploy:dataflow:nonprod
+  - data-loyalty-tiers:build:image:nonprod
+  <<: *member_tiers_dataflow_rules
+
+# ============================================
+# FLEX TEMPLATE - DEPLOY STAGE (NEW) FOR NONPROD
+# ===========================================
+
+# data-loyalty-tiers:deploy:dataflow:nonprod:
+#   stage: deploy-stg
+#   image: google/cloud-sdk:latest
+#   tags:
+#   - $RUNNER_TAG_STG
+#   variables:
+#     WORKSPACE_ENV: stg
+#     GCP_PROJECT_ID: $GCP_STG_PROJECT_ID
+#     GOOGLE_APPLICATION_CREDENTIALS_PATH: "$CI_PROJECT_DIR/google-application-credentials.json"
+#     STAGE: "$STG_ENV"
+#     CONTAINER_SPEC_TEMPLATE: "$CI_PROJECT_DIR/infrastructure/tier/templates/container_spec.json"
+#     RENDERED_SPEC: "$CI_PROJECT_DIR/container_spec.rendered.json"
+#     SPEC_GCS_PATH: "gs://$DOMAIN_NAME-$STG_ENV-pipeline-scripts/templates/container_spec.json"
+#     DATAFLOW_REGION: "asia-southeast1"
+#   before_script:
+#   - !reference [ .data-loyalty-tiers-gcp-prepare, script ]
+#   script:
+#   - "set -euo pipefail"
+#   - |
+#     "$CI_PROJECT_DIR/scripts/prepare_dataflow_spec.sh" \
+#     "image-full.txt" \
+#     "$CONTAINER_SPEC_TEMPLATE" \
+#     "$RENDERED_SPEC" \
+#     "$SPEC_GCS_PATH"
+#   - |
+#     "$CI_PROJECT_DIR/scripts/deploy_dataflow.sh" \
+#     "$GCP_PROJECT_ID" \
+#     "$DATAFLOW_REGION" \
+#     "$DATAFLOW_JOB_NAME" \
+#     "$SPEC_GCS_PATH" \
+#     "t1-loy-data-$STG_ENV-sa-iac@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+#     "projects/the1-network-$STG_ENV/global/networks/the1-vpc-net-share-$STG_ENV" \
+#     "https://www.googleapis.com/compute/v1/projects/the1-network-$STG_ENV/regions/$DATAFLOW_REGION/subnetworks/the1-subnet-dataflow-$STG_ENV"
+#   needs:
+#   - data-loyalty-tiers:build:image:nonprod
+#   # - job: data-loyalty-tiers:create-image:stg
+#   #   artifacts: true
+#   # - job: data-loyalty-tiers:terraform:apply:stg
+#   #   optional: true
+#   <<: *member_tiers_dataflow_rules
+
+
+
+# ============================================
+# PART 2A: DEPLOY TABLE
+# ============================================
+data-loyalty-tiers:deploy-tables:nonprod:
+  stage: deploy-stg
+  tags:
+  - $RUNNER_TAG_NONPROD
+  image: google/cloud-sdk:latest
+  variables:
+    WORKSPACE_ENV: stg
+    PROJECT_ID: $GCP_STG_PROJECT_ID
+    DATASET_ID: data_raw
+    GOOGLE_APPLICATION_CREDENTIALS_PATH: "$CI_PROJECT_DIR/google-application-credentials.json"
+  script:
+  - !reference [ .data-loyalty-tiers-gcp-prepare, script ]
+  - cd $TIERS_INFRASTRUCTURE_PATH/
+  # - python3 schemas/deploy.py $PROJECT_ID $DATASET_ID $WORKSPACE_ENV
+  after_script:
+  - rm -f $GOOGLE_APPLICATION_CREDENTIALS_PATH
+  # needs:
+  # - ms-personas:terraform:apply:nonprod # ต้องรอ connection สร้างก่อน
+  when: manual
+  <<: *member_tiers_table_rules
