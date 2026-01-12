@@ -1439,7 +1439,7 @@ class AddWindowKeyDoFn(DoFn):
 #         )
 
 # =============================================================================
-# COMPOSITE TRANSFORMS
+# COMPOSITE TRANSFORMS 
 # =============================================================================
 
 class WriteToIcebergPyIceberg(PTransform):
