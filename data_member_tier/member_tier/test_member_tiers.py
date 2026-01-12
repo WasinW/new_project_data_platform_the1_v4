@@ -11,7 +11,7 @@ import json
 import os
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from unittest.mock import MagicMock, patch, Mock
 
@@ -297,7 +297,7 @@ class TestTransformDoFns(unittest.TestCase):
             "eventName": "loyalty.members.upgraded",
             "timestamp": "2024-03-15T00:00:00.000Z",
             "_topic": "loyalty.members.upgraded",
-            "_ingested_at": datetime.now(timezone.utc),
+            "_ingested_at": datetime.now(mt.TZ_BANGKOK),
             "payload": {
                 "accountId": "acc-456",
                 "memberId": "mem-789",
@@ -331,7 +331,7 @@ class TestTransformDoFns(unittest.TestCase):
             "eventName": "loyalty.members.downgraded",
             "timestamp": "2024-03-15T00:00:00.000Z",
             "_topic": "loyalty.members.downgraded",
-            "_ingested_at": datetime.now(timezone.utc),
+            "_ingested_at": datetime.now(mt.TZ_BANGKOK),
             "payload": {
                 "accountId": "acc-789",
                 "memberId": "mem-012",
@@ -419,6 +419,439 @@ class TestDefaultSecretName(unittest.TestCase):
             mt.DEFAULT_CONFLUENT_SECRET_NAME,
             mt.DEFAULT_KAFKA_SECRET_NAME
         )
+
+
+class TestLogging(unittest.TestCase):
+    """Test that logging works correctly for Cloud Logging."""
+
+    def test_dofn_logger_outputs_to_standard_logging(self):
+        """Test that DoFn loggers use standard Python logging (required for Cloud Logging)."""
+        import logging
+        from io import StringIO
+
+        # Create a string handler to capture log output
+        log_capture = StringIO()
+        handler = logging.StreamHandler(log_capture)
+        handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+
+        # Get the logger that DoFn uses
+        logger = logging.getLogger("member_tiers.DecodeKafkaValueDoFn")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+
+        # Create DoFn and setup
+        dofn = mt.DecodeKafkaValueDoFn(topic_name="test.topic", debug_mode=True)
+        dofn.setup()
+
+        # Log something
+        dofn._logger.info("Test log message from DoFn")
+
+        # Verify log was captured
+        log_output = log_capture.getvalue()
+        self.assertIn("member_tiers.DecodeKafkaValueDoFn", log_output)
+        self.assertIn("Test log message from DoFn", log_output)
+
+        # Cleanup
+        logger.removeHandler(handler)
+
+    def test_all_dofn_loggers_use_member_tiers_prefix(self):
+        """Test that all DoFn loggers use 'member_tiers.' prefix for Cloud Logging filtering."""
+        dofns_to_test = [
+            mt.DecodeKafkaValueDoFn(topic_name="test", debug_mode=False),
+            mt.ToUpgradedDictDoFn(),
+            mt.ToDowngradedDictDoFn(),
+            mt.ToMemberTierDictDoFn(),
+            mt.ToUpgradedRowDoFn(),
+            mt.ToDowngradedRowDoFn(),
+            mt.ToMemberTierRawRowDoFn(),
+            mt.AddWindowKeyDoFn(),
+            mt.CallMemberTierInfoAPIDoFn(api_secret_project="p", api_secret_id="s"),
+        ]
+
+        for dofn in dofns_to_test:
+            dofn.setup()
+            logger_name = dofn._logger.name
+            self.assertTrue(
+                logger_name.startswith("member_tiers."),
+                f"{dofn.__class__.__name__} logger name '{logger_name}' should start with 'member_tiers.'"
+            )
+
+    def test_logger_levels_work(self):
+        """Test that different log levels work (INFO, WARNING, ERROR)."""
+        import logging
+        from io import StringIO
+
+        log_capture = StringIO()
+        handler = logging.StreamHandler(log_capture)
+        handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+
+        logger = logging.getLogger("member_tiers.TestLogger")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        # Log at different levels
+        logger.debug("Debug message")
+        logger.info("Info message")
+        logger.warning("Warning message")
+        logger.error("Error message")
+
+        log_output = log_capture.getvalue()
+
+        self.assertIn("DEBUG - Debug message", log_output)
+        self.assertIn("INFO - Info message", log_output)
+        self.assertIn("WARNING - Warning message", log_output)
+        self.assertIn("ERROR - Error message", log_output)
+
+        logger.removeHandler(handler)
+
+
+class TestTimezone(unittest.TestCase):
+    """Test that timezone is correctly set to Asia/Bangkok."""
+
+    def test_tz_bangkok_is_utc_plus_7(self):
+        """Test that TZ_BANGKOK is UTC+7."""
+        from datetime import timedelta
+        self.assertEqual(mt.TZ_BANGKOK.utcoffset(None), timedelta(hours=7))
+
+    def test_datetime_uses_bangkok_timezone(self):
+        """Test that datetime.now uses Bangkok timezone."""
+        now = datetime.now(mt.TZ_BANGKOK)
+        self.assertEqual(now.tzinfo, mt.TZ_BANGKOK)
+
+        # Verify offset is +07:00
+        offset = now.strftime("%z")
+        self.assertEqual(offset, "+0700")
+
+    def test_pyarrow_schema_uses_bangkok_timezone(self):
+        """Test that PyArrow schemas use Asia/Bangkok timezone."""
+        # Check SCHEMA_UPGRADED_RAW
+        timestamp_field = mt.SCHEMA_UPGRADED_RAW.field("timestamp")
+        self.assertEqual(str(timestamp_field.type.tz), "Asia/Bangkok")
+
+        # Check SCHEMA_DOWNGRADED_RAW
+        timestamp_field = mt.SCHEMA_DOWNGRADED_RAW.field("timestamp")
+        self.assertEqual(str(timestamp_field.type.tz), "Asia/Bangkok")
+
+
+class TestE2EFlow(unittest.TestCase):
+    """End-to-end test: Kafka message -> Decode -> Transform -> Output."""
+
+    def test_e2e_upgraded_message_flow(self):
+        """
+        Test full flow with real payload structure from loyalty.members.upgraded.
+
+        Payload example from spec:
+        {
+          "eventId": "a8debc92-50d2-4f7b-8c89-27b6e810a701",
+          "source": "loyalty.members",
+          "eventName": "loyalty.members.upgraded",
+          "timestamp": 1691060098,
+          "payload": {
+            "accountId": "69f6a344-1321-4cbb-87e5-991c96593931",
+            "memberId": "1-981785546",
+            "tierEventId": "69f6a344-1321-4cbb-87e5-991c965009009",
+            "tierCode": "T1X",
+            "isExistingTier": true,
+            "triggerType": "SPENDING",
+            "processedAt": "2024-03-15T00:00:00.000Z"
+          }
+        }
+        """
+        # Avro schema matching the spec
+        avro_schema = {
+            "type": "record",
+            "name": "MemberUpgraded",
+            "fields": [
+                {"name": "eventId", "type": "string"},
+                {"name": "source", "type": "string"},
+                {"name": "eventName", "type": "string"},
+                {"name": "timestamp", "type": "long"},
+                {"name": "payload", "type": {
+                    "type": "record",
+                    "name": "Payload",
+                    "fields": [
+                        {"name": "accountId", "type": "string"},
+                        {"name": "memberId", "type": "string"},
+                        {"name": "tierEventId", "type": "string"},
+                        {"name": "tierCode", "type": "string"},
+                        {"name": "isExistingTier", "type": "boolean"},
+                        {"name": "triggerType", "type": "string"},
+                        {"name": "processedAt", "type": "string"}
+                    ]
+                }}
+            ]
+        }
+
+        # Test data matching the spec example
+        test_message = {
+            "eventId": "a8debc92-50d2-4f7b-8c89-27b6e810a701",
+            "source": "loyalty.members",
+            "eventName": "loyalty.members.upgraded",
+            "timestamp": 1691060098,
+            "payload": {
+                "accountId": "69f6a344-1321-4cbb-87e5-991c96593931",
+                "memberId": "1-981785546",
+                "tierEventId": "69f6a344-1321-4cbb-87e5-991c965009009",
+                "tierCode": "T1X",
+                "isExistingTier": True,
+                "triggerType": "SPENDING",
+                "processedAt": "2024-03-15T00:00:00.000Z"
+            }
+        }
+
+        # =========================================
+        # Step 1: Create Avro wire format message
+        # =========================================
+        schema_id = 12345
+        mt._SCHEMA_CACHE[schema_id] = avro_schema
+        original_use_sr = mt.USE_SCHEMA_REGISTRY
+        original_format = mt.PAYLOAD_FORMAT
+        mt.USE_SCHEMA_REGISTRY = False  # Use cache
+        mt.PAYLOAD_FORMAT = "avro"
+
+        try:
+            from fastavro import schemaless_writer
+            buffer = BytesIO()
+            schemaless_writer(buffer, avro_schema, test_message)
+            avro_bytes = buffer.getvalue()
+
+            # Confluent wire format: 0x00 + 4-byte schema ID + avro data
+            kafka_message = bytes([0]) + schema_id.to_bytes(4, "big") + avro_bytes
+
+            # =========================================
+            # Step 2: DecodeKafkaValueDoFn
+            # =========================================
+            decode_dofn = mt.DecodeKafkaValueDoFn(
+                topic_name="loyalty.members.upgraded",
+                debug_mode=True
+            )
+            decode_dofn.setup()
+            decode_dofn.start_bundle()
+
+            decoded_results = list(decode_dofn.process(kafka_message))
+
+            self.assertEqual(len(decoded_results), 1, "DecodeKafkaValueDoFn should yield 1 element")
+            decoded = decoded_results[0]
+
+            # Verify decoded message
+            self.assertEqual(decoded["eventId"], "a8debc92-50d2-4f7b-8c89-27b6e810a701")
+            self.assertEqual(decoded["source"], "loyalty.members")
+            self.assertEqual(decoded["eventName"], "loyalty.members.upgraded")
+            self.assertEqual(decoded["timestamp"], 1691060098)
+            self.assertEqual(decoded["_topic"], "loyalty.members.upgraded")
+            self.assertIn("_ingested_at", decoded)
+            self.assertIsInstance(decoded["payload"], dict)
+            self.assertEqual(decoded["payload"]["memberId"], "1-981785546")
+            self.assertEqual(decoded["payload"]["tierCode"], "T1X")
+            self.assertEqual(decoded["payload"]["isExistingTier"], True)
+
+            print(f"✓ Step 2 (DecodeKafkaValueDoFn): decoded message with eventId={decoded['eventId']}")
+
+            # =========================================
+            # Step 3: ToUpgradedDictDoFn
+            # =========================================
+            transform_dofn = mt.ToUpgradedDictDoFn()
+            transform_dofn.setup()
+
+            transform_results = list(transform_dofn.process(decoded))
+
+            self.assertEqual(len(transform_results), 1, "ToUpgradedDictDoFn should yield 1 element")
+            transformed = transform_results[0]
+
+            # Verify transformed output matches expected schema
+            self.assertEqual(transformed["eventId"], "a8debc92-50d2-4f7b-8c89-27b6e810a701")
+            self.assertEqual(transformed["source"], "loyalty.members")
+            self.assertEqual(transformed["eventName"], "loyalty.members.upgraded")
+            self.assertEqual(transformed["accountId"], "69f6a344-1321-4cbb-87e5-991c96593931")
+            self.assertEqual(transformed["memberId"], "1-981785546")
+            self.assertEqual(transformed["tierEventId"], "69f6a344-1321-4cbb-87e5-991c965009009")
+            self.assertEqual(transformed["tierCode"], "T1X")
+            self.assertEqual(transformed["isExistingTier"], True)
+            self.assertEqual(transformed["triggerType"], "SPENDING")
+            self.assertEqual(transformed["processedAt"], "2024-03-15T00:00:00.000Z")
+            self.assertEqual(transformed["source_topic"], "loyalty.members.upgraded")
+            self.assertIn("ingested_at", transformed)
+
+            print(f"✓ Step 3 (ToUpgradedDictDoFn): transformed to dict with memberId={transformed['memberId']}")
+
+            # =========================================
+            # Step 4: Verify PyArrow schema compatibility
+            # =========================================
+            import pyarrow as pa
+
+            # Create PyArrow table from transformed data
+            try:
+                table = pa.Table.from_pylist([transformed], schema=mt.SCHEMA_UPGRADED_RAW)
+                self.assertEqual(table.num_rows, 1)
+                print(f"✓ Step 4 (PyArrow): created table with {table.num_rows} row(s)")
+            except Exception as e:
+                self.fail(f"Failed to create PyArrow table: {e}")
+
+            print("\n✅ E2E Flow PASSED: Kafka Avro -> Decode -> Transform -> PyArrow")
+
+        finally:
+            mt.USE_SCHEMA_REGISTRY = original_use_sr
+            mt.PAYLOAD_FORMAT = original_format
+            mt._SCHEMA_CACHE.clear()
+
+    def test_e2e_downgraded_message_flow(self):
+        """Test full flow for loyalty.members.downgraded."""
+        avro_schema = {
+            "type": "record",
+            "name": "MemberDowngraded",
+            "fields": [
+                {"name": "eventId", "type": "string"},
+                {"name": "source", "type": "string"},
+                {"name": "eventName", "type": "string"},
+                {"name": "timestamp", "type": "long"},
+                {"name": "payload", "type": {
+                    "type": "record",
+                    "name": "Payload",
+                    "fields": [
+                        {"name": "accountId", "type": "string"},
+                        {"name": "memberId", "type": "string"},
+                        {"name": "tierEventId", "type": "string"},
+                        {"name": "tierCode", "type": "string"},
+                        {"name": "triggerType", "type": "string"},
+                        {"name": "processedAt", "type": "string"}
+                    ]
+                }}
+            ]
+        }
+
+        test_message = {
+            "eventId": "downgrade-event-001",
+            "source": "loyalty.members",
+            "eventName": "loyalty.members.downgraded",
+            "timestamp": 1691060099,
+            "payload": {
+                "accountId": "acc-downgrade-001",
+                "memberId": "mem-downgrade-001",
+                "tierEventId": "tier-downgrade-001",
+                "tierCode": "SILVER",
+                "triggerType": "EXPIRY",
+                "processedAt": "2024-03-16T00:00:00.000Z"
+            }
+        }
+
+        schema_id = 12346
+        mt._SCHEMA_CACHE[schema_id] = avro_schema
+        original_use_sr = mt.USE_SCHEMA_REGISTRY
+        original_format = mt.PAYLOAD_FORMAT
+        mt.USE_SCHEMA_REGISTRY = False
+        mt.PAYLOAD_FORMAT = "avro"
+
+        try:
+            from fastavro import schemaless_writer
+            buffer = BytesIO()
+            schemaless_writer(buffer, avro_schema, test_message)
+            avro_bytes = buffer.getvalue()
+            kafka_message = bytes([0]) + schema_id.to_bytes(4, "big") + avro_bytes
+
+            # Step 1: Decode
+            decode_dofn = mt.DecodeKafkaValueDoFn(
+                topic_name="loyalty.members.downgraded",
+                debug_mode=True
+            )
+            decode_dofn.setup()
+            decode_dofn.start_bundle()
+            decoded_results = list(decode_dofn.process(kafka_message))
+            self.assertEqual(len(decoded_results), 1)
+            decoded = decoded_results[0]
+
+            # Step 2: Transform
+            transform_dofn = mt.ToDowngradedDictDoFn()
+            transform_dofn.setup()
+            transform_results = list(transform_dofn.process(decoded))
+            self.assertEqual(len(transform_results), 1)
+            transformed = transform_results[0]
+
+            # Verify
+            self.assertEqual(transformed["memberId"], "mem-downgrade-001")
+            self.assertEqual(transformed["tierCode"], "SILVER")
+            self.assertEqual(transformed["triggerType"], "EXPIRY")
+
+            # Step 3: PyArrow
+            import pyarrow as pa
+            table = pa.Table.from_pylist([transformed], schema=mt.SCHEMA_DOWNGRADED_RAW)
+            self.assertEqual(table.num_rows, 1)
+
+            print("✅ E2E Downgraded Flow PASSED")
+
+        finally:
+            mt.USE_SCHEMA_REGISTRY = original_use_sr
+            mt.PAYLOAD_FORMAT = original_format
+            mt._SCHEMA_CACHE.clear()
+
+
+class TestAvroSchemaFromSpec(unittest.TestCase):
+    """Test Avro decoding with exact schema from spec."""
+
+    def test_decode_exact_spec_payload(self):
+        """Test decoding the exact payload from the API spec."""
+        # This is the EXACT schema structure from the spec
+        avro_schema = {
+            "type": "record",
+            "name": "MemberUpgraded",
+            "namespace": "loyalty.members",
+            "fields": [
+                {"name": "eventId", "type": "string"},
+                {"name": "source", "type": "string"},
+                {"name": "eventName", "type": "string"},
+                {"name": "timestamp", "type": "long"},
+                {"name": "payload", "type": {
+                    "type": "record",
+                    "name": "UpgradedPayload",
+                    "fields": [
+                        {"name": "accountId", "type": "string"},
+                        {"name": "memberId", "type": "string"},
+                        {"name": "tierEventId", "type": "string"},
+                        {"name": "tierCode", "type": "string"},
+                        {"name": "isExistingTier", "type": "boolean"},
+                        {"name": "triggerType", "type": "string"},
+                        {"name": "processedAt", "type": "string"}
+                    ]
+                }}
+            ]
+        }
+
+        # Exact payload from spec
+        spec_payload = {
+            "eventId": "a8debc92-50d2-4f7b-8c89-27b6e810a701",
+            "source": "loyalty.members",
+            "eventName": "loyalty.members.upgraded",
+            "timestamp": 1691060098,
+            "payload": {
+                "accountId": "69f6a344-1321-4cbb-87e5-991c96593931",
+                "memberId": "1-981785546",
+                "tierEventId": "69f6a344-1321-4cbb-87e5-991c965009009",
+                "tierCode": "T1X",
+                "isExistingTier": True,
+                "triggerType": "SPENDING",
+                "processedAt": "2024-03-15T00:00:00.000Z"
+            }
+        }
+
+        # Encode to Avro
+        from fastavro import schemaless_writer, schemaless_reader
+        buffer = BytesIO()
+        schemaless_writer(buffer, avro_schema, spec_payload)
+        avro_bytes = buffer.getvalue()
+
+        # Verify we can decode it back
+        buffer.seek(0)
+        decoded = schemaless_reader(buffer, avro_schema)
+
+        self.assertEqual(decoded["eventId"], spec_payload["eventId"])
+        self.assertEqual(decoded["payload"]["memberId"], spec_payload["payload"]["memberId"])
+        self.assertEqual(decoded["payload"]["tierCode"], spec_payload["payload"]["tierCode"])
+        self.assertEqual(decoded["payload"]["isExistingTier"], True)
+
+        print("✅ Avro schema from spec is valid and can encode/decode correctly")
 
 
 if __name__ == "__main__":

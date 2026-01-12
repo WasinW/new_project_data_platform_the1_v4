@@ -31,8 +31,11 @@ import socket
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from io import BytesIO
+
+# Thailand timezone (UTC+7)
+TZ_BANGKOK = timezone(timedelta(hours=7))
 from typing import Any, Dict, Iterator, List, Optional, Tuple, NamedTuple
 
 import apache_beam as beam
@@ -203,7 +206,7 @@ SCHEMA_UPGRADED_RAW = pa.schema([
     pa.field("eventId", pa.string()),
     pa.field("source", pa.string()),
     pa.field("eventName", pa.string()),
-    pa.field("timestamp", pa.string()),
+    pa.field("timestamp", pa.timestamp("us", tz="Asia/Bangkok")),
     pa.field("accountId", pa.string()),
     pa.field("memberId", pa.string()),
     pa.field("tierEventId", pa.string()),
@@ -212,7 +215,7 @@ SCHEMA_UPGRADED_RAW = pa.schema([
     pa.field("triggerType", pa.string()),
     pa.field("processedAt", pa.string()),
     # Pipeline metadata
-    pa.field("ingested_at", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingested_at", pa.timestamp("us", tz="Asia/Bangkok"), nullable=False),
     pa.field("source_topic", pa.string(), nullable=False),
 ])
 
@@ -221,7 +224,7 @@ SCHEMA_DOWNGRADED_RAW = pa.schema([
     pa.field("eventId", pa.string()),
     pa.field("source", pa.string()),
     pa.field("eventName", pa.string()),
-    pa.field("timestamp", pa.timestamp("us", tz="UTC")),
+    pa.field("timestamp", pa.timestamp("us", tz="Asia/Bangkok")),
     pa.field("accountId", pa.string()),
     pa.field("memberId", pa.string()),
     pa.field("tierEventId", pa.string()),
@@ -229,7 +232,7 @@ SCHEMA_DOWNGRADED_RAW = pa.schema([
     pa.field("triggerType", pa.string()),
     pa.field("processedAt", pa.string()),
     # Pipeline metadata
-    pa.field("ingested_at", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingested_at", pa.timestamp("us", tz="Asia/Bangkok"), nullable=False),
     pa.field("source_topic", pa.string(), nullable=False),
 ])
 
@@ -245,7 +248,7 @@ SCHEMA_MEMBER_TIER_RAW = pa.schema([
     pa.field("name", pa.string()),
     pa.field("level_name", pa.string()),
     # Pipeline metadata
-    pa.field("ingested_at", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingested_at", pa.timestamp("us", tz="Asia/Bangkok"), nullable=False),
     pa.field("source_event_id", pa.string()),
     pa.field("source_topic", pa.string()),
 ])
@@ -625,7 +628,7 @@ def parse_timestamp(ts_str: Any) -> Optional[datetime]:
         ts = str(ts_str).replace('Z', '+00:00')
         return datetime.fromisoformat(ts)
     except Exception:
-        return datetime.now(timezone.utc)
+        return datetime.now(TZ_BANGKOK)
 
 
 # =============================================================================
@@ -770,7 +773,7 @@ class DecodeKafkaValueDoFn(DoFn):
 
     # def process(self, element) -> Iterator[Dict[str, Any]]:
     #     self._message_count += 1
-    #     timestamp = datetime.now(timezone.utc)
+    #     timestamp = datetime.now(TZ_BANGKOK)
     #     self._logger.info(f"[{self.topic_name}] DecodeKafkaValueDoFn received element type: {type(element)}")
     #     self._logger.info(f"[{self.topic_name}] Decoding message #{self._message_count} , element={element}")
     #     try:
@@ -816,7 +819,7 @@ class DecodeKafkaValueDoFn(DoFn):
         self._seen.inc()
         self._bundle_count += 1
         self._message_count += 1
-        timestamp = datetime.now(timezone.utc)
+        timestamp = datetime.now(TZ_BANGKOK)
 
         # Track payload size
         payload_len = len(element) if isinstance(element, (bytes, bytearray, str)) else 0
@@ -974,7 +977,7 @@ class ToUpgradedRowDoFn(DoFn):
                 isExistingTier=bool(payload.get("isExistingTier")) if payload.get("isExistingTier") is not None else None,
                 triggerType=payload.get("triggerType"),
                 processedAt=payload.get("processedAt"),
-                ingested_at=element.get("_ingested_at", datetime.now(timezone.utc)),
+                ingested_at=element.get("_ingested_at", datetime.now(TZ_BANGKOK)),
                 source_topic=element.get("_topic", "upgraded"),
             )
         except Exception as e:
@@ -1004,7 +1007,7 @@ class ToDowngradedRowDoFn(DoFn):
                 tierCode=payload.get("tierCode"),
                 triggerType=payload.get("triggerType"),
                 processedAt=payload.get("processedAt"),
-                ingested_at=element.get("_ingested_at", datetime.now(timezone.utc)),
+                ingested_at=element.get("_ingested_at", datetime.now(TZ_BANGKOK)),
                 source_topic=element.get("_topic", "downgraded"),
             )
         except Exception as e:
@@ -1034,7 +1037,7 @@ class ToMemberTierRawRowDoFn(DoFn):
                 expiry_date=member.get("expiryDate"),
                 name=member.get("name"),
                 level_name=member.get("levelName"),
-                ingested_at=element.get("_ingested_at", datetime.now(timezone.utc)),
+                ingested_at=element.get("_ingested_at", datetime.now(TZ_BANGKOK)),
                 source_event_id=element.get("_source_event_id"),
                 source_topic=element.get("_source_topic"),
             )
@@ -1070,7 +1073,7 @@ class ToUpgradedDictDoFn(DoFn):
                 "isExistingTier": bool(payload.get("isExistingTier")) if payload.get("isExistingTier") is not None else None,
                 "triggerType": payload.get("triggerType"),
                 "processedAt": payload.get("processedAt"),
-                "ingested_at": element.get("_ingested_at", datetime.now(timezone.utc)),
+                "ingested_at": element.get("_ingested_at", datetime.now(TZ_BANGKOK)),
                 "source_topic": element.get("_topic", "upgraded"),
             }
         except Exception as e:
@@ -1100,7 +1103,7 @@ class ToDowngradedDictDoFn(DoFn):
                 "tierCode": payload.get("tierCode"),
                 "triggerType": payload.get("triggerType"),
                 "processedAt": payload.get("processedAt"),
-                "ingested_at": element.get("_ingested_at", datetime.now(timezone.utc)),
+                "ingested_at": element.get("_ingested_at", datetime.now(TZ_BANGKOK)),
                 "source_topic": element.get("_topic", "downgraded"),
             }
         except Exception as e:
@@ -1130,7 +1133,7 @@ class ToMemberTierDictDoFn(DoFn):
                 "expiry_date": member.get("expiryDate"),
                 "name": member.get("name"),
                 "level_name": member.get("levelName"),
-                "ingested_at": element.get("_ingested_at", datetime.now(timezone.utc)),
+                "ingested_at": element.get("_ingested_at", datetime.now(TZ_BANGKOK)),
                 "source_event_id": element.get("_source_event_id"),
                 "source_topic": element.get("_source_topic"),
             }
@@ -1230,7 +1233,7 @@ class CallMemberTierInfoAPIDoFn(DoFn):
 #             self._logger.info(f"WriteParquetToGCSDoFn: No records to write for {self.table_name}")
 #             return
         
-#         now = datetime.now(timezone.utc)
+#         now = datetime.now(TZ_BANGKOK)
 #         partition_path = f"year={now.year}/month={now.month:02d}/day={now.day:02d}"
 #         file_name = f"{self.table_name}_{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
 #         full_path = f"{self.output_path}/{self.table_name}/{partition_path}/{file_name}"
