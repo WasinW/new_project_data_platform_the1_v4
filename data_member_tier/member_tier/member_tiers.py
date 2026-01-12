@@ -511,29 +511,9 @@ def get_schema_from_registry(schema_id: int):
 
 
 def decode_confluent_avro(b: bytes):
-    """Decode Confluent wire format Avro message.
-
-    Wire format: magic byte (0x00) + 4-byte schema ID + avro data
-
-    Returns dict on success, None on failure (with logging for debugging).
-    """
     if not b or len(b) < 5:
-        LOGGER.warning(
-            "Avro decode: payload too short (len=%d, need >=5 bytes). First bytes: %s",
-            len(b) if b else 0,
-            b[:20].hex() if b else "empty"
-        )
         return None
-
-    # Log first bytes for debugging wire format
-    LOGGER.debug("Avro decode: len=%d, first 10 bytes: %s", len(b), b[:10].hex())
-
     if b[0] != 0:
-        # Not Confluent wire format - try schemaless decode as fallback
-        LOGGER.warning(
-            "Avro decode: magic byte is %d (expected 0). Trying schemaless decode. First bytes: %s",
-            b[0], b[:20].hex()
-        )
         try:
             forced_id = os.getenv("CONFLUENT_SCHEMA_ID")
             schema = None
@@ -541,48 +521,24 @@ def decode_confluent_avro(b: bytes):
                 fid = int(forced_id)
                 schema = _SCHEMA_CACHE.get(fid) or (get_schema_from_registry(fid) if USE_SCHEMA_REGISTRY else None)
                 if schema:
-                    LOGGER.info("Using forced schema ID %d for non-wire-format message", fid)
                     return schemaless_reader(BytesIO(b), schema)
-            cached_schema = _SCHEMA_CACHE.get(0)
-            if cached_schema:
-                return schemaless_reader(BytesIO(b), cached_schema)
-            LOGGER.warning("No schema available for schemaless decode (magic byte != 0)")
+            return schemaless_reader(BytesIO(b), _SCHEMA_CACHE.get(0))
+        except Exception:  # pragma: no cover - defensive
             return None
-        except Exception as e:
-            LOGGER.warning("Schemaless decode failed: %s", e)
-            return None
-
     schema_id = int.from_bytes(b[1:5], "big")
-    LOGGER.debug("Avro decode: schema_id=%d extracted from wire format", schema_id)
-
     schema = (
         get_schema_from_registry(schema_id)
         if USE_SCHEMA_REGISTRY
         else _SCHEMA_CACHE.get(schema_id)
     )
     if schema is None:
-        LOGGER.error(
-            "Schema %d not available. USE_SCHEMA_REGISTRY=%s, cache_keys=%s",
-            schema_id, USE_SCHEMA_REGISTRY, list(_SCHEMA_CACHE.keys())
-        )
         raise RuntimeError(
             f"Schema {schema_id} not available in cache and schema registry disabled"
         )
     try:
-        result = schemaless_reader(BytesIO(b[5:]), schema)
-        LOGGER.debug("Avro decode SUCCESS: schema_id=%d", schema_id)
-        return result
-    except Exception as e:
-        LOGGER.error(
-            "Avro decode FAILED: schema_id=%d, error=%s, payload_len=%d, first_bytes=%s",
-            schema_id, e, len(b), b[:30].hex()
-        )
+        return schemaless_reader(BytesIO(b[5:]), schema)
+    except Exception:  # pragma: no cover - defensive
         return None
-
-# Counter for decode_kafka_value logging
-_DECODE_LOG_COUNT = 0
-_DECODE_LOG_MAX = 5
-
 
 def decode_kafka_value(raw):
     """Decode Kafka message value according to `PAYLOAD_FORMAT`.
@@ -590,133 +546,46 @@ def decode_kafka_value(raw):
     Supports JSON (UTF-8 text) and Avro (Confluent wire format). Non-bytes
     are returned unchanged to keep behavior identical to the prior inline
     lambda.
-
-    Returns:
-        - dict: if Avro decode successful
-        - str: if JSON decode
-        - None: if decode failed
-        - original value: if not bytes
     """
-    global _DECODE_LOG_COUNT
-
-    # Handle None input
-    if raw is None:
-        LOGGER.warning("decode_kafka_value: received None input")
-        return None
-
-    # Log first N messages for debugging
-    _DECODE_LOG_COUNT += 1
-    should_log = _DECODE_LOG_COUNT <= _DECODE_LOG_MAX
-
-    raw_type = type(raw).__name__
-    raw_len = len(raw) if hasattr(raw, '__len__') else 0
-
-    if should_log:
-        first_bytes = ""
-        if isinstance(raw, (bytes, bytearray)) and len(raw) >= 10:
-            first_bytes = f", first_10_bytes={raw[:10].hex()}"
-        LOGGER.info(
-            "decode_kafka_value [%d/%d]: PAYLOAD_FORMAT=%s, input_type=%s, input_len=%d%s",
-            _DECODE_LOG_COUNT, _DECODE_LOG_MAX, PAYLOAD_FORMAT, raw_type, raw_len, first_bytes
-        )
-
     if PAYLOAD_FORMAT == "json":
         if isinstance(raw, (bytes, bytearray)):
-            try:
-                decoded = raw.decode("utf-8")
-                if should_log:
-                    LOGGER.info("decode_kafka_value: JSON decode OK, str_len=%d", len(decoded))
-                return decoded
-            except UnicodeDecodeError as e:
-                LOGGER.error("decode_kafka_value: UTF-8 decode failed: %s", e)
-                return None
+            return raw.decode("utf-8")
         return raw
-
     if PAYLOAD_FORMAT == "avro":
         if isinstance(raw, (bytes, bytearray)):
-            result = decode_confluent_avro(bytes(raw))
-            if result is None and should_log:
-                LOGGER.warning(
-                    "decode_kafka_value: Avro decode returned None for %d bytes",
-                    raw_len
-                )
-            elif result is not None and should_log:
-                LOGGER.info(
-                    "decode_kafka_value: Avro decode OK, result_type=%s, keys=%s",
-                    type(result).__name__,
-                    list(result.keys())[:5] if isinstance(result, dict) else "N/A"
-                )
-            return result
-        else:
-            LOGGER.warning(
-                "decode_kafka_value: PAYLOAD_FORMAT=avro but input is %s (not bytes)",
-                raw_type
-            )
+            return decode_confluent_avro(bytes(raw))
         return raw
-
-    LOGGER.warning("decode_kafka_value: unknown PAYLOAD_FORMAT=%s", PAYLOAD_FORMAT)
     return raw
 
 # =============================================================================
 # NETWORK DIAGNOSTIC HELPERS (from kafkaGCS.py)
 # =============================================================================
 
-# Counter for extract_kafka_value logging (log only first N messages)
-_EXTRACT_LOG_COUNT = 0
-_EXTRACT_LOG_MAX = 5  # Log first 5 messages for debugging
-_EXTRACT_ERROR_COUNT = 0
-
-
 def extract_kafka_value(record):
     """Extract value from Kafka record.
-
-    CRITICAL: Must be a module-level named function (not lambda) for proper
+    
+    CRITICAL: Must be a module-level named function (not lambda) for proper 
     pickling/serialization in Dataflow distributed workers.
-
-    Returns bytes (message value) or None on failure.
     """
-    global _EXTRACT_LOG_COUNT, _EXTRACT_ERROR_COUNT
-
     try:
-        value = None
-
+        # Log for debugging
+        LOGGER.info(f"extract_kafka_value called with type: {type(record)} , record: {record}")
+        
         # KafkaRecord has .value attribute when with_metadata=True
         if hasattr(record, 'value'):
             value = record.value
+            LOGGER.info(f"Extracted value from record.value, type: {type(value)}, len: {len(value) if value else 0}")
+            return value
         # Fallback: if it's a tuple (key, value) when with_metadata=False
         elif isinstance(record, tuple) and len(record) >= 2:
             value = record[1]
+            LOGGER.info(f"Extracted value from tuple[1], type: {type(value)}")
+            return value
         else:
-            # Unknown format - log warning and return as-is
-            LOGGER.warning(
-                "extract_kafka_value: unexpected record format: type=%s, repr=%s",
-                type(record).__name__, repr(record)[:200]
-            )
+            LOGGER.warning(f"Unexpected record format: {type(record)}, returning as-is")
             return record
-
-        # Log first N messages for debugging
-        _EXTRACT_LOG_COUNT += 1
-        if _EXTRACT_LOG_COUNT <= _EXTRACT_LOG_MAX:
-            value_len = len(value) if value and hasattr(value, '__len__') else 0
-            value_type = type(value).__name__
-            first_bytes = ""
-            if isinstance(value, (bytes, bytearray)) and len(value) >= 5:
-                first_bytes = f", first_5_bytes={value[:5].hex()}"
-            LOGGER.info(
-                "extract_kafka_value [%d/%d]: type=%s, len=%d%s",
-                _EXTRACT_LOG_COUNT, _EXTRACT_LOG_MAX, value_type, value_len, first_bytes
-            )
-
-        return value
-
     except Exception as e:
-        _EXTRACT_ERROR_COUNT += 1
-        # Log first 10 errors, then every 100th
-        if _EXTRACT_ERROR_COUNT <= 10 or _EXTRACT_ERROR_COUNT % 100 == 0:
-            LOGGER.error(
-                "extract_kafka_value ERROR [#%d]: %s, record_type=%s",
-                _EXTRACT_ERROR_COUNT, e, type(record).__name__
-            )
+        LOGGER.error(f"Error extracting Kafka value: {e}, record type: {type(record)}")
         return None
 
 
@@ -889,13 +758,6 @@ class DecodeKafkaValueDoFn(DoFn):
         self._decode_latency = Metrics.distribution("kafka", "decode_latency_ms")
         self._payload_size = Metrics.distribution("kafka", "payload_bytes")
 
-        # Log setup completion for Cloud Logging visibility
-        self._logger.info(
-            "✓ DecodeKafkaValueDoFn.setup() COMPLETED: topic=%s, debug_mode=%s, "
-            "PAYLOAD_FORMAT=%s, USE_SCHEMA_REGISTRY=%s",
-            self.topic_name, self.debug_mode, PAYLOAD_FORMAT, USE_SCHEMA_REGISTRY
-        )
-
     def start_bundle(self):
         """Initialize per-bundle state for batch processing tracking."""
         self._bundle_count = 0
@@ -975,19 +837,7 @@ class DecodeKafkaValueDoFn(DoFn):
                 self._decode_latency.update(latency_ms)
 
             if decoded_str is None:
-                self._errors.inc()
-                self._errors_seen += 1
-                # Log detailed info for debugging decode failures
-                if self._errors_seen <= 10 or self._errors_seen % 100 == 0:
-                    first_bytes = ""
-                    if isinstance(element, (bytes, bytearray)) and len(element) >= 10:
-                        first_bytes = f", first_10_bytes={element[:10].hex()}"
-                    self._logger.warning(
-                        "[%s] decode_kafka_value returned None (error #%d): "
-                        "element_type=%s, element_len=%d%s",
-                        self.topic_name, self._errors_seen,
-                        type(element).__name__, payload_len, first_bytes
-                    )
+                self._logger.warning(f"[{self.topic_name}] Received None after decode, skipping")
                 return
 
             # Parse JSON string to dict
@@ -1036,18 +886,12 @@ class DecodeKafkaValueDoFn(DoFn):
             )
             if should_log:
                 self._logs_emitted += 1
-                first_bytes = ""
-                if isinstance(element, (bytes, bytearray)) and len(element) >= 20:
-                    first_bytes = f", first_20_bytes={element[:20].hex()}"
-                self._logger.error(
-                    "[%s] Kafka decode EXCEPTION #%d (%s: %s): payload_type=%s, payload_len=%s%s",
-                    self.topic_name,
-                    self._errors_seen,
+                self._logger.warning(
+                    "Kafka value decode failed (%s: %s). payload_type=%s payload_len=%s",
                     type(exc).__name__,
                     exc,
                     type(element).__name__,
-                    payload_len if payload_len > 0 else "n/a",
-                    first_bytes,
+                    (len(element) if isinstance(element, (bytes, bytearray, str)) else "n/a"),
                 )
 
 
@@ -1314,22 +1158,9 @@ class CallMemberTierInfoAPIDoFn(DoFn):
     def setup(self):
         """Initialize API client (called once per worker)."""
         self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
-        self._logger.info(
-            "✓ CallMemberTierInfoAPIDoFn.setup() STARTED: "
-            "api_secret_project=%s, api_secret_id=%s",
-            self.api_secret_project, self.api_secret_id
-        )
-        try:
-            self._client = MemberTierAPIClient(self.api_secret_project, self.api_secret_id)
-            self._logger.info(
-                "✓ CallMemberTierInfoAPIDoFn.setup() COMPLETED: "
-                "MemberTierAPIClient initialized successfully"
-            )
-        except Exception as e:
-            self._logger.error(
-                "✗ CallMemberTierInfoAPIDoFn.setup() FAILED: %s", e
-            )
-            raise
+        self._logger.info("CallMemberTierInfoAPIDoFn.setup() called")
+        self._client = MemberTierAPIClient(self.api_secret_project, self.api_secret_id)
+        self._logger.info("MemberTierAPIClient initialized successfully")
     
     def process(self, element: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
         payload = element.get("payload", {})
@@ -1702,21 +1533,15 @@ def run():
     debug_mode = known_args.debug_mode and not known_args.no_debug
     api_secret_project = known_args.api_secret_project or known_args.secret_project
 
-    LOGGER.info("=" * 70)
+    LOGGER.info("=" * 60)
     LOGGER.info("Member Tiers Kafka Consumer Pipeline (kafkaGCS pattern)")
-    LOGGER.info("=" * 70)
-    LOGGER.info("Configuration:")
-    LOGGER.info("  - Writer Mode: %s", known_args.writer_mode)
-    LOGGER.info("  - Secret Project: %s", known_args.secret_project)
-    LOGGER.info("  - Topic Type: %s", known_args.topic_type)
-    LOGGER.info("  - Output Path: %s", known_args.output_path)
-    LOGGER.info("  - Window Size: %ds", known_args.window_size)
-    LOGGER.info("  - Skip API Call: %s", known_args.skip_api_call)
-    LOGGER.info("  - Debug Mode: %s", debug_mode)
-    LOGGER.info("Decode Settings:")
-    LOGGER.info("  - PAYLOAD_FORMAT: %s", PAYLOAD_FORMAT)
-    LOGGER.info("  - USE_SCHEMA_REGISTRY: %s", USE_SCHEMA_REGISTRY)
-    LOGGER.info("=" * 70)
+    LOGGER.info(f"Writer Mode: {known_args.writer_mode}")
+    LOGGER.info(f"Secret Project: {known_args.secret_project}")
+    LOGGER.info(f"Topic Type: {known_args.topic_type}")
+    LOGGER.info(f"Output Path: {known_args.output_path}")
+    LOGGER.info(f"Window Size: {known_args.window_size}s")
+    LOGGER.info(f"Skip API Call: {known_args.skip_api_call}")
+    LOGGER.info("=" * 60)
 
     # Load Kafka credentials
     load_confluent_env_from_secret_manager(
@@ -1782,19 +1607,19 @@ def run():
                     topics=[topic],
                     with_metadata=True,  # CRITICAL: Same as kafkaGCS.py
                 )
+                # | f"ExtractValue_{safe_name}" >> beam.Map(lambda record: record.value)
                 | f"ExtractValue_{safe_name}" >> beam.Map(extract_kafka_value)
             )
 
             # Filter out None values (from failed extractions)
-            # This prevents decode errors from propagating
-            filtered_messages = (
-                raw_messages
-                | f"FilterNone_{safe_name}" >> beam.Filter(lambda x: x is not None)
-            )
+            # filtered_messages = (
+            #     raw_messages
+            #     | f"FilterNone_{safe_name}" >> beam.Filter(lambda x: x is not None)
+            # )
 
             # Decode Kafka value (following kafkaGCS.py pattern)
             decoded = (
-                filtered_messages
+                raw_messages
                 | f"DecodeKafkaValue_{safe_name}"
                 >> beam.ParDo(DecodeKafkaValueDoFn(topic, debug_mode=debug_mode))
             )
