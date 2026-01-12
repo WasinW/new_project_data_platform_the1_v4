@@ -122,15 +122,18 @@ API_MAX_RETRIES = 2
 API_RETRY_DELAY_SECONDS = 1
 
 # Payload format: 'json' or 'avro'
-PAYLOAD_FORMAT = "json"
+# IMPORTANT: loyalty.members.upgraded/downgraded use AVRO/BINARY format
+PAYLOAD_FORMAT = "avro"
 
-# If using Confluent Schema Registry for Avro, set this URL and set PAYLOAD_FORMAT='avro'
-USE_SCHEMA_REGISTRY = False
-SCHEMA_REGISTRY_URL = "http://schema-registry:8081"
+# Confluent Schema Registry - REQUIRED for Avro decode
+USE_SCHEMA_REGISTRY = True
+# Schema Registry URL will be loaded from Secret Manager (CONFLUENT_SR_URL)
+SCHEMA_REGISTRY_URL = None  # Set from env var
 
 # Simple cache for schema id -> parsed schema
 _SCHEMA_CACHE: Dict[int, Dict] = {}
-DEFAULT_CONFLUENT_SECRET_NAME = "loyalty-data-transaction"
+# Use same secret as Kafka credentials (contains schemaRegistryURL)
+DEFAULT_CONFLUENT_SECRET_NAME = DEFAULT_KAFKA_SECRET_NAME
 
 # Flag to track if Schema Registry credentials have been loaded on worker
 _WORKER_SR_CREDENTIALS_LOADED = False
@@ -476,7 +479,15 @@ def get_schema_from_registry(schema_id: int):
             LOGGER.error("Cannot load Schema Registry credentials: GCP project not set (GOOGLE_CLOUD_PROJECT or metadata server)")
             _WORKER_SR_CREDENTIALS_LOADED = True
     
-    url = f"{SCHEMA_REGISTRY_URL}/schemas/ids/{schema_id}"
+    # Get Schema Registry URL from env var
+    sr_url = os.getenv("CONFLUENT_SR_URL")
+    if not sr_url:
+        raise RuntimeError(
+            f"Schema Registry URL not set (CONFLUENT_SR_URL). "
+            "Check Secret Manager access and ensure credentials are loaded."
+        )
+
+    url = f"{sr_url}/schemas/ids/{schema_id}"
     auth = None
     if sr_api_key and sr_api_secret:
         auth = (sr_api_key, sr_api_secret)
@@ -629,7 +640,7 @@ class MemberTierAPIClient:
         self.api_secret_id = api_secret_id
         self._token: Optional[str] = None
         self._token_expires_at: float = 0
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
     
     def _get_credentials(self) -> Tuple[str, str]:
         """Get API credentials from Secret Manager."""
@@ -737,7 +748,7 @@ class DecodeKafkaValueDoFn(DoFn):
         self._log_every_n_success = 1000
 
     def setup(self):  # pragma: no cover
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
         self._seen = Metrics.counter("kafka", "messages_seen")
         self._ok = Metrics.counter("kafka", "decode_ok")
         self._errors = Metrics.counter("kafka", "decode_errors")
@@ -946,7 +957,7 @@ class ToUpgradedRowDoFn(DoFn):
         self._logger = None
     
     def setup(self):
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
 
     def process(self, element: Dict[str, Any]) -> Iterator[MemberTierUpgradedRow]:
         try:
@@ -977,7 +988,7 @@ class ToDowngradedRowDoFn(DoFn):
         self._logger = None
     
     def setup(self):
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
     
     def process(self, element: Dict[str, Any]) -> Iterator[MemberTierDowngradedRow]:
         try:
@@ -1007,7 +1018,7 @@ class ToMemberTierRawRowDoFn(DoFn):
         self._logger = None
     
     def setup(self):
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
 
     def process(self, element: Dict[str, Any]) -> Iterator[MemberTierRawRow]:
         try:
@@ -1042,7 +1053,7 @@ class ToUpgradedDictDoFn(DoFn):
         self._logger = None
     
     def setup(self):
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
 
     def process(self, element: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
         try:
@@ -1073,7 +1084,7 @@ class ToDowngradedDictDoFn(DoFn):
         self._logger = None
     
     def setup(self):
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
 
     def process(self, element: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
         try:
@@ -1103,7 +1114,7 @@ class ToMemberTierDictDoFn(DoFn):
         self._logger = None
     
     def setup(self):
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
 
     def process(self, element: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
         try:
@@ -1143,7 +1154,7 @@ class CallMemberTierInfoAPIDoFn(DoFn):
     
     def setup(self):
         """Initialize API client (called once per worker)."""
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
         self._logger.info("CallMemberTierInfoAPIDoFn.setup() called")
         self._client = MemberTierAPIClient(self.api_secret_project, self.api_secret_id)
         self._logger.info("MemberTierAPIClient initialized successfully")
@@ -1264,7 +1275,7 @@ class WriteToIcebergWithPyIcebergDoFn(DoFn):
     
     def setup(self):
         """Initialize PyIceberg catalog and table."""
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
         try:
             from pyiceberg.catalog import load_catalog
 
@@ -1409,7 +1420,7 @@ class AddWindowKeyDoFn(DoFn):
         self._logger = None
     
     def setup(self):
-        self._logger = logging.getLogger(f"{MODULE_LOGGER_NAME}.{self.__class__.__name__}")
+        self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
 
     def process(self, element, window=DoFn.WindowParam):
         window_key = f"{window.start.to_utc_datetime().isoformat()}"
