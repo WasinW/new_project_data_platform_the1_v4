@@ -1320,14 +1320,16 @@ class ToMemberTierDictDoFn(DoFn):
 
 class CallMemberTierInfoAPIDoFn(DoFn):
     """Call Member Tier API to get member info."""
-    
+
     def __init__(self, api_secret_project: str, api_secret_id: str):
         self.api_secret_project = api_secret_project
         self.api_secret_id = api_secret_id
-        # self._client: Optional[MemberTierAPIClient] = None
         self._client = None  # Will be initialized in setup()
         self._logger = None
-    
+        # CRITICAL: Store class reference for Beam serialization
+        # This ensures MemberTierAPIClient is available after pickle/unpickle
+        self._api_client_class = MemberTierAPIClient
+
     def setup(self):
         """Initialize API client (called once per worker)."""
         self._logger = logging.getLogger(f"member_tiers.{self.__class__.__name__}")
@@ -1337,7 +1339,8 @@ class CallMemberTierInfoAPIDoFn(DoFn):
             self.api_secret_project, self.api_secret_id
         )
         try:
-            self._client = MemberTierAPIClient(self.api_secret_project, self.api_secret_id)
+            # Use stored class reference instead of global name lookup
+            self._client = self._api_client_class(self.api_secret_project, self.api_secret_id)
             self._logger.info(
                 "✓ CallMemberTierInfoAPIDoFn.setup() COMPLETED: "
                 "MemberTierAPIClient initialized successfully"
